@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# thoth/bin/vault-pull — pull the canonical vault before any write.
+#
+# Carried forward verbatim from the SPEC (Appendix -> Git wrappers & .gitignore):
+# pull --rebase --autostash so the appliance always writes onto current state.
+# Auth is gh's credential helper over HTTPS (never SSH, never a PAT-in-URL);
+# GIT_CONFIG_GLOBAL=/dev/null neutralises any global insteadOf ssh-rewrite.
+#
+# Reconciliation for tests/CI ONLY: THOTH_GIT_REMOTE and THOTH_GIT_BRANCH default
+# to the verbatim SPEC values ("origin" / "main"), so production behaviour is
+# byte-equivalent to the SPEC while a test can redirect the pull at a LOCAL bare
+# repo in tmp_path. The credential-helper line is a documented no-op for a
+# local-path remote. The default GitHub owner is gilesknap.
+set -euo pipefail
+VAULT="${PKM_VAULT:-/opt/pkm-vault}"
+REMOTE="${THOTH_GIT_REMOTE:-origin}"
+BRANCH="${THOTH_GIT_BRANCH:-main}"
+GIT_CONFIG_GLOBAL=/dev/null git -C "$VAULT" \
+    -c credential.helper='!gh auth git-credential' \
+    pull --rebase --autostash "$REMOTE" "$BRANCH"
