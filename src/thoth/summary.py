@@ -13,6 +13,12 @@ the network for composition -- and renders a Slack ``mrkdwn`` digest:
   an actions-status summary (open / overdue), the next week's deadlines (``due_date``
   within seven days), and a suggested review / stale section.
 
+The daily digest also carries a terse **liveness heartbeat** (issue #15) when a
+:class:`~thoth.state.MarkerStore` is wired: "still alive -- last ingest/reindex/push at
+T", read from the last-success markers each pipeline stage records. It appears whether
+or not the digest is otherwise empty, so *silence itself is diagnostic* on the isolated
+VPS (a stale "last push" time is the backstop for a wedged sync).
+
 All date arithmetic is done in Python in Europe/London via :data:`LONDON` against an
 **injected** ``now`` (a tz-aware :class:`~datetime.datetime`), so every window
 (today / overdue / next-3-days / yesterday) is fully deterministic under a frozen clock
@@ -57,6 +63,7 @@ import frontmatter
 import yaml
 
 from thoth.config import Config
+from thoth.state import HEARTBEAT_MARKERS, MarkerStore
 from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 __all__ = [
@@ -72,6 +79,13 @@ __all__ = [
     "SummaryEngine",
     "SummaryError",
 ]
+
+# Human labels for the liveness markers, shown in the daily heartbeat line (issue #15).
+_MARKER_LABELS: dict[str, str] = {
+    "capture": "ingest",
+    "reindex": "reindex",
+    "push": "push",
+}
 
 LONDON: ZoneInfo = ZoneInfo("Europe/London")
 """The Europe/London timezone used for every calendar-date computation (SPEC section 9).
@@ -205,7 +219,12 @@ class SummaryEngine:
     """
 
     def __init__(
-        self, config: Config, vault: Vault, *, now: datetime | None = None
+        self,
+        config: Config,
+        vault: Vault,
+        *,
+        now: datetime | None = None,
+        markers: MarkerStore | None = None,
     ) -> None:
         """Store collaborators and resolve the injected clock to Europe/London.
 
@@ -216,6 +235,11 @@ class SummaryEngine:
                 :meth:`datetime.now` in :data:`LONDON` is used. A tz-aware value is
                 coerced into :data:`LONDON`; a naive value is assumed to already be
                 London-local.
+            markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired,
+                the daily digest gains a terse "still alive -- last
+                ingest/reindex/push at T" heartbeat so silence is itself diagnostic
+                (issue #15). ``None`` (the default) omits it, so callers/tests are
+                unaffected.
         """
         self._config = config
         self._vault = vault
@@ -226,6 +250,7 @@ class SummaryEngine:
             resolved = resolved.astimezone(LONDON)
         self._now = resolved
         self._today = resolved.date()
+        self._markers = markers
 
     @property
     def now(self) -> datetime:
@@ -288,8 +313,13 @@ class SummaryEngine:
                 )
             )
 
+        # The actionable sections decide emptiness; the heartbeat is diagnostic
+        # plumbing, not "news", so it must NOT make an otherwise-empty digest look
+        # non-empty. It is rendered as a trailing line that appears whether or not the
+        # digest is empty, so silence (a stale "last push") shows on a quiet day (#15).
         is_empty = not sections
-        text = self._render(title, sections, is_empty)
+        heartbeat = self.heartbeat_line()
+        text = self._render(title, sections, is_empty, footer=heartbeat)
         return Digest(kind="daily", title=title, text=text, is_empty=is_empty)
 
     def weekly_digest(self) -> Digest:
@@ -372,6 +402,40 @@ class SummaryEngine:
             return False
         poster.chat_postMessage(channel=channel, text=digest.text)
         return True
+
+    # ---- liveness / heartbeat (issue #15) -------------------------------------------
+
+    def heartbeat_line(self) -> str | None:
+        """Render the terse "still alive -- last ingest/reindex/push at T" line.
+
+        Reads the liveness :class:`~thoth.state.MarkerStore` (each pipeline stage
+        records its last-success wall-clock time): for each of capture/reindex/push it
+        reports the recorded time (formatted in :data:`LONDON`) or ``never`` when no
+        success has been recorded, so a stale or missing marker is visible on the daily
+        digest. Returns ``None`` when no marker store is wired (heartbeat then omitted).
+
+        Returns:
+            The ``mrkdwn`` heartbeat line, or ``None`` when no markers are available.
+        """
+        if self._markers is None:
+            return None
+        try:
+            recorded = self._markers.all()
+        except Exception:  # noqa: BLE001 - a marker-read failure must not break the post
+            recorded = {}
+        parts: list[str] = []
+        for name in HEARTBEAT_MARKERS:
+            label = _MARKER_LABELS.get(name, name)
+            ts = recorded.get(name)
+            parts.append(f"{label} {self._format_marker_ts(ts)}")
+        return "still alive -- last " + ", ".join(parts)
+
+    def _format_marker_ts(self, ts: float | None) -> str:
+        """Format a marker epoch as ``YYYY-MM-DD HH:MM`` in London, or ``never``."""
+        if ts is None:
+            return "never"
+        when = datetime.fromtimestamp(ts, tz=LONDON)
+        return when.strftime("%Y-%m-%d %H:%M")
 
     # ---- pure frontmatter scans (reused by mcp_server) ------------------------------
 
@@ -643,11 +707,25 @@ class SummaryEngine:
         return f"*{heading}*\n{body}"
 
     @staticmethod
-    def _render(title: str, sections: Sequence[str], is_empty: bool) -> str:
-        """Assemble the title line and sections into the posted ``mrkdwn`` body."""
+    def _render(
+        title: str,
+        sections: Sequence[str],
+        is_empty: bool,
+        *,
+        footer: str | None = None,
+    ) -> str:
+        """Assemble the title line, sections, and an optional footer into the body.
+
+        The ``footer`` (the liveness heartbeat) is appended whether or not the digest is
+        empty, so the "still alive -- last ... at T" line is present even on a quiet day
+        (issue #15).
+        """
         if is_empty:
-            return f"{title}\n\nNothing to report today."
-        parts = [title, *sections]
+            parts = [f"{title}\n\nNothing to report today."]
+        else:
+            parts = [title, *sections]
+        if footer:
+            parts.append(footer)
         return "\n\n".join(parts)
 
     @staticmethod

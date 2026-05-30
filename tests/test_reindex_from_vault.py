@@ -20,6 +20,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -35,6 +36,7 @@ from thoth.reindex_from_vault import (
     manifest_path,
     page_type,
 )
+from thoth.state import MARKER_REINDEX, MarkerStore
 from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 
@@ -357,6 +359,53 @@ def test_first_run_retains_every_curated_page_forget_then_retain(
     for rel in pages.values():
         assert "sha256" in manifest[rel]
         assert "retained_at" in manifest[rel]
+
+
+# --------------------------------------------------------------------------- #
+# liveness marker recorded on a successful reindex (issue #15).
+# --------------------------------------------------------------------------- #
+
+
+def test_successful_run_records_reindex_marker(vault: Vault, config: Config) -> None:
+    """A completed reindex records the ``reindex`` liveness marker for the heartbeat."""
+    _seed_vault(vault.root)
+    markers = MarkerStore(config.state_db_path, clock=lambda: 7777.0)
+    Reindexer(config, vault, RecordingHindsight(), markers=markers).run()
+    assert markers.get(MARKER_REINDEX) == 7777.0
+
+
+def test_empty_vault_run_still_records_reindex_marker(
+    vault: Vault, config: Config
+) -> None:
+    """Even a no-op reindex (empty vault) records the marker -- it ran successfully."""
+    markers = MarkerStore(config.state_db_path, clock=lambda: 1.0)
+    result = Reindexer(config, vault, RecordingHindsight(), markers=markers).run()
+    assert result.changed == 0
+    assert markers.get(MARKER_REINDEX) == 1.0
+
+
+def test_reindex_marker_write_failure_does_not_break_run(
+    vault: Vault, config: Config
+) -> None:
+    """A MarkerStore that raises on record does not fail an otherwise-good reindex."""
+
+    class _BoomMarkers:
+        def record(self, name: str, *, ts: float | None = None) -> None:
+            raise RuntimeError("marker db gone")
+
+    _seed_vault(vault.root)
+    reindexer = Reindexer(
+        config, vault, RecordingHindsight(), markers=cast(MarkerStore, _BoomMarkers())
+    )
+    result = reindexer.run()
+    assert result.changed > 0
+
+
+def test_no_markers_store_reindex_is_a_clean_noop(vault: Vault, config: Config) -> None:
+    """The default (no MarkerStore) reindexes normally and records nothing."""
+    _seed_vault(vault.root)
+    result = Reindexer(config, vault, RecordingHindsight()).run()
+    assert result.changed > 0
 
 
 def test_second_run_no_edits_skips_all_and_issues_zero_retains(

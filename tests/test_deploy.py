@@ -323,6 +323,37 @@ def test_systemd_unit_name_discrepancy_is_resolved_to_thoth_slack() -> None:
     assert not (_deploy_dir() / "pkm-slack.service").exists()
 
 
+def test_systemd_unit_restart_is_rate_limited(tmp_path: Path) -> None:
+    """The unit restarts on failure but bounds flapping (StartLimit*, issue #15).
+
+    Acceptance: repeated restart failure is bounded and reportable. The directives are
+    parsed with a real config parser (systemd unit syntax is INI-like) rather than a
+    substring scan, so a malformed key is caught.
+    """
+    import configparser
+
+    text = (_deploy_dir() / "thoth-slack.service").read_text(encoding="utf-8")
+    parser = configparser.ConfigParser(strict=False)
+    parser.read_string(text)
+    # Restart pacing lives in [Service]; the burst limit lives in [Unit] (systemd moved
+    # the StartLimit* keys there).
+    assert parser.get("Service", "Restart") == "on-failure"
+    assert int(parser.get("Service", "RestartSec")) >= 1
+    assert int(parser.get("Unit", "StartLimitBurst")) >= 1
+    assert int(parser.get("Unit", "StartLimitIntervalSec")) >= 1
+
+
+def test_systemd_unit_documents_how_flapping_surfaces() -> None:
+    """The unit documents the backstops (errors-to-Slack + heartbeat) for flapping."""
+    text = (_deploy_dir() / "thoth-slack.service").read_text(encoding="utf-8")
+    lowered = text.lower()
+    # The flapping path surfaces via the alert channel and/or the stale heartbeat.
+    assert "slack_alert_channel" in lowered
+    assert "heartbeat" in lowered
+    # The optional hard backstop (an OnFailure= dead-man's switch) is named.
+    assert "onfailure" in lowered
+
+
 # --- deploy/crontab ---------------------------------------------------------------
 
 

@@ -46,6 +46,8 @@ def test_happy_path_minimal() -> None:
     assert cfg.slack_bot_token is None
     assert cfg.slack_app_token is None
     assert cfg.slack_summary_channel is None
+    assert cfg.slack_alert_channel is None
+    assert cfg.slack_allowed_users is None
     assert cfg.exa_api_key is None
     assert cfg.firecrawl_api_key is None
     assert cfg.gemini_api_key is None
@@ -62,6 +64,8 @@ def test_all_fields_populated() -> None:
         "SLACK_BOT_TOKEN": FAKE_SHORT,
         "SLACK_APP_TOKEN": FAKE_SHORT,
         "SLACK_SUMMARY_CHANNEL": "D0B61LKA3NV",
+        "SLACK_ALERT_CHANNEL": "C-ALERTS",
+        "SLACK_ALLOWED_USERS": "U1 U2",
         "EXA_API_KEY": FAKE_TOKEN,
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
@@ -75,6 +79,8 @@ def test_all_fields_populated() -> None:
     assert cfg.slack_bot_token == FAKE_SHORT
     assert cfg.slack_app_token == FAKE_SHORT
     assert cfg.slack_summary_channel == "D0B61LKA3NV"
+    assert cfg.slack_alert_channel == "C-ALERTS"
+    assert cfg.slack_allowed_users == "U1 U2"
     assert cfg.exa_api_key == FAKE_TOKEN
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
@@ -88,6 +94,26 @@ def test_require_slack_summary_channel() -> None:
     cfg_missing = load_config({"PKM_VAULT": "/x"})
     with pytest.raises(ConfigError, match="SLACK_SUMMARY_CHANNEL"):
         cfg_missing.require_slack_summary_channel()
+
+
+def test_alert_target_resolution() -> None:
+    """alert_target: SLACK_ALERT_CHANNEL, else first allow-listed DM, else None."""
+    explicit = load_config(
+        {
+            "PKM_VAULT": "/x",
+            "SLACK_ALERT_CHANNEL": "C-ALERTS",
+            "SLACK_ALLOWED_USERS": "U1 U2",
+        }
+    )
+    assert explicit.alert_target() == "C-ALERTS"
+
+    fallback = load_config(
+        {"PKM_VAULT": "/x", "SLACK_ALLOWED_USERS": "<@U9|giles>, U8"}
+    )
+    assert fallback.alert_target() == "U9"
+
+    none_cfg = load_config({"PKM_VAULT": "/x"})
+    assert none_cfg.alert_target() is None
 
 
 def test_missing_required_raises() -> None:

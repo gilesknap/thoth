@@ -422,7 +422,8 @@ it backed up (Hermes `state.db`/`kanban.db`) **ceases to exist** in the thin app
 store. The appliance keeps a small **transient state DB** — single-writer, `~/.thoth/state.db`,
 gitignored, **never a knowledge store** (the P1 guardrail: only transport bookkeeping + in-flight buffers +
 optional TTL'd chat context; the instant knowledge exists, it is a vault file). Tables:
-`processed_events(event_id, ts)` (Slack redelivery dedupe; prune >1h); `captures(id, channel, slack_ts, kind,
+`processed_events(event_id, ts)` (Slack redelivery dedupe; prune >1h); `markers(name, ts)` (liveness
+last-success times for capture/reindex/push — the heartbeat below); `captures(id, channel, slack_ts, kind,
 status, summary, vault_paths, error, created)` (pending→filed→failed — crash-safe ingest + the "did it land?"
 report); `conversations(channel, role, content, ts)` (optional; TTL ~30 min for Slack follow-ups, never a
 transcript). Single-writer ⇒ no git / two-writer surface; disposable ⇒ **not** part of recovery and **not**
@@ -430,6 +431,22 @@ backed up (on VPS loss, start fresh — you lose only dedupe history + mid-fligh
 the *only* state outside the vault, kept tiny and pruned. **Backup model:** the `pkm-vault` repo *is* the durable knowledge backup; `thoth` repo backs up
 code+config; secrets live only in `.env` (chmod 600) and a password manager. Full recovery (Appendix → Backup/recovery) simplifies to:
 clone `thoth`, clone `pkm-vault`, restore `.env`, `reindex --full-rebuild`, start the systemd unit.
+
+**Unattended observability (issue #15).** The box runs alone with no on-host monitoring, so three signals make
+silence diagnostic. (1) **Errors-to-Slack** — `thoth.alerts.Alerter` formats and posts an error/alert to a
+dedicated target (`SLACK_ALERT_CHANNEL`, falling back to the first allow-listed user DM) over the same
+injectable `chat.postMessage` seam; it is best-effort (a failed alert post never raises) and no-ops when no
+target is configured. The Slack daemon's top-level loop (`serve_with_alerting`) and the cron entrypoints
+(`thoth reindex` / `thoth summary`, via `_cron_alerting`) route unhandled exceptions through it and re-raise,
+so a crash both posts to Slack and still exits non-zero into the log. (2) **Heartbeat** — each pipeline stage
+records its last-success wall-clock time in `markers` (capture/ingest, reindex, push), and the daily summary
+appends a terse "still alive — last ingest/reindex/push at T" line (a stale marker → visible staleness). (3)
+**Unpushed-divergence** — when `vault-commit` hits a rebase conflict (`VaultConflictError`/`GitSyncError`, push
+refused), an explicit "N commits unpushed since T — vault conflict needs resolving in Obsidian" alert is sent
+via the errors-to-Slack helper, with N (commits-ahead) and T (oldest unpushed commit time) computed read-only
+from git (`GitSync.divergence`). The systemd unit gets `Restart=on-failure` + `RestartSec` bounded by
+`StartLimitIntervalSec`/`StartLimitBurst`, so a wedged daemon enters `failed` (stopping the heartbeat) rather
+than flapping forever; an `OnFailure=` dead-man's-switch unit is documented as the optional hard backstop.
 
 **Optional fast-restore snapshot (the index stays disposable).** `bin/hindsight-backup.sh` may, after a
 *successful* nightly reindex, take a **best-effort, config-gated** snapshot of the Hindsight bank — a **logical

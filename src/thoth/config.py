@@ -22,6 +22,9 @@ Documented defaults (the single source of truth):
 * ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME` (``~/.thoth``).
 * ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
   (``claude-sonnet-4-6``).
+* ``SLACK_ALERT_CHANNEL`` is the unattended error/heartbeat alert target (issue #15);
+  when unset, :meth:`Config.alert_target` falls back to the first
+  ``SLACK_ALLOWED_USERS`` id as a DM target.
 
 Only ``PKM_VAULT`` is hard-required in Phase 0 (see :data:`REQUIRED_VARS`).
 """
@@ -63,6 +66,8 @@ class Config:
     slack_bot_token: str | None
     slack_app_token: str | None
     slack_summary_channel: str | None
+    slack_alert_channel: str | None
+    slack_allowed_users: str | None
     exa_api_key: str | None
     firecrawl_api_key: str | None
     gemini_api_key: str | None
@@ -121,6 +126,30 @@ class Config:
                 "SLACK_SUMMARY_CHANNEL is required to post a summary but is not set"
             )
         return self.slack_summary_channel
+
+    def alert_target(self) -> str | None:
+        """Resolve where unattended error/heartbeat alerts are posted (issue #15).
+
+        Resolution (SPEC section 10 observability): the dedicated
+        ``SLACK_ALERT_CHANNEL`` wins; failing that, the first id parsed from the
+        allow-list (``SLACK_ALLOWED_USERS``) is used as a DM target (an allow-listed
+        user id doubles as a valid ``chat.postMessage`` channel for a bot DM). When
+        neither is set this returns ``None`` so the caller can no-op rather than
+        raise -- an alert path must never itself crash the daemon or a cron job.
+
+        Returns:
+            The Slack channel / DM id to post alerts to, or ``None`` when unconfigured.
+        """
+        if self.slack_alert_channel is not None:
+            return self.slack_alert_channel
+        raw = self.slack_allowed_users
+        if not raw:
+            return None
+        for piece in raw.replace(",", " ").split():
+            token = _strip_user_token(piece)
+            if token:
+                return token
+        return None
 
     def obsidian_uri(self, vault_relative_path: str) -> str:
         """Build an ``obsidian://open`` deep link for a vault-relative path.
@@ -222,6 +251,8 @@ def load_config(
         slack_bot_token=lookup("SLACK_BOT_TOKEN"),
         slack_app_token=lookup("SLACK_APP_TOKEN"),
         slack_summary_channel=lookup("SLACK_SUMMARY_CHANNEL"),
+        slack_alert_channel=lookup("SLACK_ALERT_CHANNEL"),
+        slack_allowed_users=lookup("SLACK_ALLOWED_USERS"),
         exa_api_key=lookup("EXA_API_KEY"),
         firecrawl_api_key=lookup("FIRECRAWL_API_KEY"),
         gemini_api_key=lookup("GEMINI_API_KEY"),
@@ -251,3 +282,18 @@ def _resolve_path(value: str) -> Path:
 def _opt(value: str | None) -> str | None:
     """Treat an empty string as unset (shell/.env habit: blank means absent)."""
     return value or None
+
+
+def _strip_user_token(token: str) -> str:
+    """Strip ``<@...>`` / leading ``@`` / a ``|label`` from one allow-list token.
+
+    Mirrors ``slack_app._strip_user_wrapper`` so :meth:`Config.alert_target` can pull a
+    DM id out of ``SLACK_ALLOWED_USERS`` without importing the (heavy, CI-absent)
+    Slack-daemon module. Kept tiny and pure.
+    """
+    token = token.strip()
+    if token.startswith("<@") and token.endswith(">"):
+        token = token[2:-1]
+    if token.startswith("@"):
+        token = token[1:]
+    return token.split("|", 1)[0].strip()

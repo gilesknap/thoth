@@ -21,6 +21,7 @@ from thoth.config import Config, load_config
 from thoth.git_sync import (
     VAULT_COMMIT_SCRIPT,
     VAULT_PULL_SCRIPT,
+    Divergence,
     GitResult,
     GitSync,
     GitSyncError,
@@ -498,3 +499,79 @@ def test_run_operates_on_vault_root_not_pytest_cwd(git_vault: GitVault) -> None:
     verify = git_vault.work.parent / "verify-cwd"
     _git(git_vault.work.parent, "clone", str(git_vault.bare), str(verify))
     assert (verify / "cwd-proof.md").exists()
+
+
+# --------------------------------------------------------------------------- #
+# divergence(): commits-ahead probe for the unpushed-divergence alert (#15).
+# --------------------------------------------------------------------------- #
+
+
+def _local_commit(git_vault: GitVault, name: str, body: str, *, when: str) -> None:
+    """Make a LOCAL commit in the work clone (not pushed) at a fixed author time."""
+    (git_vault.work / name).write_text(body)
+    env = dict(git_vault.env)
+    env["GIT_AUTHOR_DATE"] = when
+    env["GIT_COMMITTER_DATE"] = when
+    for args in (("add", "-A"), ("commit", "-m", f"local {name}")):
+        subprocess.run(
+            ["git", *args],
+            cwd=str(git_vault.work),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+
+def test_divergence_zero_when_in_sync(git_vault: GitVault) -> None:
+    """A freshly-cloned, up-to-date work tree is zero commits ahead of origin."""
+    div = git_vault.sync.divergence()
+    assert div == Divergence(commits_ahead=0, since=None)
+
+
+def test_divergence_counts_unpushed_commits_with_since(git_vault: GitVault) -> None:
+    """Two un-pushed local commits report ahead=2 and the OLDEST commit's time."""
+    _local_commit(git_vault, "a.md", "a\n", when="2026-05-29T08:00:00 +0000")
+    _local_commit(git_vault, "b.md", "b\n", when="2026-05-29T09:30:00 +0000")
+    div = git_vault.sync.divergence()
+    assert div.commits_ahead == 2
+    assert div.since is not None
+    # The "since" is the author time of the OLDEST unpushed commit (a.md at 08:00 UTC).
+    assert div.since.year == 2026
+    assert div.since.hour == 8
+
+
+def test_divergence_drops_to_zero_after_push(git_vault: GitVault) -> None:
+    """After a successful commit+push (then a pull) the work tree is no longer ahead.
+
+    The probe compares ``HEAD`` against the ``origin/main`` *tracking* ref. In
+    production the push targets ``origin``, so the tracking ref advances; this test
+    pushes via ``THOTH_PUSH_REMOTE`` (the bare path), so it refreshes the tracking ref
+    with a fetch (what the next ``vault-pull`` does) before asserting in-sync.
+    """
+    (git_vault.work / "c.md").write_text("c\n")
+    git_vault.sync.commit("a real push")
+    _git(git_vault.work, "fetch", "origin", MAIN)
+    assert git_vault.sync.divergence() == Divergence(commits_ahead=0, since=None)
+
+
+def test_divergence_is_total_when_no_remote_ref(tmp_path: Path) -> None:
+    """With no remote tracking ref (a bare local repo) divergence reports -1, None.
+
+    The probe is called from inside a conflict handler, so it must never raise: a
+    missing ``origin/main`` simply yields an unknown count rather than an exception.
+    """
+    repo = tmp_path / "norepo"
+    repo.mkdir()
+    _git(repo, "init", "-b", MAIN, str(repo))
+    _set_identity(repo)
+    (repo / "x.md").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "only local")
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["THOTH_GIT_REMOTE"] = "origin"
+    env["THOTH_GIT_BRANCH"] = MAIN
+    sync = GitSync(load_config({"PKM_VAULT": str(repo)}), env=env)
+    assert sync.divergence() == Divergence(commits_ahead=-1, since=None)

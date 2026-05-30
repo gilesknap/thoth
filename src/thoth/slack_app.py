@@ -45,11 +45,12 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from thoth.config import Config
-from thoth.git_sync import VaultConflictError
+from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
 from thoth.research import AskResult, ResearchEngine, ResearchError
@@ -398,6 +399,24 @@ class SlackClientLike(Protocol):
         ...
 
 
+class AlerterLike(Protocol):
+    """The slice of :class:`thoth.alerts.Alerter` the daemon + handlers use.
+
+    Keeps :mod:`thoth.slack_app` decoupled from :mod:`thoth.alerts` (no hard import for
+    the type) so a test can inject a tiny fake recording the alerts that were posted.
+    """
+
+    def alert_exception(self, where: str, exc: BaseException) -> bool:
+        """Format and post an unhandled-exception alert from context ``where``."""
+        ...
+
+    def alert_unpushed_divergence(
+        self, *, commits_ahead: int, since: datetime | None, detail: str = ...
+    ) -> bool:
+        """Post the "N commits unpushed -- vault conflict" divergence alert."""
+        ...
+
+
 @dataclass
 class Handlers:
     """Pure Slack handler logic with all collaborators injected.
@@ -415,6 +434,8 @@ class Handlers:
     research: ResearchEngine | None = None
     dedupe: EventDedupe = field(default_factory=EventDedupe)
     pending_saves: PendingSaves = field(default_factory=PendingSaves)
+    alerter: AlerterLike | None = None
+    git: GitSync | None = None
 
     def is_allowed(self, user_id: str) -> bool:
         """Return ``True`` iff ``user_id`` is on the allow-list (fail-closed)."""
@@ -522,16 +543,55 @@ class Handlers:
     # ---- internals ---------------------------------------------------------------
 
     def _do_ingest(self, capture: Capture, say: Callable[[str], None]) -> None:
-        """Run an ingest and reply; render a conflict/error fail-loud, never crash."""
+        """Run an ingest and reply; render a conflict/error fail-loud, never crash.
+
+        A vault conflict (the ingestor's :attr:`~thoth.ingest.IngestReport.conflict`, or
+        a raised :class:`~thoth.git_sync.VaultConflictError`) means content was filed
+        locally but the push was refused, so the local branch now diverges from the
+        remote. Beyond the in-thread ``:warning:`` reply, an explicit
+        unpushed-divergence alert is routed to the errors-to-Slack target (issue #15) --
+        the daily channel the user actually watches -- with the commits-ahead count +
+        oldest-unpushed time computed from git.
+        """
         try:
             report = self.ingestor.ingest(capture)
         except VaultConflictError as exc:
             say(f":warning: *Vault conflict* - {exc}. Resolve in Obsidian, then retry.")
+            self._alert_divergence(str(exc))
             return
         except IngestError as exc:
             say(f":x: Could not file that: {exc}")
             return
+        if report.conflict:
+            self._alert_divergence(report.message)
         say(render_ingest_report(report))
+
+    def _alert_divergence(self, detail: str) -> None:
+        """Route an unpushed-divergence alert to the errors-to-Slack target (issue #15).
+
+        Best-effort and total: with no alerter wired it no-ops; the commits-ahead count
+        and oldest-unpushed time are read from git via :meth:`~thoth.git_sync.GitSync.
+        divergence` (which itself swallows git errors), so this never raises out of a
+        conflict handler.
+        """
+        if self.alerter is None:
+            return
+        # Prefer the explicitly-injected GitSync; otherwise fall back to the one the
+        # ingestor already holds (a real production Ingestor always has ``_git``). The
+        # call is duck-typed so a test fake exposing ``divergence`` works without being
+        # a GitSync subclass.
+        git = self.git if self.git is not None else getattr(self.ingestor, "_git", None)
+        ahead, since = -1, None
+        if git is not None and hasattr(git, "divergence"):
+            try:
+                div = git.divergence()
+            except (GitSyncError, OSError):  # pragma: no cover - divergence is total
+                ahead, since = -1, None
+            else:
+                ahead, since = div.commits_ahead, div.since
+        self.alerter.alert_unpushed_divergence(
+            commits_ahead=ahead, since=since, detail=detail
+        )
 
     def _do_query(self, text: str, say: Callable[[str], None]) -> None:
         """Run a vault-only query and reply; render an error fail-loud, never crash."""
@@ -745,6 +805,8 @@ def build_app(
     """
     from slack_bolt import App
 
+    from thoth.alerts import make_alerter
+
     bot_token, _ = config.require_slack()
     handlers = Handlers(
         config=config,
@@ -755,6 +817,11 @@ def build_app(
         # Durable redelivery dedupe so a Slack retry across a daemon restart is still
         # dropped (the in-memory cache alone is lost on restart, SPEC section 10).
         dedupe=EventDedupe(store=EventStore(config.state_db_path)),
+        # Errors-to-Slack target + a GitSync for the unpushed-divergence alert (#15);
+        # the ingestor already holds a GitSync, so a separate one here is only the
+        # divergence probe and need not be the same instance.
+        alerter=make_alerter(config),
+        git=GitSync(config),
     )
     app = App(token=bot_token)
 
@@ -786,6 +853,13 @@ def run(
     testable logic all lives on :class:`Handlers`. ``research`` enables the blended
     free-text path (SPEC section 7.1).
 
+    Unattended observability (issue #15): the blocking serve is wrapped by
+    :func:`serve_with_alerting` so an **unhandled** daemon exception is reported to the
+    errors-to-Slack target (:class:`thoth.alerts.Alerter`) before the process exits and
+    systemd restarts it -- otherwise a crash loop would be silent. The alert is
+    best-effort and the original exception is always re-raised so systemd still sees the
+    non-zero exit.
+
     Args:
         config: The frozen runtime config (provides both Slack tokens).
         ingestor: The constructed ingest pipeline.
@@ -794,6 +868,40 @@ def run(
     """
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+    from thoth.alerts import make_alerter
+
     _, app_token = config.require_slack()
     app = build_app(config, ingestor, query_engine, research=research)
-    SocketModeHandler(app, app_token).start()
+    alerter = make_alerter(config)
+    serve_with_alerting(
+        lambda: SocketModeHandler(app, app_token).start(),
+        alerter,
+    )
+
+
+def serve_with_alerting(serve: Callable[[], None], alerter: AlerterLike) -> None:
+    """Run ``serve`` (a blocking daemon loop), alerting on an unhandled exception.
+
+    The top-level supervision seam (issue #15), factored out of :func:`run` so it is
+    unit-testable without a real Slack socket: it invokes ``serve`` and, if it raises,
+    posts an unhandled-exception alert via ``alerter`` (best-effort -- the alert post
+    swallows its own errors) and then **re-raises** the original exception so the
+    process still exits non-zero and systemd restarts (and rate-limits) it.
+
+    A clean shutdown is *not* an incident: ``KeyboardInterrupt`` / ``SystemExit`` (how
+    ``systemctl stop`` and a deploy restart unwind the blocking loop) re-raise silently,
+    so a routine stop/restart does not post an alert (which would train the operator to
+    ignore them). Only genuine crashes -- any other exception -- alert.
+
+    Args:
+        serve: The blocking daemon entry (e.g. ``SocketModeHandler(...).start``).
+        alerter: The errors-to-Slack alerter (a :class:`thoth.alerts.Alerter`).
+    """
+    try:
+        serve()
+    except (KeyboardInterrupt, SystemExit):
+        # A clean stop (SIGTERM/Ctrl-C) is not a crash -- exit quietly, no alert.
+        raise
+    except BaseException as exc:  # noqa: BLE001 - report ANY real crash, then re-raise
+        alerter.alert_exception("slack daemon", exc)
+        raise
