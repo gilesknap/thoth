@@ -199,11 +199,19 @@ def _render_ingest_report(report: IngestReport) -> str:
     Names what was filed (the curated page paths, or the raw/asset paths when no curated
     page was written) and lists every harness-built ``obsidian://`` link and
     ``[[wikilink]]`` the report carries (SPEC step 8). A conflict is surfaced fail-loud
-    with the conflicting path, never swallowed (SPEC section 10).
+    with the conflicting path, never swallowed (SPEC section 10). A ``deferred`` capture
+    (raw persisted but the LLM was unavailable for curation) is surfaced as a
+    partial-success note naming the held raw page (SPEC section 6).
     """
     if report.conflict:
         detail = report.message or "a vault conflict blocked the sync"
         return f"**Vault conflict** - {detail}. Content was filed locally."
+
+    if report.deferred:
+        held = report.raw_paths or report.asset_paths
+        where = ", ".join(f"`{path}`" for path in held) or "the inbox"
+        note = report.message or "curation deferred -- LLM unavailable"
+        return f"Saved raw to {where}. {note}"
 
     filed = report.page_paths or report.raw_paths or report.asset_paths
     if filed:
@@ -327,6 +335,7 @@ def pkm_ingest(
             "wikilinks": list(report.wikilinks),
             "committed": report.committed,
             "conflict": report.conflict,
+            "deferred": report.deferred,
         },
     )
 

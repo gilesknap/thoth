@@ -252,6 +252,12 @@ Same operation as the Hermes spec, minus Hermes tool names, run as **bounded val
 8. REPORT             reply: files touched + obsidian:// link(s) + vault path + [[wikilink]].
 ```
 
+> **Pass 0b — persist inbound (durable hold, per #14).** Between ORIENT and CLASSIFY the inbound item is
+> extracted and written to an `inbox/<sha256[:12]>.md` holding page *before* the first Claude call, keyed on
+> the body sha256 (skip if it already exists, same idempotency rule as pass 2). So an Anthropic/LLM outage can
+> never lose a capture: if CLASSIFY/CURATE can't run, the held raw is committed and a *deferred-curation* reply
+> is returned for a later reindex/sweep to re-curate; on success the now-superseded hold is removed.
+
 > **Capture surfaces & binaries (resolved).** Binary bytes can only enter where the *server* can read them.
 > Under the **VPS deployment** (appliance + MCP server on the VPS), the channels are:
 > 1. **Slack — primary.** Phone/desktop upload → the appliance (VPS) downloads the bytes from Slack's API and

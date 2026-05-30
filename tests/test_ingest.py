@@ -24,7 +24,7 @@ import pytest
 
 from thoth.config import Config, load_config
 from thoth.extract import ExtractedDoc, FetchedBinary, FetchError, SsrfError
-from thoth.git_sync import GitSync, VaultConflictError
+from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.hindsight import HindsightError, RecallHit
 from thoth.ingest import (
     Capture,
@@ -153,6 +153,19 @@ class _ConflictingGitSync(GitSync):
         raise VaultConflictError(
             "vault-commit failed (exit 1). stderr: 'VAULT CONFLICT: resolve'"
         )
+
+
+class _FailingGitSync(GitSync):
+    """A real GitSync whose ``commit`` raises a plain (non-conflict) GitSyncError.
+
+    ``pull`` still runs for real against the local bare repo; only the commit-push step
+    fails as a generic push/transport error would, to exercise the deferred path's
+    ``except GitSyncError`` branch (distinct from the rebase-conflict subclass).
+    """
+
+    def commit(self, message: str, *, timeout: float = 120.0) -> Any:
+        """Raise :class:`GitSyncError` as a failed push would (no conflict)."""
+        raise GitSyncError("vault-commit failed (exit 1). stderr: 'push rejected'")
 
 
 class FakeHindsight:
@@ -1215,6 +1228,290 @@ def test_extractor_ssrf_error_aborts(harness: IngestHarness) -> None:
     )
     with pytest.raises(IngestError):
         ingestor.ingest(Capture(url="https://169.254.169.254/latest/meta-data"))
+
+
+# --------------------------------------------------------------------------- #
+# Issue #14: capture durability decoupled from the classify LLM call.
+# --------------------------------------------------------------------------- #
+
+
+def _inbox_holds(harness: IngestHarness) -> list[str]:
+    """Return the inbox/ holding pages currently on disk (vault-relative)."""
+    inbox = harness.work / "inbox"
+    return [f"inbox/{p.name}" for p in sorted(inbox.glob("*.md"))]
+
+
+def test_ingest_persists_raw_then_defers_when_classify_llm_fails(
+    harness: IngestHarness,
+) -> None:
+    """LLM down at classify: the inbound text is persisted to inbox + curation deferred.
+
+    Acceptance for #14: with the LLM forced to fail (the injected client raises), ingest
+    still persists the raw inbound item durably (an inbox/ holding page) and reports a
+    *deferred* curation rather than losing the capture or raising.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_RaisingClient(),  # the injected LLM seam, forced to fail
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(text="a thought worth keeping"))
+
+    # The capture was NOT lost: a durable inbox holding page exists and is reported.
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    assert report.deferred is True
+    assert report.page_paths == []
+    assert report.raw_paths == holds  # the held raw page is surfaced
+    assert "deferred" in report.message.lower()
+    # The held page carries the inbound body and is type: inbox for the sweep to find.
+    held = harness.vault.read_page(holds[0])
+    assert held.frontmatter["type"] == "inbox"
+    assert "a thought worth keeping" in held.body
+    # It was committed to the local origin (durable beyond the process).
+    assert report.committed is True
+    assert holds[0] in harness.origin_files()
+
+
+def test_ingest_persists_raw_then_defers_when_curate_llm_fails(
+    harness: IngestHarness,
+) -> None:
+    """LLM down at curate (classify OK): raw is still persisted + curation deferred.
+
+    The classify call succeeds but the curate call fails; because the raw was persisted
+    before any LLM call, the capture is safe and the report is deferred (not an error).
+    """
+
+    class _ClassifyOkThenRaise:
+        """Client whose first create() returns classify JSON, then always raises."""
+
+        class _Messages:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **kwargs: Any) -> dict[str, Any]:
+                self.calls += 1
+                if self.calls == 1:
+                    return {"content": [{"type": "text", "text": _classify_json()}]}
+                raise RuntimeError("curate boom")
+
+        def __init__(self) -> None:
+            self.messages = _ClassifyOkThenRaise._Messages()
+
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body text")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ClassifyOkThenRaise(),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(url="https://e.com/a"))
+
+    assert report.deferred is True
+    assert report.page_paths == []
+    # No curated page was written (the validation gate / curate never produced a plan).
+    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    # The durable inbox holding page exists and carries the extracted article body.
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    assert "body text" in harness.vault.read_page(holds[0]).body
+
+
+def test_ingest_deferred_hold_carries_capture_source(harness: IngestHarness) -> None:
+    """A deferred MCP capture is held under its OWN source, not a hardcoded 'slack'.
+
+    Regression for the provenance bug: ``_write_inbox_holding`` must stamp the held
+    inbox page with the capture's real ``source`` (here ``mcp``), since these are the
+    items a later reindex/sweep re-curates and must attribute correctly.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_RaisingClient(),  # force the deferred path
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(text="an mcp-origin thought", source="mcp"))
+
+    assert report.deferred is True
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    # The held page round-trips the true origin, not the old hardcoded "slack".
+    assert harness.vault.read_page(holds[0]).frontmatter["source"] == "mcp"
+
+
+def test_ingest_deferred_hold_durable_when_push_conflicts(
+    harness: IngestHarness,
+) -> None:
+    """#14 edge: LLM down AND deferred push refused -> hold stays durable locally.
+
+    With the LLM forced to fail (deferred) and the commit raising
+    :class:`VaultConflictError`, the report is both ``deferred`` and ``conflict`` and
+    the inbox holding page is still on disk (the capture is never lost; no ``--force``).
+    """
+    conflicting_git = _ConflictingGitSync(harness.config, env=harness.env)
+    llm = LLM(harness.config, client=_RaisingClient())
+    ingestor = Ingestor(
+        harness.config,
+        harness.vault,
+        llm,
+        FakeExtractor(),  # type: ignore[arg-type]  # structural fake
+        FakeHindsight(),  # type: ignore[arg-type]  # structural fake
+        conflicting_git,
+    )
+
+    report = ingestor.ingest(Capture(text="durable through a conflict"))
+
+    assert report.deferred is True
+    assert report.conflict is True
+    assert report.committed is False
+    # The durable hold survived the refused push (still on disk locally).
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    assert harness.vault.page_exists(holds[0])
+
+
+def test_ingest_deferred_hold_durable_when_push_fails(harness: IngestHarness) -> None:
+    """#14 edge: LLM down AND the deferred push errors -> hold stays durable locally.
+
+    With the LLM forced to fail (deferred) and the commit raising a plain
+    :class:`GitSyncError` (a failed push, not a rebase conflict), the report is
+    ``deferred`` but NOT committed, and the inbox holding page is still present locally.
+    """
+    failing_git = _FailingGitSync(harness.config, env=harness.env)
+    llm = LLM(harness.config, client=_RaisingClient())
+    ingestor = Ingestor(
+        harness.config,
+        harness.vault,
+        llm,
+        FakeExtractor(),  # type: ignore[arg-type]  # structural fake
+        FakeHindsight(),  # type: ignore[arg-type]  # structural fake
+        failing_git,
+    )
+
+    report = ingestor.ingest(Capture(text="durable through a push failure"))
+
+    assert report.deferred is True
+    # The push was NOT recorded as committed (it raised), but nothing was lost.
+    assert report.committed is False
+    assert report.conflict is False
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    assert harness.vault.page_exists(holds[0])
+
+
+def test_ingest_happy_path_removes_inbox_holding_page(harness: IngestHarness) -> None:
+    """On successful curation the (now superseded) inbox holding page is removed.
+
+    The pre-classify durability write is a holding copy; once the curated + raw pages
+    are written it is redundant, so the happy path cleans it up (no stray inbox item for
+    the reindex sweep to re-process).
+    """
+    doc = ExtractedDoc(
+        source_url="https://example.com/x",
+        title="Transformer Models",
+        markdown="Transformers use attention to weigh tokens.",
+    )
+    extractor = FakeExtractor(doc=doc)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=extractor,
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(url="https://example.com/x"))
+
+    # The curated + raw pages landed exactly as before this change.
+    assert report.deferred is False
+    assert report.page_paths == ["concepts/transformer-models.md"]
+    assert report.raw_paths == ["raw/articles/transformer-models.md"]
+    # No inbox holding page is left behind on the happy path.
+    assert _inbox_holds(harness) == []
+    # The source was fetched exactly once: persist_inbound's extraction is reused by
+    # capture_raw (prefetched), not re-fetched.
+    assert extractor.web_extract_calls == ["https://example.com/x"]
+
+
+def test_ingest_defer_is_idempotent_on_body_sha(harness: IngestHarness) -> None:
+    """Re-deferring the identical inbound text reuses the same inbox hold (idempotent).
+
+    The holding slug is derived from the body SHA-256, so a second deferred ingest of
+    the same text lands on the same path (no duplicate hold accumulates).
+    """
+    first = _build_ingestor(
+        harness,
+        client=_RaisingClient(),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    first.ingest(Capture(text="exact same body"))
+    holds_after_first = _inbox_holds(harness)
+    assert len(holds_after_first) == 1
+
+    second = _build_ingestor(
+        harness,
+        client=_RaisingClient(),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    second.ingest(Capture(text="exact same body"))
+    # Still exactly one hold at the same path (SHA-keyed, idempotent).
+    assert _inbox_holds(harness) == holds_after_first
+
+
+def test_ingest_validation_failure_still_raises_and_keeps_raw(
+    harness: IngestHarness,
+) -> None:
+    """A schema-invalid plan still raises IngestError (gate kept); raw stays in inbox.
+
+    A *validation* failure is distinct from an LLM-availability failure: it still aborts
+    with IngestError (no curated/navigation write on an invalid plan), but the inbound
+    item was already persisted to inbox before classify, so the capture is not lost.
+    """
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body text")
+    bad_plan = _file_plan_json(folder="actions", page_type="concept")  # illegal pair
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), bad_plan),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    with pytest.raises(IngestError):
+        ingestor.ingest(Capture(url="https://e.com/a"))
+
+    # The validation gate held: no curated page written.
+    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    # But the raw inbound item is safe in the inbox holding area (capture not lost).
+    assert len(_inbox_holds(harness)) == 1
+
+
+def test_ingest_defer_when_classify_fails_for_image_holds_provenance(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An image capture with the LLM down holds a provenance stub (never base64)."""
+    src = tmp_path / "scan.jpg"
+    src.write_bytes(b"\xff\xd8\xff" + b"jpeg-bytes")
+    ingestor = _build_ingestor(
+        harness,
+        client=_RaisingClient(),
+        extractor=FakeExtractor(),  # no web call for a local path
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="scan.jpg"))
+
+    assert report.deferred is True
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    body = harness.vault.read_page(holds[0]).body
+    # The held stub records the source for a later sweep and carries no base64 blob.
+    assert "scan.jpg" in body
+    assert "base64" not in body.lower()
 
 
 # --------------------------------------------------------------------------- #

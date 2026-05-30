@@ -504,6 +504,29 @@ class Vault:
         shutil.move(os.fspath(tmp_path), os.fspath(destination))
         return rel
 
+    def remove_page(self, vault_relative_path: str) -> bool:
+        """Delete a confined ``vault_relative_path`` if it exists (idempotent).
+
+        The path is confined first (so an absolute, ``..``, or symlink-escaping path is
+        rejected, never deleted), then the file is unlinked if present. Used to drop a
+        superseded ``inbox/`` holding page once a deferred capture has been curated (the
+        durable raw/curated pages then carry the content); a missing file is a no-op.
+
+        Args:
+            vault_relative_path: Vault-relative path to remove.
+
+        Returns:
+            ``True`` if a file was removed, ``False`` if nothing was there.
+
+        Raises:
+            PathConfinementError: if the path escapes the vault root.
+        """
+        absolute = self.resolve(vault_relative_path)
+        if not absolute.is_file():
+            return False
+        absolute.unlink()
+        return True
+
     # ---- navigation edits (append-only / idempotent) ----------------------------
 
     def append_index(self, section: str, wikilink: str, summary: str) -> None:

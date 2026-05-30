@@ -534,6 +534,24 @@ def test_pkm_ingest_reports_conflict_ok_false(config: Config, vault: Vault) -> N
     assert result.data["conflict"] is True
 
 
+def test_pkm_ingest_reports_deferred_ok_true(config: Config, vault: Vault) -> None:
+    """A deferred report is surfaced ok=True as a partial success (raw saved)."""
+    report = _report(
+        page_paths=[],
+        raw_paths=["inbox/hold-deadbeef0000.md"],
+        committed=True,
+        deferred=True,
+        message="curation deferred -- LLM unavailable",
+    )
+    ctx = _context(config, vault, ingestor=FakeIngestor(report=report))
+    result = pkm_ingest(ctx, text="x")
+    # The raw was saved, so this is success (ok=True) even though curation was deferred.
+    assert result.ok is True
+    assert "inbox/hold-deadbeef0000.md" in result.text
+    assert "deferred" in result.text.lower()
+    assert result.data["deferred"] is True
+
+
 def test_pkm_ingest_refuses_base64_blob(config: Config, vault: Vault) -> None:
     """A base64-blob-shaped text arg is refused before any ingest (closed surface)."""
     ingestor = FakeIngestor()

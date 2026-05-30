@@ -34,6 +34,7 @@ from thoth.slack_app import (
     render_ingest_report,
     render_query_result,
 )
+from thoth.state import EventStore
 
 # Obviously-fake placeholder only (gitleaks scans the commit).
 FAKE_TOKEN = "x" * 8
@@ -347,6 +348,57 @@ def test_dedupe_mark_records_without_seen() -> None:
     dedupe = EventDedupe(clock=lambda: 0.0)
     dedupe.mark("E9")
     assert dedupe.seen("E9") is True
+
+
+# --------------------------------------------------------------------------------------
+# EventDedupe durable backing (processed_events in state.db)
+# --------------------------------------------------------------------------------------
+
+
+def test_dedupe_recognises_event_after_simulated_restart(tmp_path: Any) -> None:
+    """An event seen before a restart is dropped after restart via the durable store.
+
+    Acceptance for the durable Slack dedupe (#18): the in-memory cache is lost on
+    restart, but a *fresh* EventDedupe built over the *same* state.db recognises the
+    earlier event as already-processed (the processed_events row survived).
+    """
+    db = tmp_path / "state.db"
+    # First "process": records E1 both in the cache and the durable store.
+    before = EventDedupe(clock=lambda: 0.0, store=EventStore(db, clock=lambda: 0.0))
+    assert before.seen("E1") is False
+
+    # Restart: a brand-new dedupe + store over the same file, empty in-memory cache.
+    after = EventDedupe(clock=lambda: 1.0, store=EventStore(db, clock=lambda: 1.0))
+    assert after.seen("E1") is True
+    # A genuinely new id is still unseen after the restart.
+    assert after.seen("E2") is False
+
+
+def test_dedupe_store_prunes_past_ttl(tmp_path: Any) -> None:
+    """A durably-recorded id past the TTL is pruned and recognised as unseen again."""
+    db = tmp_path / "state.db"
+    now = {"t": 100.0}
+    store = EventStore(db, clock=lambda: now["t"])
+    dedupe = EventDedupe(ttl_seconds=10.0, clock=lambda: now["t"], store=store)
+    assert dedupe.seen("E1") is False
+    now["t"] = 200.0  # past TTL for both the cache and the store
+    # A fresh dedupe (no cache) over the same store: the row is pruned -> unseen.
+    fresh = EventDedupe(ttl_seconds=10.0, clock=lambda: now["t"], store=store)
+    assert fresh.seen("E1") is False
+    store.close()
+
+
+def test_dedupe_cache_hit_short_circuits_store(tmp_path: Any) -> None:
+    """A repeat within one process is served from the cache (store still consistent)."""
+    db = tmp_path / "state.db"
+    store = EventStore(db, clock=lambda: 0.0)
+    dedupe = EventDedupe(clock=lambda: 0.0, store=store)
+    assert dedupe.seen("E1") is False
+    assert dedupe.seen("E1") is True  # cache hit
+    # The durable store agrees independently (a fresh dedupe sees it too).
+    other = EventDedupe(clock=lambda: 0.0, store=store)
+    assert other.seen("E1") is True
+    store.close()
 
 
 # --------------------------------------------------------------------------------------
@@ -855,6 +907,21 @@ def test_render_ingest_report_falls_back_to_raw_paths() -> None:
     report = _report(page_paths=[], raw_paths=["raw/transcripts/memo.md"])
     rendered = render_ingest_report(report)
     assert "raw/transcripts/memo.md" in rendered
+
+
+def test_render_ingest_report_deferred_is_partial_success() -> None:
+    """A deferred report says raw saved + curation deferred, naming the held page."""
+    report = _report(
+        page_paths=[],
+        raw_paths=["inbox/hold-deadbeef0000.md"],
+        committed=True,
+        deferred=True,
+        message="curation deferred -- LLM unavailable",
+    )
+    rendered = render_ingest_report(report)
+    assert "inbox/hold-deadbeef0000.md" in rendered
+    assert "deferred" in rendered.lower()
+    assert "saved raw" in rendered.lower()
 
 
 def test_render_ingest_report_uneven_links_and_wikilinks() -> None:

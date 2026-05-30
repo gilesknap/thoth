@@ -28,8 +28,11 @@ Design constraints enforced here:
 * File uploads are downloaded **server-side** to a temporary file and handed to the
   ingestor as :class:`~thoth.ingest.Capture` with a ``path`` -- never as base64
   (SPEC section 6 capture note). A non-allowed user is rejected before any download.
-* :class:`EventDedupe` is a transient in-memory TTL set (SPEC section 10); it is the
-  seam behind which the Phase 3 SQLite ``processed_events`` table will later sit.
+* :class:`EventDedupe` is the redelivery seam (SPEC section 10): a fast in-memory TTL
+  set front-cache backed by a **durable** ``processed_events`` row in
+  :class:`thoth.state.EventStore` (``~/.thoth/state.db``) so a Slack redelivery that
+  straddles a daemon restart is still recognised as already-processed. The in-memory
+  set alone is lost on restart; the table survives it.
 
 Only the standard library plus ``thoth`` modules are imported at module level, so the
 module is always import-safe under pytest collection.
@@ -50,6 +53,7 @@ from thoth.git_sync import VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
 from thoth.research import AskResult, ResearchEngine, ResearchError
+from thoth.state import EventStore
 
 DEDUPE_TTL_SECONDS: float = 3600.0
 """Prune processed-event ids older than one hour (SPEC section 10)."""
@@ -194,17 +198,26 @@ def render_ingest_report(report: IngestReport) -> str:
     Names what was filed (the page paths, or raw/asset paths when no curated page was
     written) and lists every harness-built ``obsidian://`` link and ``[[wikilink]]`` the
     report carries (SPEC step 8). A :attr:`~thoth.ingest.IngestReport.conflict` is
-    surfaced fail-loud (SPEC section 10) with the conflicting path, never swallowed.
+    surfaced fail-loud (SPEC section 10) with the conflicting path, never swallowed. A
+    :attr:`~thoth.ingest.IngestReport.deferred` capture (raw persisted but the LLM was
+    unavailable for curation) is surfaced as a partial-success note naming the held raw
+    page, so the user knows the item is safe and will be re-curated (SPEC section 6).
 
     Args:
         report: The structured ingest outcome.
 
     Returns:
-        A concise ``mrkdwn`` confirmation (or conflict) string.
+        A concise ``mrkdwn`` confirmation (or conflict / deferred) string.
     """
     if report.conflict:
         detail = report.message or "a vault conflict blocked the sync"
         return f":warning: *Vault conflict* - {detail}. Content was filed locally."
+
+    if report.deferred:
+        held = report.raw_paths or report.asset_paths
+        where = ", ".join(f"`{path}`" for path in held) or "the inbox"
+        note = report.message or "curation deferred -- LLM unavailable"
+        return f":hourglass_flowing_sand: Saved raw to {where}. {note}"
 
     filed = report.page_paths or report.raw_paths or report.asset_paths
     if filed:
@@ -231,12 +244,22 @@ def render_ingest_report(report: IngestReport) -> str:
 
 
 class EventDedupe:
-    """In-memory TTL set of processed Slack event ids (transient, never a store).
+    """TTL dedupe of processed Slack event ids: in-memory cache over a durable store.
 
     Slack redelivers events on a missed ack, so each handler drops a redelivery by
     asking :meth:`seen` once per event. Entries older than ``ttl_seconds`` are pruned
-    (SPEC section 10). The clock is injectable for deterministic tests. This is the seam
-    the Phase 3 SQLite ``processed_events`` table swaps in behind unchanged.
+    (SPEC section 10). The in-memory dict is a **fast front cache**; when a
+    :class:`thoth.state.EventStore` is injected it is the **durable** backing
+    (``processed_events`` in ``~/.thoth/state.db``), so a redelivery that straddles a
+    daemon restart -- where the in-memory cache is gone -- is still recognised as
+    already-processed by a *fresh* ``EventDedupe`` built over the same state DB. With no
+    store injected the behaviour is the legacy transient-only set (used where no daemon
+    persistence is wanted). The clock is injectable for deterministic tests.
+
+    Both layers must use the **same clock** for the TTL to agree; the store defaults to
+    wall-clock :func:`time.time` (a recorded timestamp must survive a restart, which a
+    monotonic clock would reset), so this class also defaults to :func:`time.time` (not
+    :func:`time.monotonic`).
     """
 
     def __init__(
@@ -244,26 +267,35 @@ class EventDedupe:
         *,
         ttl_seconds: float = DEDUPE_TTL_SECONDS,
         clock: Callable[[], float] | None = None,
+        store: EventStore | None = None,
     ) -> None:
-        """Build an empty dedupe set.
+        """Build a dedupe over an optional durable store.
 
         Args:
             ttl_seconds: How long a recorded event id is remembered before pruning.
-            clock: A monotonic-ish time source returning seconds; defaults to
-                :func:`time.monotonic`.
+            clock: A wall-clock time source returning seconds; defaults to
+                :func:`time.time` so recorded timestamps survive a process restart and
+                agree with the store's own clock.
+            store: The durable :class:`thoth.state.EventStore` backing
+                ``processed_events``; when ``None`` the dedupe is in-memory only (the
+                legacy transient behaviour). Pass the same clock to both for the TTL to
+                agree across the cache and the store.
         """
         self._ttl = ttl_seconds
-        self._clock = clock if clock is not None else time.monotonic
+        self._clock = clock if clock is not None else time.time
+        self._store = store
         self._seen: dict[str, float] = {}
 
     def seen(self, event_id: str) -> bool:
         """Report whether ``event_id`` was already processed, recording it if new.
 
-        Prunes expired entries first, then: if ``event_id`` is unknown it is recorded
-        and ``False`` is returned (the caller should process it); if it is already known
-        ``True`` is returned (the caller should drop the redelivery). An empty
-        ``event_id`` is always treated as unseen and is never recorded (a missing id
-        cannot be deduped).
+        Prunes expired cache entries first, then checks the **fast front cache**: a hit
+        there is an immediate ``True`` (drop the redelivery). On a cache miss the
+        durable :class:`~thoth.state.EventStore` is consulted (its own atomic
+        insert-or-ignore is the source of truth across restarts); whatever it reports is
+        cached and returned. With no store, a cache miss records the id in the cache and
+        returns ``False``. An empty ``event_id`` is always unseen and never recorded (a
+        missing id cannot be deduped).
 
         Args:
             event_id: The Slack event id (or client message id).
@@ -276,16 +308,23 @@ class EventDedupe:
             return False
         if event_id in self._seen:
             return True
+        if self._store is not None:
+            already = self._store.seen(event_id, ttl_seconds=self._ttl)
+            self._seen[event_id] = self._clock()
+            return already
         self._seen[event_id] = self._clock()
         return False
 
     def mark(self, event_id: str) -> None:
-        """Record ``event_id`` as processed now (no-op for an empty id)."""
-        if event_id:
-            self._seen[event_id] = self._clock()
+        """Record ``event_id`` as processed now in the cache and the durable store."""
+        if not event_id:
+            return
+        self._seen[event_id] = self._clock()
+        if self._store is not None:
+            self._store.mark(event_id, ttl_seconds=self._ttl)
 
     def prune(self) -> None:
-        """Drop every recorded id older than ``ttl_seconds`` from now."""
+        """Drop every cache entry older than ``ttl_seconds`` (the store self-prunes)."""
         cutoff = self._clock() - self._ttl
         self._seen = {
             event_id: ts for event_id, ts in self._seen.items() if ts >= cutoff
@@ -713,6 +752,9 @@ def build_app(
         query_engine=query_engine,
         allowed_users=parse_allowed_users(os.environ.get("SLACK_ALLOWED_USERS")),
         research=research,
+        # Durable redelivery dedupe so a Slack retry across a daemon restart is still
+        # dropped (the in-memory cache alone is lost on restart, SPEC section 10).
+        dedupe=EventDedupe(store=EventStore(config.state_db_path)),
     )
     app = App(token=bot_token)
 
