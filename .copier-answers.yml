@@ -1,0 +1,16 @@
+# Changes here will be overwritten by Copier
+_commit: 5.1.0
+_src_path: git@github.com:diamondlightsource/python-copier-template
+author_email: gilesknap@gmail.com
+author_name: Giles Knap
+description: agent PKM with semantic index, slack connector and MCP
+distribution_name: thoth
+docker: false
+docs_type: sphinx
+git_platform: github.com
+github_org: gilesknap
+package_name: thoth
+pypi: false
+repo_name: thoth
+strict_typing: false
+type_checker: pyright
