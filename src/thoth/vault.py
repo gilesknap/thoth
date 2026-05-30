@@ -17,8 +17,16 @@ the frozen :class:`thoth.config.Config` for the vault root and name, and delegat
 single canonical ``obsidian://`` link encoding to :meth:`Config.obsidian_uri`; the
 confinement check lives here so there is exactly one encoder and one confiner.
 
-Only the standard library plus ``frontmatter`` and ``yaml`` are imported at module
-level, so importing this module is always CI-safe.
+Only the standard library plus ``frontmatter``, ``yaml`` and ``slugify``
+(``python-slugify``, pure-python) are imported at module level, so importing this module
+is always CI-safe.
+
+This module is also the single canonical source of the page-type / source / folder
+vocabulary (issue #19): the classify prompt (:mod:`thoth.ingest`), the lint folder walks
+(:mod:`thoth.lint`), the summary scans (:mod:`thoth.summary`) and the file-plan
+validator (:mod:`thoth.llm`) all import these constants rather than restating them, and
+:func:`slugify` is the one slug builder every caller routes through so the slug rule and
+:data:`SLUG_RE` validation grammar never drift apart.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ from pathlib import Path, PurePosixPath
 
 import frontmatter
 import yaml
+from slugify import slugify as _slugify_lib
 
 from thoth.config import Config
 
@@ -48,6 +57,23 @@ LIFE_ADMIN_TYPES: frozenset[str] = frozenset({"action", "media", "memory", "inbo
 
 VALID_TYPES: frozenset[str] = KNOWLEDGE_TYPES | LIFE_ADMIN_TYPES
 """Every legal frontmatter ``type`` value (knowledge union life-admin)."""
+
+# A stable, human-ordered enumeration of every type for prompt text. Frozensets have no
+# meaningful order, so the classify prompt (thoth.ingest) derives its "one of ..." list
+# from this tuple rather than restating the vocabulary. ``set(TYPE_ENUMERATION) ==
+# VALID_TYPES`` is asserted in the tests, so a new type cannot land in one place only.
+TYPE_ENUMERATION: tuple[str, ...] = (
+    "entity",
+    "concept",
+    "comparison",
+    "query",
+    "summary",
+    "action",
+    "media",
+    "memory",
+    "inbox",
+)
+"""Canonical knowledge-then-life-admin ordering of :data:`VALID_TYPES` for prompts."""
 
 VALID_SOURCES: frozenset[str] = frozenset({"slack", "mcp", "web", "manual", "cron"})
 """Every legal frontmatter ``source`` value (SPEC frontmatter contract)."""
@@ -65,11 +91,41 @@ FOLDER_TYPE_CONTRACT: dict[str, frozenset[str]] = {
 }
 """Top-level vault folder -> the ``type`` values allowed to be written there."""
 
+KNOWLEDGE_DIRS: tuple[str, ...] = ("entities", "concepts", "comparisons", "queries")
+"""Curated knowledge folders, in catalog order (the four single-knowledge-type folders).
+
+Canonical here so :mod:`thoth.lint` (its ``KNOWLEDGE_DIRS``) and :mod:`thoth.summary`
+(its curated-scan dirs) derive the same list instead of restating it. Every entry is a
+:data:`FOLDER_TYPE_CONTRACT` folder whose only allowed ``type`` is a knowledge type;
+``people`` is a knowledge-typed folder too but is life-admin in the scans, so it is
+listed under :data:`LIFE_ADMIN_DIRS` rather than here.
+"""
+
+LIFE_ADMIN_DIRS: tuple[str, ...] = (
+    "actions",
+    "media",
+    "memories",
+    "people",
+    "inbox",
+)
+"""Life-admin folders, additionally scanned for frontmatter / stale / overdue checks.
+
+Canonical here so :mod:`thoth.lint` derives the same list. Together with
+:data:`KNOWLEDGE_DIRS` these partition the :data:`FOLDER_TYPE_CONTRACT` folder set (a
+consistency the tests assert), so adding a folder is a one-place edit.
+"""
+
 RAW_SUBDIRS: frozenset[str] = frozenset({"articles", "papers", "transcripts", "assets"})
 """The ``raw/`` subdirectories (SPEC vault tree); ``assets`` is binary-only."""
 
 SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 """Slug grammar: lowercase alphanumerics in single-hyphen-separated groups."""
+
+# Caps applied by :func:`slugify` (the one slug builder). A slug keeps at most this many
+# hyphen-separated words and this many characters, so a long title yields a short,
+# filesystem-friendly slug that still satisfies :data:`SLUG_RE`.
+_MAX_SLUG_WORDS: int = 8
+_MAX_SLUG_LEN: int = 80
 
 ASSET_SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+$")
 """Asset filename grammar: ``<slug>.<ext>`` (e.g. ``motor-diagram-e4a408.png``)."""
@@ -100,6 +156,40 @@ _INDEX_SECTIONS: frozenset[str] = frozenset(
 _LOG_ACTIONS: frozenset[str] = frozenset(
     {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
 )
+
+
+def slugify(text: str, *, fallback: str = "untitled") -> str:
+    """Build a vault slug from free text via ``python-slugify``, capped and validated.
+
+    Wraps :func:`slugify.slugify` (``python-slugify``) with the project caps
+    (:data:`_MAX_SLUG_WORDS` words, :data:`_MAX_SLUG_LEN` characters, lowercase, word
+    boundaries respected) so a long title yields a short, filesystem-friendly slug.
+    Unlike the old hand-rolled strippers, ``python-slugify`` *transliterates* non-ASCII
+    rather than dropping it: ``"café notes"`` becomes ``cafe-notes`` and ``"naïve
+    Bayes"`` becomes ``naive-bayes``. When the input transliterates to nothing usable
+    (empty, whitespace, or symbols-only) the ``fallback`` word is returned, so the slug
+    is **always** a non-empty string satisfying :data:`SLUG_RE`. This is the single slug
+    builder; every caller routes through it so the slug rule and the :data:`SLUG_RE`
+    validation grammar cannot drift apart.
+
+    Args:
+        text: The free text to slugify (typically a page title or question).
+        fallback: The slug returned when ``text`` has no slug-able characters; must
+            itself satisfy :data:`SLUG_RE` (defaults to ``"untitled"``).
+
+    Returns:
+        A slug string guaranteed to satisfy :data:`SLUG_RE`.
+    """
+    slug = _slugify_lib(
+        text,
+        max_length=_MAX_SLUG_LEN,
+        word_boundary=True,
+        separator="-",
+        lowercase=True,
+    )
+    words = slug.split("-")[:_MAX_SLUG_WORDS]
+    slug = "-".join(word for word in words if word)
+    return slug or fallback
 
 
 class VaultError(Exception):

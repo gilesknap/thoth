@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # thoth/bin/vault-commit — commit + rebase + push after an ingest batch.
 #
-# Carried forward verbatim from the SPEC (Appendix -> Git wrappers & .gitignore).
+# Carried forward from the SPEC (Appendix -> Git wrappers & .gitignore).
 # Commit FIRST so the working tree is clean, THEN rebase onto any Obsidian pushes
 # that landed during the batch. Committing before the rebase means no autostash is
 # needed, so a conflicting Obsidian push surfaces as a clean rebase conflict (fail
@@ -10,18 +10,31 @@
 # PAT-in-URL);
 # GIT_CONFIG_GLOBAL=/dev/null neutralises any global insteadOf ssh-rewrite.
 #
-# Reconciliation for tests/CI ONLY: THOTH_PUSH_REMOTE defaults to the verbatim SPEC
-# push URL, and THOTH_GIT_REMOTE / THOTH_GIT_BRANCH default to "origin" / "main", so
-# production behaviour is byte-equivalent to the SPEC while a test can redirect both
-# the rebase and the push at a LOCAL bare repo in tmp_path. The credential-helper
-# line is a documented no-op for a local-path remote. Default GitHub owner: gilesknap.
+# Push target: the vault's OWN remote (THOTH_GIT_REMOTE, default "origin") — NOT a
+# hardcoded owner URL. The clone already knows where it came from, so we push back to
+# the same place the rebase pulled from; nothing is owner-specific. THOTH_PUSH_REMOTE
+# may override the target (a URL, path, or remote name) for tests/CI; when it is unset
+# and "origin" is not configured the script FAILS LOUDLY rather than guessing, so it can
+# never silently target someone else's repo. THOTH_GIT_REMOTE / THOTH_GIT_BRANCH default
+# to "origin" / "main", so a test can redirect both the rebase and the push at a LOCAL
+# bare repo in tmp_path. The credential-helper line is a documented no-op for a
+# local-path remote.
 set -euo pipefail
 VAULT="${PKM_VAULT:-/opt/pkm-vault}"
 MSG="${1:-ingest $(date -u +%Y-%m-%dT%H:%MZ)}"
 REMOTE="${THOTH_GIT_REMOTE:-origin}"
 BRANCH="${THOTH_GIT_BRANCH:-main}"
-PUSH_REMOTE="${THOTH_PUSH_REMOTE:-https://github.com/gilesknap/pkm-vault.git}"
+# Default the push target to the vault's own remote (origin), not a hardcoded owner.
+PUSH_REMOTE="${THOTH_PUSH_REMOTE:-$REMOTE}"
 cd "$VAULT"
+# When falling back to the named remote, it must actually be configured; otherwise the
+# clone has no usable origin and we refuse to push rather than target an unknown repo.
+if [ -z "${THOTH_PUSH_REMOTE:-}" ] && ! git remote get-url "$PUSH_REMOTE" >/dev/null 2>&1
+then
+    echo "VAULT PUSH ERROR: no '$PUSH_REMOTE' remote configured and THOTH_PUSH_REMOTE \
+unset; refusing to push (set a remote or THOTH_PUSH_REMOTE)." >&2
+    exit 1
+fi
 git add -A
 git diff --cached --quiet && { echo "nothing to commit"; exit 0; }
 git commit -m "agent: $MSG"

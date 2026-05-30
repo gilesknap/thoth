@@ -57,7 +57,7 @@ import frontmatter
 import yaml
 
 from thoth.config import Config
-from thoth.vault import Vault
+from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 __all__ = [
     "LONDON",
@@ -71,7 +71,6 @@ __all__ = [
     "SlackPoster",
     "SummaryEngine",
     "SummaryError",
-    "slugify_unused",
 ]
 
 LONDON: ZoneInfo = ZoneInfo("Europe/London")
@@ -93,8 +92,10 @@ DUE_SOON_DAYS: int = 3
 
 # Curated knowledge folders whose pages count as "ingests" for the recent/week scans.
 # Life-admin folders churn for unrelated reasons (status changes), so they are excluded
-# from the ingest-count view (SPEC Appendix: "new/changed curated pages").
-_CURATED_DIRS: tuple[str, ...] = ("entities", "concepts", "comparisons", "queries")
+# from the ingest-count view (SPEC Appendix: "new/changed curated pages"). Derived from
+# the canonical vault.KNOWLEDGE_DIRS so the folder vocabulary lives in exactly one place
+# (issue #19); a divergence is caught by the tests.
+_CURATED_DIRS: tuple[str, ...] = KNOWLEDGE_DIRS
 
 # Folder holding life-admin action pages.
 _ACTIONS_DIR: str = "actions"
@@ -653,34 +654,6 @@ class SummaryEngine:
     def _format_day(day: date) -> str:
         """Format a date as ``Mon 2026-06-01`` (weekday abbreviation + ISO date)."""
         return f"{day.strftime('%a')} {day.isoformat()}"
-
-
-def slugify_unused(text: str) -> str:
-    """Slugify ``text`` to a lowercase-hyphen slug (kept for parity, currently unused).
-
-    Summaries are delivered Slack-only and are never filed as vault pages, so this
-    helper is not used by delivery; it is retained so a future filing path can reuse the
-    same slug rule the vault enforces. It is trivial and side-effect-free: it
-    lowercases, replaces any run of non-alphanumeric characters with a single hyphen,
-    and trims leading/trailing hyphens. Input reducing to nothing yields ``"untitled"``.
-
-    Args:
-        text: Arbitrary human text.
-
-    Returns:
-        A vault-style slug (lowercase alphanumerics joined by single hyphens).
-    """
-    out: list[str] = []
-    prev_hyphen = False
-    for char in text.lower():
-        if char.isalnum():
-            out.append(char)
-            prev_hyphen = False
-        elif not prev_hyphen:
-            out.append("-")
-            prev_hyphen = True
-    slug = "".join(out).strip("-")
-    return slug or "untitled"
 
 
 # ---- module-level frontmatter helpers (pure, total) -------------------------------

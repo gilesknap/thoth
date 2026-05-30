@@ -35,7 +35,18 @@ from thoth.reindex_from_vault import (
     manifest_path,
     page_type,
 )
-from thoth.vault import Vault
+from thoth.vault import KNOWLEDGE_DIRS, Vault
+
+
+def test_indexed_dirs_is_the_canonical_knowledge_dirs() -> None:
+    """INDEXED_DIRS derives from vault.KNOWLEDGE_DIRS (issue #19 single source).
+
+    The reindex walk must scope exactly the canonical fact-bearing folders; this guard
+    fails if the alias is ever replaced by a restated copy that drifts from vault.py.
+    """
+    assert INDEXED_DIRS == KNOWLEDGE_DIRS
+    assert INDEXED_DIRS is KNOWLEDGE_DIRS
+
 
 # --------------------------------------------------------------------------- #
 # Fakes for the external boundaries.

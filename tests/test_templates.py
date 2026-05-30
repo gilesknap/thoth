@@ -201,3 +201,20 @@ def test_schema_round_trips_through_lint_taxonomy_parser() -> None:
     # One representative tag from each seed category in SCHEMA.md.
     expected = {"entity", "concept", "task", "media", "memory", "contested"}
     assert expected <= tags, sorted(tags)
+
+
+def test_schema_taxonomy_agrees_with_code_knowledge_types() -> None:
+    """SCHEMA.md's human-readable taxonomy lists every code page type (#19).
+
+    vault.py is the single source of the page-type vocabulary; SCHEMA.md carries a
+    human-readable copy for the lint tag audit. This guards the copy against drift:
+    every canonical :data:`thoth.vault.KNOWLEDGE_TYPES` value must appear in the shipped
+    ``## Tag Taxonomy`` so a page type cannot be dropped from the schema while kept in
+    the code (which would silently flag every page using it as an unknown tag).
+    """
+    lint = pytest.importorskip("thoth.lint")
+    from thoth.vault import KNOWLEDGE_TYPES
+
+    tags = lint.parse_taxonomy_tags(template_text("SCHEMA.md"))
+    missing = KNOWLEDGE_TYPES - tags
+    assert not missing, f"page types absent from SCHEMA.md taxonomy: {sorted(missing)}"

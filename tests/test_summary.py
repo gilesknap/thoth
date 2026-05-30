@@ -33,7 +33,6 @@ from thoth.summary import (
     PageRef,
     SummaryEngine,
     SummaryError,
-    slugify_unused,
 )
 from thoth.vault import Vault
 
@@ -826,7 +825,7 @@ def test_action_priority_surfaces(vault: Vault, config: Config) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# dataclasses + slugify helper
+# dataclasses
 # --------------------------------------------------------------------------------------
 
 
@@ -854,16 +853,6 @@ def test_dataclasses_are_frozen() -> None:
         ref.title = "Y"  # type: ignore[misc]
     with pytest.raises(AttributeError):
         digest.text = "z"  # type: ignore[misc]
-
-
-def test_slugify_unused_basic_and_edge_cases() -> None:
-    """slugify_unused lowercases, hyphenates runs, trims, and never returns empty."""
-    assert slugify_unused("Hello, World!") == "hello-world"
-    assert slugify_unused("  multiple   spaces  ") == "multiple-spaces"
-    assert slugify_unused("already-a-slug") == "already-a-slug"
-    assert slugify_unused("!!!") == "untitled"
-    assert slugify_unused("") == "untitled"
-    assert slugify_unused("Trailing---") == "trailing"
 
 
 def test_summary_error_is_exception() -> None:

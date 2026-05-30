@@ -19,11 +19,14 @@ from thoth.config import Config, load_config
 from thoth.vault import (
     ASSET_SLUG_RE,
     FOLDER_TYPE_CONTRACT,
+    KNOWLEDGE_DIRS,
     KNOWLEDGE_TYPES,
+    LIFE_ADMIN_DIRS,
     LIFE_ADMIN_TYPES,
     RAW_SUBDIRS,
     REQUIRED_COMMON_FIELDS,
     SLUG_RE,
+    TYPE_ENUMERATION,
     VALID_SOURCES,
     VALID_TYPES,
     Page,
@@ -33,6 +36,7 @@ from thoth.vault import (
     Vault,
     VaultError,
     redact_secrets,
+    slugify,
 )
 
 # Obviously-fake, concatenated token shapes only (gitleaks scans the commit). Building
@@ -147,6 +151,64 @@ def test_folder_type_contract_values_are_valid_types() -> None:
         "source",
         "tags",
     )
+
+
+def test_type_enumeration_is_canonical_ordering_of_valid_types() -> None:
+    """TYPE_ENUMERATION (used by the classify prompt) covers VALID_TYPES exactly (#19).
+
+    The classify prompt derives its "type (one of ...)" list from this tuple, so it must
+    enumerate every legal type once with no extras -- otherwise the prompt and the
+    enforcement gate would drift.
+    """
+    assert set(TYPE_ENUMERATION) == VALID_TYPES
+    assert len(TYPE_ENUMERATION) == len(VALID_TYPES)  # no duplicates
+    # Knowledge types lead, life-admin types follow (a stable, human-readable order).
+    knowledge_prefix = TYPE_ENUMERATION[: len(KNOWLEDGE_TYPES)]
+    assert set(knowledge_prefix) == KNOWLEDGE_TYPES
+
+
+def test_folder_dir_tuples_partition_the_folder_contract() -> None:
+    """KNOWLEDGE_DIRS + LIFE_ADMIN_DIRS partition the folder contract keys (#19).
+
+    These canonical folder lists are derived from here by :mod:`thoth.lint` and
+    :mod:`thoth.summary`; together they must be exactly the top-level folders the
+    contract governs, with no overlap, so a folder is added in one place only.
+    """
+    assert set(KNOWLEDGE_DIRS).isdisjoint(LIFE_ADMIN_DIRS)
+    assert set(KNOWLEDGE_DIRS) | set(LIFE_ADMIN_DIRS) == set(FOLDER_TYPE_CONTRACT)
+    # Each knowledge folder admits only knowledge types (people admits the 'entity'
+    # knowledge type but scans as life-admin, so it lives in LIFE_ADMIN_DIRS).
+    for folder in KNOWLEDGE_DIRS:
+        assert FOLDER_TYPE_CONTRACT[folder] <= KNOWLEDGE_TYPES
+
+
+# --- slugify (the one shared slug builder, issue #10) ------------------------------
+
+
+def test_slugify_transliterates_and_caps() -> None:
+    """slugify transliterates unicode and applies the word/length caps (#10)."""
+    assert slugify("café notes") == "cafe-notes"
+    assert slugify("naïve Bayes") == "naive-bayes"
+    long = slugify("one two three four five six seven eight nine ten eleven")
+    assert len(long.split("-")) <= 8
+
+
+def test_slugify_fallback_for_empty_and_symbols() -> None:
+    """An input with no slug-able characters returns the fallback word (#10)."""
+    assert slugify("") == "untitled"
+    assert slugify("   ", fallback="query") == "query"
+    assert slugify("!!!", fallback="query") == "query"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["café", "naïve Bayes", "Hello, World!", "日本語", "", "!!!", "Trailing---"],
+)
+def test_slugify_result_always_validates(text: str) -> None:
+    """Every slugify output is non-empty and accepted by Vault.validate_slug (#10)."""
+    slug = slugify(text)
+    assert SLUG_RE.fullmatch(slug)
+    assert Vault.validate_slug(slug) == slug
 
 
 # --- path confinement (the security core) ------------------------------------------

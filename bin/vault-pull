@@ -10,7 +10,7 @@
 # to the verbatim SPEC values ("origin" / "main"), so production behaviour is
 # byte-equivalent to the SPEC while a test can redirect the pull at a LOCAL bare
 # repo in tmp_path. The credential-helper line is a documented no-op for a
-# local-path remote. The default GitHub owner is gilesknap.
+# local-path remote. The remote is the vault's own origin — no owner is hardcoded.
 set -euo pipefail
 VAULT="${PKM_VAULT:-/opt/pkm-vault}"
 REMOTE="${THOTH_GIT_REMOTE:-origin}"

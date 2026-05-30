@@ -71,7 +71,14 @@ from thoth.llm import (
     parse_json_block,
     validate_file_plan,
 )
-from thoth.vault import SchemaError, SlugError, Vault, VaultError
+from thoth.vault import (
+    TYPE_ENUMERATION,
+    VALID_TYPES,
+    SchemaError,
+    SlugError,
+    Vault,
+    VaultError,
+)
 
 __all__ = [
     "Capture",
@@ -435,8 +442,6 @@ class Ingestor:
             Vault.validate_slug(slug)
         except SlugError as exc:
             raise IngestError(f"classification slug rejected: {exc}") from exc
-        from thoth.vault import VALID_TYPES
-
         if page_type not in VALID_TYPES:
             raise IngestError(
                 f"classification type {page_type!r} is not a valid vault type"
@@ -1204,14 +1209,20 @@ class Ingestor:
     # ---- prompt builders ---------------------------------------------------------
 
     def _classify_prompt(self, capture: Capture) -> str:
-        """Build the cheap classify-call prompt from the capture."""
+        """Build the cheap classify-call prompt from the capture.
+
+        The legal ``type`` enumeration is derived from
+        :data:`thoth.vault.TYPE_ENUMERATION` (the canonical vocabulary, issue #19),
+        not restated here, so a type added to the vault contract is offered to the
+        classifier automatically and the two cannot diverge.
+        """
         what = self._capture_summary(capture)
+        type_list = ", ".join(TYPE_ENUMERATION)
         return (
             "Classify this captured item for a personal knowledge vault. Return ONLY a "
-            "JSON object with keys: type (one of entity, concept, comparison, query, "
-            "summary, action, media, memory, inbox), slug (lowercase-hyphen), title, "
-            "entities (list of names), concepts (list of names), and life_admin "
-            "(object with due/priority/etc, or empty).\n\n"
+            f"JSON object with keys: type (one of {type_list}), slug "
+            "(lowercase-hyphen), title, entities (list of names), concepts (list of "
+            "names), and life_admin (object with due/priority/etc, or empty).\n\n"
             f"Captured item:\n{what}"
         )
 
