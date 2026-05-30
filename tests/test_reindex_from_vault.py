@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from thoth.config import Config, load_config
-from thoth.hindsight import BASE_ARGS, Hindsight, HindsightError
+from thoth.hindsight import DEFAULT_BANK, Hindsight, HindsightError, base_args
 from thoth.reindex_from_vault import (
     INDEXED_DIRS,
     RESET_SUBCOMMAND,
@@ -66,6 +66,9 @@ class RecordingHindsight(Hindsight):
         self.forgets: list[str] = []
         self.events: list[tuple[str, str]] = []
         self.fail_retain_for = fail_retain_for
+        # The Reindexer reads ``hindsight.bank`` to position the reset bank id; the real
+        # __init__ is skipped here, so set the attribute the property reads.
+        self._bank = DEFAULT_BANK
 
     def retain(self, rel_path: str, facts: str, *, tags: Sequence[str] = ()) -> None:
         """Record a retain (or raise for the configured failing path)."""
@@ -455,8 +458,8 @@ def test_full_rebuild_resets_bank_then_re_retains_every_page(
     result = Reindexer(config, vault, hs2, runner=runner).run(full_rebuild=True)
 
     assert result.full_rebuild is True
-    # The reset ran exactly once with BASE_ARGS + RESET_SUBCOMMAND.
-    assert runner.calls == [[*BASE_ARGS, *RESET_SUBCOMMAND]]
+    # The reset ran exactly once with base_args + RESET_SUBCOMMAND + [bank].
+    assert runner.calls == [[*base_args(), *RESET_SUBCOMMAND, DEFAULT_BANK]]
     # Every page re-retained despite matching manifest hashes.
     assert result.changed == len(pages)
     assert result.skipped == 0
@@ -526,10 +529,38 @@ def test_reset_bank_honours_base_args_override(vault: Vault, config: Config) -> 
         vault,
         RecordingHindsight(),
         runner=runner,
-        base_args=("hs", "-p", "other"),
+        base_args=("hindsight-embed", "-p", "other"),
     )
     reindexer.reset_bank()
-    assert runner.calls == [["hs", "-p", "other", *RESET_SUBCOMMAND]]
+    # The bank id stays positional after the (overridden) prefix + reset verb.
+    assert runner.calls == [
+        ["hindsight-embed", "-p", "other", *RESET_SUBCOMMAND, DEFAULT_BANK]
+    ]
+
+
+def test_reset_bank_honours_bank_override(vault: Vault, config: Config) -> None:
+    """A bank override re-points the positional bank id of the reset call."""
+    runner = RecordingRunner()
+    reindexer = Reindexer(
+        config,
+        vault,
+        RecordingHindsight(),
+        runner=runner,
+        bank="otherbank",
+    )
+    reindexer.reset_bank()
+    assert runner.calls == [[*base_args(), *RESET_SUBCOMMAND, "otherbank"]]
+
+
+def test_reset_bank_defaults_bank_to_the_hindsight_wrapper(
+    vault: Vault, config: Config
+) -> None:
+    """When no bank override is given, the reset uses the wrapper's bank."""
+    runner = RecordingRunner()
+    hs = Hindsight(config, bank="wrapperbank")
+    reindexer = Reindexer(config, vault, hs, runner=runner)
+    reindexer.reset_bank()
+    assert runner.calls == [[*base_args(), *RESET_SUBCOMMAND, "wrapperbank"]]
 
 
 # --------------------------------------------------------------------------- #
