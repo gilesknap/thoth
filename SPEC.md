@@ -1485,7 +1485,8 @@ touched and probes they landed; no separate job for the common case. (2) **Night
 system cron at 06:30, right after the daily pull and before the 07:00 summary, runs the incremental reindex to
 pick up **out-of-band** edits (pages the user wrote directly in Obsidian and pushed via Obsidian Git, which the
 appliance never saw); pin an explicit Gemini model (`gemini-2.5-flash`). (3) **Full rebuild, manual /
-on-recovery** — `PKM_VAULT=/opt/pkm-vault python3 reindex_from_vault.py --full-rebuild`.
+on-recovery** — `PKM_VAULT=/opt/pkm-vault thoth reindex --full-rebuild` (the `thoth`
+console entrypoint; `reindex_from_vault.py` has no standalone CLI).
 
 **Retain example — page references, not chatter.** For the curated page
 `entities/program-motion-controller.md`, Hindsight retains (illustrative, every fact recoverable to the same
@@ -1677,10 +1678,38 @@ Wired into system cron:
      clone https://github.com/<owner>/pkm-vault.git /opt/pkm-vault
    ```
 4. Re-add secrets manually from the password manager (`~/.thoth/.env`, `chmod 600`).
-5. **Rebuild the index** from the vault: `PKM_VAULT=/opt/pkm-vault python3 reindex_from_vault.py --full-rebuild`.
-6. Re-enable the systemd unit (`thoth-slack.service`) + system cron, then run the verification checklist.
+5. **Rebuild the index** from the vault (the canonical path, always correct):
+   `PKM_VAULT=/opt/pkm-vault thoth reindex --full-rebuild`.
+6. Re-enable the systemd unit (`thoth-slack.service`) + system cron, then run the verification checklist
+   (`docs/how-to/first-light.md`).
 
-Estimated recovery time ~1–2 h, dominated by package installs and the reindex pass; the knowledge itself is
+**Recall provenance after restore is tag-keyed (issue #7, §8).** `reindex --full-rebuild` re-`retain`s every
+vault page with the vault-relative path carried as the primary `rel` **tag** (alongside `page_type`); recall
+recovers the source path from each hit's `rel` tag, falling back to the in-band `SOURCE: <rel-path>` sentinel
+line only when tags are absent. Both channels are restored by the rebuild, so retrieval keeps citing the right
+vault page after a recovery — a reader confirming the restore checks that `thoth reindex --full-rebuild`
+completed (tags) rather than grepping for `SOURCE:` lines.
+
+**Optional fast restore (issue #8) — subordinate to `--full-rebuild`, never a substitute.** When the optional
+gated snapshot (`bin/hindsight-backup.sh`, a logical `pg_dump` of the bank + a copy of `reindex-manifest.json`,
+enabled with `THOTH_HINDSIGHT_BACKUP=1`) exists, step 5 may be replaced with a faster cold start that *restores*
+the dump rather than re-embedding from scratch:
+
+   1. restore the most recent `pg_dump` into the Hindsight bank's Postgres database, and copy the matching
+      `reindex-manifest-<TS>.json` back to `~/.thoth/hindsight/reindex-manifest.json`;
+   2. run an **incremental** reindex — `PKM_VAULT=/opt/pkm-vault thoth reindex` (no `--full-rebuild`) — so any
+      vault drift since the snapshot (out-of-band Obsidian edits, commits after the dump) is caught: unchanged
+      pages are skipped via the body-`sha256` manifest, changed/new pages are re-retained, and deleted pages
+      are pruned;
+   3. then start the unit + cron as in step 6.
+
+This buys a faster restore on a large bank but is **strictly an optimisation**: the index is **disposable** and
+the vault is the durable backup (§10), so a missing, stale, or unrestorable snapshot is **never** an error —
+fall back to the canonical step 5 (`thoth reindex --full-rebuild`), which deterministically re-derives the
+entire bank (and its `rel` provenance tags) from the vault.
+
+Estimated recovery time ~1–2 h, dominated by package installs and the reindex pass (the fast-restore path cuts
+the reindex pass to an incremental drift-catch); the knowledge itself is
 restored the instant the vault clone completes. **Scaling note:** plain git is good to ~1 GB; when
 `raw/assets/` growth pushes the repo toward ~1 GB, migrate binaries to **Git LFS** (10 GB free) or move the
 asset tree to **restic → Backblaze B2** while keeping the markdown in plain git. Later optimisation, not an
