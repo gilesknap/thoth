@@ -300,6 +300,30 @@ class Vault:
         """Return the hex SHA-256 of the body text (the ``raw/`` idempotency key)."""
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def stored_body_sha256(cls, body: str) -> str:
+        """Return the ``sha256`` to stamp on a raw page for body drift detection.
+
+        The digest must equal what any reader re-derives from disk -- namely
+        ``body_sha256(post.content)`` where ``post`` is ``python-frontmatter``'s
+        parse of the written file (see
+        :meth:`thoth.lint.LintEngine.check_source_drift`). ``python-frontmatter``
+        normalises ``post.content`` (it drops the leading blank line and trailing
+        whitespace), so the digest is taken over a round trip through the exact
+        serialisation :meth:`_write_post` writes -- redact, render, re-parse --
+        rather than over the raw input string. Stamping the raw digest instead would
+        make every body ending in a newline (the normal extractor/article case)
+        report spurious drift.
+
+        Args:
+            body: The raw page body markdown (pre-redaction).
+
+        Returns:
+            The hex SHA-256 of the parse-stable, redacted body.
+        """
+        rendered = cls._render_page({}, redact_secrets(body))
+        return cls.body_sha256(frontmatter.loads(rendered).content)
+
     @staticmethod
     def bytes_sha256(data: bytes) -> str:
         """Return the hex SHA-256 of raw bytes (the binary-asset idempotency key)."""
@@ -412,8 +436,9 @@ class Vault:
     ) -> str:
         """Write an immutable ``raw/<subdir>/<slug>.md`` source page.
 
-        Stamps ``ingested`` and ``sha256`` (digest of the redacted body) and redacts
-        secrets from the body and string frontmatter values.
+        Stamps ``ingested`` and ``sha256`` (digest of the parse-stable redacted body,
+        per :meth:`stored_body_sha256`) and redacts secrets from the body and string
+        frontmatter values.
 
         Args:
             subdir: A ``raw/`` subdirectory in :data:`RAW_SUBDIRS`, excluding
@@ -443,9 +468,8 @@ class Vault:
         self.validate_slug(slug)
         meta = dict(frontmatter_in)
         stamp = today or date.today()
-        redacted_body = redact_secrets(body)
         meta["ingested"] = stamp
-        meta["sha256"] = self.body_sha256(redacted_body)
+        meta["sha256"] = self.stored_body_sha256(body)
         rel = f"raw/{subdir}/{slug}.md"
         self._write_post(rel, meta, body)
         return rel
@@ -616,26 +640,43 @@ class Vault:
         post = frontmatter.loads(absolute.read_text(encoding="utf-8"))
         return post.metadata.get("created")
 
+    @staticmethod
+    def _render_page(meta: dict[str, object], body: str) -> str:
+        """Serialise already-redacted ``meta`` + ``body`` to the on-disk page text.
+
+        This is the single source of truth for a page's byte layout. The frontmatter
+        block is rendered with :func:`yaml.safe_dump` so the key order we assembled is
+        preserved (``frontmatter.dumps`` would re-sort it), and the body is written with
+        a single trailing newline.
+
+        Args:
+            meta: The redacted frontmatter mapping (already passed through
+                :func:`_redact_frontmatter`).
+            body: The redacted body markdown (already passed through
+                :func:`redact_secrets`).
+
+        Returns:
+            The exact text written to disk for this page.
+        """
+        block = yaml.safe_dump(
+            meta,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        )
+        return f"---\n{block}---\n\n{body.rstrip(chr(10))}\n"
+
     def _write_post(
         self, vault_relative_path: str, meta: dict[str, object], body: str
     ) -> None:
         """Redact, serialise (stable key order), and atomically write a page.
 
-        The frontmatter block is rendered with :func:`yaml.safe_dump` so the key order
-        we assembled is preserved (``frontmatter.dumps`` would re-sort it); the file is
-        written to a sibling ``.tmp`` and atomically replaced so a crash never leaves a
-        half-written page in the vault.
+        The body bytes are laid out by :meth:`_render_page`; the file is written to a
+        sibling ``.tmp`` and atomically replaced so a crash never leaves a half-written
+        page in the vault.
         """
         absolute = self.resolve(vault_relative_path)
-        clean_meta = _redact_frontmatter(meta)
-        clean_body = redact_secrets(body)
-        block = yaml.safe_dump(
-            clean_meta,
-            sort_keys=False,
-            allow_unicode=True,
-            default_flow_style=False,
-        )
-        text = f"---\n{block}---\n\n{clean_body.rstrip(chr(10))}\n"
+        text = self._render_page(_redact_frontmatter(meta), redact_secrets(body))
         absolute.parent.mkdir(parents=True, exist_ok=True)
         tmp = absolute.with_name(absolute.name + ".tmp")
         tmp.write_text(text, encoding="utf-8")

@@ -648,6 +648,39 @@ def test_capture_raw_creates_then_skips_unchanged(harness: IngestHarness) -> Non
     assert (harness.work / rel).stat().st_mtime_ns == mtime_before
 
 
+def test_capture_raw_skips_unchanged_body_ending_in_newline(
+    harness: IngestHarness,
+) -> None:
+    """Re-capturing an identical newline-terminated body still skips (idempotent).
+
+    Regression: the skip-unchanged compare must use the same parse-stable digest the
+    writer stamps (``Vault.stored_body_sha256``), not ``body_sha256`` of the raw body,
+    so a body with a trailing newline (the normal extractor case) is not re-reported as
+    drift on an unchanged page.
+    """
+    cls = Classification(
+        page_type="concept", slug="nl-source", title="NL", concepts=["nl-source"]
+    )
+    doc = ExtractedDoc(
+        source_url="https://e.com/nl", title="NL", markdown="real article body\n"
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    first = ingestor.capture_raw(Capture(url="https://e.com/nl"), cls)
+    assert first.disposition == "created"
+    rel = "raw/articles/nl-source.md"
+    mtime_before = (harness.work / rel).stat().st_mtime_ns
+
+    second = ingestor.capture_raw(Capture(url="https://e.com/nl"), cls)
+    assert second.disposition == "skipped_unchanged"
+    assert (harness.work / rel).stat().st_mtime_ns == mtime_before
+
+
 def test_capture_raw_detects_drift(harness: IngestHarness) -> None:
     """A changed body for the same slug is flagged as drift and rewritten."""
     cls = Classification(page_type="concept", slug="drift-source", title="Drift")

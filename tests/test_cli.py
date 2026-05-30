@@ -1,13 +1,16 @@
 """Tests for the ``thoth`` command-line dispatch (:mod:`thoth.__main__`).
 
-The four Phase-3 entrypoints are reachable as subcommands -- ``slack``, ``mcp``,
-``reindex`` and ``summary`` -- each loading the config once and constructing the
-collaborator graph before delegating. These tests exercise the parser and the dispatch
-wiring against fakes: the blocking daemons (``slack`` / ``mcp``) are checked only at the
-routing level (their ``run`` functions are monkeypatched so nothing blocks or imports
-the optional clients), ``reindex`` is driven against a fake :class:`Reindexer`, and
-``summary`` is driven end-to-end over a real seeded vault with a fake Slack poster (so
-the 07:00 / Mon-07:00 digest path is proven to compose and post without the Slack SDK).
+The Phase-3/4 entrypoints are reachable as subcommands -- ``slack``, ``mcp``,
+``reindex``, ``summary`` and ``lint`` -- each loading the config once and constructing
+the collaborator graph before delegating. These tests exercise the parser and the
+dispatch wiring against fakes: the blocking daemons (``slack`` / ``mcp``) are checked
+only at the routing level (their ``run`` functions are monkeypatched so nothing blocks
+or imports the optional clients), ``reindex`` is driven against a fake
+:class:`Reindexer`, ``summary`` is driven end-to-end over a real seeded vault with a
+fake Slack poster (so the 07:00 / Mon-07:00 digest path is proven to compose and post
+without the Slack SDK), and ``lint`` is driven end-to-end over a real seeded tmp vault
+(a deliberately-broken page) so the Mon-08:00 maintenance scan is proven to print the
+grouped report and append exactly one ``log.md`` entry.
 """
 
 from __future__ import annotations
@@ -48,9 +51,16 @@ def test_build_parser_summary_kind_choices() -> None:
         parser.parse_args(["summary", "monthly"])
 
 
-@pytest.mark.parametrize("command", ["slack", "mcp", "reindex", "summary"])
+def test_build_parser_lint_no_log_flag() -> None:
+    """``lint --no-log`` parses to the flag; bare ``lint`` defaults it off."""
+    parser = __main__.build_parser()
+    assert parser.parse_args(["lint", "--no-log"]).no_log is True
+    assert parser.parse_args(["lint"]).no_log is False
+
+
+@pytest.mark.parametrize("command", ["slack", "mcp", "reindex", "summary", "lint"])
 def test_build_parser_recognises_each_subcommand(command: str) -> None:
-    """Each Phase-3 subcommand is recognised and sets ``command``."""
+    """Each Phase-3/4 subcommand is recognised and sets ``command``."""
     parser = __main__.build_parser()
     args = ["summary", "daily"] if command == "summary" else [command]
     assert parser.parse_args(args).command == command
@@ -87,7 +97,7 @@ def test_main_dispatches_each_command(
     """Each subcommand routes to its handler with the loaded config."""
     calls: list[tuple[str, Config]] = []
 
-    for name in ("run_slack", "run_mcp", "run_reindex", "run_summary"):
+    for name in ("run_slack", "run_mcp", "run_reindex", "run_summary", "run_lint"):
 
         def _record(ns: Any, cfg: Config, _name: str = name) -> None:
             calls.append((_name, cfg))
@@ -98,12 +108,14 @@ def test_main_dispatches_each_command(
     __main__.main(["mcp"])
     __main__.main(["reindex"])
     __main__.main(["summary", "daily"])
+    __main__.main(["lint"])
 
     assert [name for name, _ in calls] == [
         "run_slack",
         "run_mcp",
         "run_reindex",
         "run_summary",
+        "run_lint",
     ]
     assert all(cfg is stub_config for _, cfg in calls)
 
@@ -328,3 +340,254 @@ def test_run_summary_requires_summary_channel(tmp_path: Path) -> None:
     namespace = __main__.build_parser().parse_args(["summary", "daily"])
     with pytest.raises(ConfigError, match="SLACK_SUMMARY_CHANNEL"):
         __main__.run_summary(namespace, config, poster_factory=lambda cfg: poster)
+
+
+# --- run_lint (real LintEngine over a seeded tmp vault) ----------------------------
+#
+# These exercise the full handler -- a real Vault and a real LintEngine over a crafted
+# tmp_path vault -- so no boundary needs stubbing (the linter is a pure markdown scan,
+# no daemon, no network). LintEngine is imported lazily inside each test body, mirroring
+# run_lint's own lazy import, so this test module stays import-safe under collection.
+
+
+def _count_log_blocks(log_path: Path) -> int:
+    """Count ``## [`` dated blocks in a ``log.md`` (one per logged action)."""
+    return sum(
+        1
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("## [")
+    )
+
+
+def _printed_total(out: str) -> int:
+    """Extract ``N`` from the handler's ``lint: N issue(s) found`` tail line.
+
+    Reading the total back out of the captured output (rather than re-running a second
+    :class:`LintEngine`) keeps the assertion internally consistent with the very run the
+    handler logged, independent of the wall clock the handler used for its stale window.
+    """
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("lint: ") and stripped.endswith(" issue(s) found"):
+            return int(stripped[len("lint: ") : -len(" issue(s) found")])
+    raise AssertionError(f"no 'lint: N issue(s) found' tail line in output:\n{out}")
+
+
+def _seed_vault_with_one_broken_link(root: Path) -> None:
+    """Seed a spine plus one knowledge page carrying a single broken wikilink.
+
+    The page is filed in ``concepts/`` with otherwise-valid common frontmatter and an
+    outbound ``[[no-such-page]]`` whose target does not exist, so a deterministic linter
+    flags at least one issue (a broken wikilink). The ``log.md`` starts with the SPEC
+    seed block, so a fresh log already has exactly one ``## [`` block.
+    """
+    for folder in (
+        "entities",
+        "concepts",
+        "comparisons",
+        "queries",
+        "actions",
+        "media",
+        "memories",
+        "people",
+        "inbox",
+    ):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "raw" / "assets").mkdir(parents=True, exist_ok=True)
+    (root / "index.md").write_text(
+        "---\n"
+        "title: Home\n"
+        "type: summary\n"
+        "updated: 2026-05-30\n"
+        "---\n\n"
+        "# Home\n\n"
+        "## Knowledge catalog\n\n"
+        "### Entities\n\n"
+        "### Concepts\n\n"
+        "### Comparisons\n\n"
+        "### Queries\n\n"
+        "### People\n",
+        encoding="utf-8",
+    )
+    (root / "SCHEMA.md").write_text(
+        "# Vault Schema\n\n## Tag Taxonomy\n- concept\n- entity\n",
+        encoding="utf-8",
+    )
+    (root / "log.md").write_text(
+        "# Vault Log\n\n## [2026-05-30] create | Vault initialized\n",
+        encoding="utf-8",
+    )
+    (root / "concepts" / "widget.md").write_text(
+        "---\n"
+        "title: Widget\n"
+        "type: concept\n"
+        "created: 2026-05-30\n"
+        "updated: 2026-05-30\n"
+        "source: slack\n"
+        "tags: [concept]\n"
+        "---\n\n"
+        "# Widget\n\n"
+        "A note that links to [[no-such-page]] which does not exist.\n",
+        encoding="utf-8",
+    )
+
+
+def _seed_clean_spine_only_vault(root: Path) -> None:
+    """Seed only the empty folders + a clean spine (no curated pages, no findings)."""
+    for folder in (
+        "entities",
+        "concepts",
+        "comparisons",
+        "queries",
+        "actions",
+        "media",
+        "memories",
+        "people",
+        "inbox",
+    ):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "raw" / "assets").mkdir(parents=True, exist_ok=True)
+    (root / "index.md").write_text(
+        "---\n"
+        "title: Home\n"
+        "type: summary\n"
+        "updated: 2026-05-30\n"
+        "---\n\n"
+        "# Home\n\n"
+        "## Knowledge catalog\n\n"
+        "### Entities\n\n"
+        "### Concepts\n\n"
+        "### Comparisons\n\n"
+        "### Queries\n\n"
+        "### People\n",
+        encoding="utf-8",
+    )
+    (root / "SCHEMA.md").write_text(
+        "# Vault Schema\n\n## Tag Taxonomy\n- concept\n- entity\n",
+        encoding="utf-8",
+    )
+    (root / "log.md").write_text(
+        "# Vault Log\n\n## [2026-05-30] create | Vault initialized\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def broken_vault_config(tmp_path: Path) -> Config:
+    """A Config over a seeded tmp vault holding one deliberately-broken page."""
+    root = tmp_path / "pkm-vault"
+    root.mkdir()
+    _seed_vault_with_one_broken_link(root)
+    return load_config({"PKM_VAULT": str(root)})
+
+
+def test_run_lint_prints_report_and_appends_one_log_block(
+    broken_vault_config: Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``thoth lint`` prints the report and appends exactly one log.md block.
+
+    Over a vault whose only knowledge page carries a broken ``[[no-such-page]]``
+    wikilink, the run reports at least one issue, names the offending page in the
+    printed report, prints the ``lint: N issue(s) found`` tail, and grows ``log.md`` by
+    exactly one ``## [`` block whose count matches the reported total. The total is read
+    back from the handler's own output so the assertion stays consistent with the very
+    run it logged (independent of the wall clock the stale window used).
+    """
+    root = broken_vault_config.vault_path
+    log_path = root / "log.md"
+    before = _count_log_blocks(log_path)
+
+    namespace = __main__.build_parser().parse_args(["lint"])
+    __main__.run_lint(namespace, broken_vault_config)
+
+    out = capsys.readouterr().out
+    total = _printed_total(out)
+    # The broken page is an orphan, has a broken wikilink, and is absent from the index,
+    # so at least one issue is guaranteed regardless of the run date.
+    assert total >= 1
+    # The offending page path appears in the grouped report (every Finding carries it).
+    assert "concepts/widget.md" in out
+    # The broken wikilink itself is named in the report.
+    assert "no-such-page" in out
+
+    after = _count_log_blocks(log_path)
+    assert after == before + 1
+    # The appended block carries the same total the report printed.
+    log_text = log_path.read_text(encoding="utf-8")
+    assert f"lint | {total} issues found" in log_text
+
+
+def test_run_lint_no_log_leaves_log_byte_identical(
+    broken_vault_config: Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``thoth lint --no-log`` prints the report but never touches ``log.md``."""
+    root = broken_vault_config.vault_path
+    log_path = root / "log.md"
+    before_bytes = log_path.read_bytes()
+
+    namespace = __main__.build_parser().parse_args(["lint", "--no-log"])
+    __main__.run_lint(namespace, broken_vault_config)
+
+    out = capsys.readouterr().out
+    assert _printed_total(out) >= 1
+    # Byte-identical: the suppressed log path appended nothing.
+    assert log_path.read_bytes() == before_bytes
+
+
+def test_run_lint_clean_vault_reports_zero_and_logs_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A clean vault prints ``0 issue(s) found`` and still logs one zero-issue block."""
+    root = tmp_path / "pkm-vault"
+    root.mkdir()
+    _seed_clean_spine_only_vault(root)
+    config = load_config({"PKM_VAULT": str(root)})
+
+    log_path = root / "log.md"
+    before = _count_log_blocks(log_path)
+
+    namespace = __main__.build_parser().parse_args(["lint"])
+    __main__.run_lint(namespace, config)
+
+    out = capsys.readouterr().out
+    assert _printed_total(out) == 0
+    assert "lint: 0 issue(s) found" in out
+
+    assert _count_log_blocks(log_path) == before + 1
+    assert "lint | 0 issues found" in log_path.read_text(encoding="utf-8")
+
+
+def test_run_lint_clean_vault_no_log_does_not_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A clean vault with ``--no-log`` reports zero and appends no log block."""
+    root = tmp_path / "pkm-vault"
+    root.mkdir()
+    _seed_clean_spine_only_vault(root)
+    config = load_config({"PKM_VAULT": str(root)})
+
+    log_path = root / "log.md"
+    before_bytes = log_path.read_bytes()
+
+    namespace = __main__.build_parser().parse_args(["lint", "--no-log"])
+    __main__.run_lint(namespace, config)
+
+    out = capsys.readouterr().out
+    assert "lint: 0 issue(s) found" in out
+    assert log_path.read_bytes() == before_bytes
+
+
+def test_main_routes_lint_through_dispatch(
+    monkeypatch: pytest.MonkeyPatch, broken_vault_config: Config
+) -> None:
+    """``thoth lint`` reaches ``run_lint`` via ``main`` with the loaded config."""
+    seen: list[tuple[bool, Config]] = []
+
+    def _record(ns: Any, cfg: Config) -> None:
+        seen.append((bool(ns.no_log), cfg))
+
+    monkeypatch.setattr(__main__, "run_lint", _record)
+    monkeypatch.setattr(__main__, "load_config", lambda: broken_vault_config)
+
+    __main__.main(["lint", "--no-log"])
+    assert seen == [(True, broken_vault_config)]

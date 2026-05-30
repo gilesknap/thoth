@@ -68,6 +68,15 @@ name = "Giles Knap"
 [tool.setuptools_scm]
 version_file = "src/thoth/_version.py"
 
+# Ship the packaged vault-spine + Bases templates (read at runtime via
+# importlib.resources by thoth.templates) inside built wheels. The data directory is
+# deliberately not a package (no __init__.py), so it must be declared as package-data.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"thoth" = ["templates/*.md", "templates/_bases/*.base"]
+
 [tool.pyright]
 typeCheckingMode = "standard"
 reportMissingImports = false # Ignore missing stubs in imported modules

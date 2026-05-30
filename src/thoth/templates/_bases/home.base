@@ -1,0 +1,13 @@
+filters:
+  and:
+    - file.ext == "md"
+views:
+  - type: table
+    name: Recent Captures (7d)
+    filters:
+      and:
+        - file.mtime > now() - "7 days"
+        - not:
+            - file.inFolder("_archive")
+    order: [file.name, type, created, file.mtime, tags]
+    sort: [{ property: file.mtime, direction: DESC }]
