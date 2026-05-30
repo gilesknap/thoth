@@ -92,6 +92,10 @@ addopts = """
 filterwarnings = "error"
 # Doctest python code in docs, python code in src docstrings, test functions in tests
 testpaths = "docs src tests"
+# Custom markers (registered so filterwarnings=error does not trip PytestUnknownMarkWarning)
+markers = [
+    "live: opt-in first-light smoke tests that hit real external services (Anthropic, Hindsight, Slack, MCP, Exa, Firecrawl); skipped unless THOTH_LIVE_SMOKE=1. Run on the VPS with `THOTH_LIVE_SMOKE=1 uv run pytest -m live`.",
+]
 
 [tool.coverage.run]
 patch = ["subprocess"]
