@@ -65,6 +65,8 @@ from thoth.config import Config
 from thoth.vault import (
     ASSET_SLUG_RE,
     FOLDER_TYPE_CONTRACT,
+    KNOWLEDGE_DIRS,
+    LIFE_ADMIN_DIRS,
     REQUIRED_COMMON_FIELDS,
     VALID_SOURCES,
     VALID_TYPES,
@@ -102,26 +104,14 @@ Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is a base depend
 this resolves identically across the 3.11-3.14 matrix even on a minimal container.
 """
 
-KNOWLEDGE_DIRS: tuple[str, ...] = ("entities", "concepts", "comparisons", "queries")
-"""Curated knowledge folders (aligned with ``reindex.INDEXED_DIRS``).
-
-"Curated page" means the same thing here as in the reindex job: a fact-bearing page in
-one of these four folders. Orphan, index-completeness, page-size and quality-signal
-checks scope to these.
-"""
-
-LIFE_ADMIN_DIRS: tuple[str, ...] = (
-    "actions",
-    "media",
-    "memories",
-    "people",
-    "inbox",
-)
-"""Life-admin folders additionally scanned for frontmatter / stale / overdue checks.
-
-These pages are exempt from the orphan and index-completeness checks (Bases surface
-them, per SPEC check 1), but they still carry the common frontmatter contract.
-"""
+# KNOWLEDGE_DIRS / LIFE_ADMIN_DIRS are the canonical folder vocabulary owned by
+# thoth.vault (issue #19); they are imported above and re-exported here so existing
+# ``thoth.lint.KNOWLEDGE_DIRS`` consumers and the __all__ surface are unchanged.
+# "Curated page" means the same thing here as in the reindex job: a fact-bearing page in
+# one of the KNOWLEDGE_DIRS folders (orphan, index-completeness, page-size and
+# quality-signal checks scope to these). The LIFE_ADMIN_DIRS pages are exempt from the
+# orphan / index-completeness checks (Bases surface them, SPEC check 1) but still carry
+# the common frontmatter contract.
 
 SPINE_FILES: frozenset[str] = frozenset({"index.md", "SCHEMA.md", "log.md"})
 """Structural backbone files (matches ``reindex.SKIP_FILES``); not curated knowledge."""

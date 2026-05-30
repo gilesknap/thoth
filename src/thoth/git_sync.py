@@ -7,12 +7,14 @@ tool** (SPEC section 3): :class:`GitSync` shells out to two shipped bash scripts
 classifies their exit codes into typed results. It never pushes ``--force`` and
 fails loudly, surfacing the conflicting path, on a rebase conflict.
 
-The two scripts carry the SPEC's git wrappers verbatim (owner ``gilesknap``,
-default push URL ``https://github.com/gilesknap/pkm-vault.git``,
-``GIT_CONFIG_GLOBAL=/dev/null`` + ``gh``'s credential helper). For tests and CI
-they honour ``THOTH_PUSH_REMOTE`` / ``THOTH_GIT_REMOTE`` / ``THOTH_GIT_BRANCH``
-overrides that default to those verbatim values, so production behaviour is
-byte-equivalent while a test can redirect pull and push at a local bare repo.
+The two scripts carry the SPEC's git wrappers (``GIT_CONFIG_GLOBAL=/dev/null`` +
+``gh``'s credential helper, ``pull --rebase``, never ``--force``). They push back to
+the vault's **own** remote — ``THOTH_GIT_REMOTE`` (default ``origin``), the place the
+rebase pulled from — so no repository owner is hardcoded; if that remote is not
+configured and ``THOTH_PUSH_REMOTE`` is unset the commit script fails loudly rather than
+guessing. For tests and CI they honour ``THOTH_PUSH_REMOTE`` / ``THOTH_GIT_REMOTE`` /
+``THOTH_GIT_BRANCH`` overrides (defaulting to ``origin`` / ``origin`` / ``main``), so a
+test can redirect both the rebase and the push at a local bare repo.
 
 Only the standard library is imported at module top level (``subprocess``,
 ``pathlib``, ``dataclasses``, ``os``); there is no network or third-party import,

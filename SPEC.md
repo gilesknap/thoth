@@ -1539,8 +1539,11 @@ if ! GIT_CONFIG_GLOBAL=/dev/null git -c credential.helper='!gh auth git-credenti
     GIT_CONFIG_GLOBAL=/dev/null git rebase --abort || true
     exit 1   # wrapper surfaces the conflicting path over Slack; never clobber
 fi
+# Push back to the vault's OWN remote (origin) — the clone already knows where it came
+# from, so no repository owner is hardcoded. (The shipped bin/vault-commit lets
+# THOTH_PUSH_REMOTE override this for tests/CI and fails loudly if origin is unset.)
 GIT_CONFIG_GLOBAL=/dev/null git -c credential.helper='!gh auth git-credential' \
-    push https://github.com/<owner>/pkm-vault.git main
+    push origin main
 ```
 
 The ingest flow calls `vault-pull` at the start of any ingest/curation turn and `vault-commit "<topic>"` once

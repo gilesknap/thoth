@@ -40,11 +40,12 @@ from thoth.research import (
     ResearchEngine,
     ResearchError,
     WebCitation,
+    _slugify,
     build_research_tools,
     force_web_requested,
     strip_research_prefix,
 )
-from thoth.vault import Vault
+from thoth.vault import SLUG_RE, Vault
 
 # --- vault seeding -----------------------------------------------------------------
 
@@ -621,6 +622,68 @@ def test_ask_raises_on_blank_final_answer(
 
     with pytest.raises(ResearchError):
         engine.ask("what is nothing")
+
+
+# --- _slugify (python-slugify wrapper, issue #10) ----------------------------------
+
+
+def test_slugify_transliterates_unicode() -> None:
+    """python-slugify transliterates non-ASCII instead of stripping it (#10)."""
+    assert _slugify("café notes") == "cafe-notes"
+    assert _slugify("naïve Bayes") == "naive-bayes"
+
+
+def test_slugify_empty_and_symbols_only_fall_back_to_query() -> None:
+    """An empty / whitespace / symbols-only question falls back to the 'query' word."""
+    assert _slugify("") == "query"
+    assert _slugify("   ") == "query"
+    assert _slugify("!!!") == "query"
+    assert _slugify("…—🙂") == "query"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "café notes",
+        "naïve Bayes",
+        "How does Raft relate to the PMC?",
+        "a very long question about distributed consensus and raft and paxos and more",
+        "日本語",
+        "!!!",
+        "",
+        "Trailing---",
+    ],
+)
+def test_slugify_always_satisfies_slug_re(text: str) -> None:
+    """Every input yields a non-empty slug matching the vault SLUG_RE grammar (#10)."""
+    slug = _slugify(text)
+    assert slug
+    assert SLUG_RE.fullmatch(slug), slug
+
+
+def test_slugify_caps_word_count() -> None:
+    """The slug keeps at most the project word cap (8 words)."""
+    slug = _slugify("one two three four five six seven eight nine ten eleven twelve")
+    assert len(slug.split("-")) <= 8
+    assert SLUG_RE.fullmatch(slug)
+
+
+def test_save_answer_unicode_question_slug(
+    config: Config, vault: Vault, query_engine: QueryEngine
+) -> None:
+    """save_answer slugifies a unicode question by transliteration, not stripping (#10).
+
+    The old hand-rolled slugifier dropped the accented bytes; python-slugify keeps the
+    word, so the saved page lands on a meaningful ``queries/cafe-notes.md`` path.
+    """
+    extractor = _FakeExtractor()
+    engine = _engine(config, vault, query_engine, extractor, [_text_response("x")])
+    result = AskResult(answer="Notes about a café.")
+
+    rel = engine.save_answer("café notes", result, today=date(2026, 6, 1))
+
+    assert rel == "queries/cafe-notes.md"
+    assert vault.page_exists(rel)
 
 
 # --- save_answer -------------------------------------------------------------------

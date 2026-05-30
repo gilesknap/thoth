@@ -30,7 +30,6 @@ lazily), so importing this module at pytest collection is always CI-safe.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -46,7 +45,7 @@ from thoth.llm import (
     user_blocks_message,
 )
 from thoth.query import Citation, QueryEngine, QueryError
-from thoth.vault import SchemaError, SlugError, Vault, VaultError
+from thoth.vault import SchemaError, SlugError, Vault, VaultError, slugify
 
 __all__ = [
     "RESEARCH_PREFIX",
@@ -129,11 +128,6 @@ WEB_EXTRACT_TOOL: dict[str, object] = {
     },
 }
 """Web extraction tool, offered only when web access is allowed (SSRF inside)."""
-
-# Slug helpers for save_answer: lowercase, hyphen-separated, capped length.
-_SLUG_STRIP_RE: re.Pattern[str] = re.compile(r"[^a-z0-9]+")
-_MAX_SLUG_WORDS: int = 8
-_MAX_SLUG_LEN: int = 80
 
 
 class ResearchError(Exception):
@@ -685,12 +679,12 @@ def _block_input(block: Any) -> dict[str, Any]:
 
 
 def _slugify(text: str) -> str:
-    """Build a vault slug from free text (lowercase, hyphenated, length-capped).
+    """Build a ``queries/`` slug from a question via the shared vault slugifier.
 
-    Lowercases, replaces every run of non-alphanumerics with a single hyphen, drops
-    leading/trailing hyphens, caps the word count and total length, and falls back to
-    ``"query"`` when nothing usable remains -- so the result always satisfies
-    :data:`thoth.vault.SLUG_RE` for a non-empty input of real words.
+    Thin wrapper over :func:`thoth.vault.slugify` (which wraps ``python-slugify`` with
+    the project caps and transliterates non-ASCII) that supplies the ``"query"``
+    fallback for a question with no slug-able characters. The result always satisfies
+    :data:`thoth.vault.SLUG_RE`, so :meth:`~thoth.vault.Vault.validate_slug` accepts it.
 
     Args:
         text: The free text to slugify (typically the question).
@@ -698,9 +692,4 @@ def _slugify(text: str) -> str:
     Returns:
         A slug string suitable for :meth:`~thoth.vault.Vault.validate_slug`.
     """
-    collapsed = _SLUG_STRIP_RE.sub("-", text.lower()).strip("-")
-    if not collapsed:
-        return "query"
-    words = collapsed.split("-")[:_MAX_SLUG_WORDS]
-    slug = "-".join(words)[:_MAX_SLUG_LEN].strip("-")
-    return slug or "query"
+    return slugify(text, fallback="query")

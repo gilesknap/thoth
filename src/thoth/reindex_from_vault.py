@@ -58,7 +58,7 @@ from thoth.hindsight import (
     default_runner,
 )
 from thoth.hindsight import base_args as default_base_args
-from thoth.vault import Vault
+from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 __all__ = [
     "INDEXED_DIRS",
@@ -71,8 +71,12 @@ __all__ = [
     "page_type",
 ]
 
-INDEXED_DIRS: tuple[str, ...] = ("entities", "concepts", "comparisons", "queries")
+INDEXED_DIRS: tuple[str, ...] = KNOWLEDGE_DIRS
 """The curated knowledge folders the reindex walks (SPEC section 8).
+
+Derived from the single canonical :data:`thoth.vault.KNOWLEDGE_DIRS` (issue #19) so the
+fact-bearing folder vocabulary lives in exactly one place; this is an alias, never a
+restated copy.
 
 ``raw/`` is immutable source bytes; navigational/meta files are structure, not facts;
 the underscore directories (``_bases/``, ``_meta/``, ``_archive/``) are excluded from

@@ -213,11 +213,19 @@ def test_scripts_contain_spec_verbatim_invariants(script: str) -> None:
     assert "--force-with-lease" not in text
 
 
-def test_commit_script_contains_default_push_url_and_owner() -> None:
-    """vault-commit defaults the push URL to the verbatim SPEC repo + owner."""
+def test_commit_script_defaults_push_to_origin_not_a_hardcoded_owner() -> None:
+    """vault-commit pushes to the vault's own remote, with no hardcoded owner URL.
+
+    Issue #4: the individual-centric default push URL is gone. The push target defaults
+    to THOTH_GIT_REMOTE / origin (the place the rebase pulled from), so no repository
+    owner is baked into the script.
+    """
     text = (bin_dir() / VAULT_COMMIT_SCRIPT).read_text()
-    assert "gilesknap" in text
-    assert "https://github.com/gilesknap/pkm-vault.git" in text
+    assert "gilesknap" not in text
+    assert "pkm-vault.git" not in text
+    # The push target defaults to the vault's own remote, not a separate hardcoded URL.
+    assert 'PUSH_REMOTE="${THOTH_PUSH_REMOTE:-$REMOTE}"' in text
+    assert 'push "$PUSH_REMOTE" "$BRANCH"' in text
 
 
 def test_commit_script_prefixes_agent_and_handles_empty() -> None:
@@ -377,6 +385,65 @@ def test_commit_generic_failure_is_not_conflict(git_vault: GitVault) -> None:
     assert not isinstance(exc_info.value, VaultConflictError)
     assert "VAULT CONFLICT" not in str(exc_info.value)
     assert "vault-commit" in str(exc_info.value)
+
+
+def test_commit_pushes_to_origin_when_push_remote_unset(git_vault: GitVault) -> None:
+    """With THOTH_PUSH_REMOTE unset, commit() pushes to the vault's own origin (#4).
+
+    No owner URL is hardcoded: the work clone's ``origin`` already points at the bare
+    repo, so dropping the explicit push override must still advance origin HEAD.
+    """
+    env = dict(git_vault.env)
+    env.pop("THOTH_PUSH_REMOTE", None)  # fall back to the vault's own remote (origin)
+    sync = GitSync(git_vault.config, env=env)
+    before = git_vault.origin_sha()
+    (git_vault.work / "via-origin.md").write_text("filed via origin\n")
+
+    result = sync.commit("file via origin")
+
+    assert result.committed is True
+    assert git_vault.origin_sha() != before
+    assert git_vault.origin_head() == "agent: file via origin"
+
+
+def test_commit_fails_loudly_when_no_origin_and_push_remote_unset(
+    tmp_path: Path,
+) -> None:
+    """commit() refuses to push when origin and THOTH_PUSH_REMOTE are both unset (#4).
+
+    A fresh repo with no ``origin`` remote and no push override must fail loudly (so the
+    appliance can never silently target someone else's repo) rather than guess a target.
+    The failure happens before any commit, so nothing is committed.
+    """
+    work = tmp_path / "no-origin"
+    work.mkdir()
+    _git(work, "init", "-b", MAIN, ".")
+    _set_identity(work)
+    (work / "note.md").write_text("orphan vault\n")
+
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env.pop("THOTH_PUSH_REMOTE", None)
+    env.pop("THOTH_GIT_REMOTE", None)  # default 'origin', which is not configured
+    env.pop("PKM_VAULT", None)
+
+    config = load_config({"PKM_VAULT": str(work)})
+    sync = GitSync(config, env=env)
+    with pytest.raises(GitSyncError) as exc_info:
+        sync.commit("should refuse")
+    assert "VAULT PUSH ERROR" in str(exc_info.value)
+    # Nothing was committed (the guard fires before `git add`/`git commit`): the fresh
+    # repo still has no commits, so HEAD does not resolve.
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "-q", "HEAD"],
+        cwd=str(work),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert head.returncode != 0, "guard must fire before any commit is made"
 
 
 def test_commit_pull_then_commit_round_trip(git_vault: GitVault) -> None:

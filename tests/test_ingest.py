@@ -36,7 +36,7 @@ from thoth.ingest import (
     RawCaptureResult,
 )
 from thoth.llm import LLM
-from thoth.vault import Vault
+from thoth.vault import TYPE_ENUMERATION, VALID_TYPES, Vault
 
 MAIN = "main"
 
@@ -1052,6 +1052,30 @@ def test_classify_rejects_out_of_vocab_type(harness: IngestHarness) -> None:
     )
     with pytest.raises(IngestError, match="valid vault type"):
         ingestor.classify(Capture(text="hello"))
+
+
+def test_classify_prompt_enumerates_exactly_the_vault_types(
+    harness: IngestHarness,
+) -> None:
+    """The classify prompt's type list is derived from the vault vocabulary (#19).
+
+    Every legal type (and no out-of-vocabulary word) appears in the prompt's
+    "type (one of ...)" clause, derived from :data:`thoth.vault.TYPE_ENUMERATION`. A
+    type added to or removed from the vault contract changes this prompt automatically,
+    so the prompt and the enforcement gate cannot diverge.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    prompt = ingestor._classify_prompt(Capture(text="hello"))
+    enumerated = ", ".join(TYPE_ENUMERATION)
+    assert f"type (one of {enumerated})" in prompt
+    for page_type in VALID_TYPES:
+        assert page_type in prompt
+    assert "wibble" not in prompt
 
 
 def test_classify_rejects_bad_slug(harness: IngestHarness) -> None:
