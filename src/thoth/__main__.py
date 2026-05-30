@@ -1,14 +1,15 @@
 """Command-line entry point for ``thoth`` (``python -m thoth`` / the console script).
 
 This is the single dispatch surface the deploy artifacts invoke (SPEC section 4 table,
-section 13 Phase 3): the ``pkm-slack`` / ``thoth-slack`` systemd unit runs ``thoth
+section 13 Phase 3-4): the ``pkm-slack`` / ``thoth-slack`` systemd unit runs ``thoth
 slack``; Claude Code's MCP config runs ``thoth mcp``; the 06:30 cron runs ``thoth
-reindex`` (``--full-rebuild`` on recovery); and the 07:00 / Mon-07:00 cron runs ``thoth
-summary daily`` / ``thoth summary weekly``. Each subcommand loads the configuration once
-via :func:`thoth.config.load_config` and constructs the collaborator graph, then
-delegates to the already-built Phase 0-3 entrypoint
-(:func:`thoth.slack_app.run`, :func:`thoth.mcp_server.run`,
-:meth:`thoth.reindex_from_vault.Reindexer.run`, :class:`thoth.summary.SummaryEngine`).
+reindex`` (``--full-rebuild`` on recovery); the 07:00 / Mon-07:00 cron runs ``thoth
+summary daily`` / ``thoth summary weekly``; and the Mon-08:00 cron runs ``thoth lint``
+(SPEC section 11). Each subcommand loads the configuration once via
+:func:`thoth.config.load_config` and constructs the collaborator graph, then delegates
+to the already-built Phase 0-4 entrypoint (:func:`thoth.slack_app.run`,
+:func:`thoth.mcp_server.run`, :meth:`thoth.reindex_from_vault.Reindexer.run`,
+:class:`thoth.summary.SummaryEngine`, :class:`thoth.lint.LintEngine`).
 
 Import safety: only the standard library plus :mod:`thoth.config` is imported at module
 top level. Every subcommand handler imports its heavy collaborators (and the lazily
@@ -35,9 +36,10 @@ def build_parser() -> ArgumentParser:
     """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
 
     Subcommands: ``slack`` (the capture/retrieve daemon), ``mcp`` (the stdio MCP
-    server), ``reindex`` (nightly incremental, ``--full-rebuild`` for recovery), and
-    ``summary`` (``daily`` / ``weekly`` Slack digest). ``-v/--version`` prints the
-    version and exits.
+    server), ``reindex`` (nightly incremental, ``--full-rebuild`` for recovery),
+    ``summary`` (``daily`` / ``weekly`` Slack digest), and ``lint`` (the 13-check vault
+    maintenance scan, ``--no-log`` to suppress the log entry). ``-v/--version`` prints
+    the version and exits.
 
     Returns:
         The configured :class:`argparse.ArgumentParser`.
@@ -49,7 +51,9 @@ def build_parser() -> ArgumentParser:
         action="version",
         version=__version__,
     )
-    sub = parser.add_subparsers(dest="command", metavar="{slack,mcp,reindex,summary}")
+    sub = parser.add_subparsers(
+        dest="command", metavar="{slack,mcp,reindex,summary,lint}"
+    )
 
     sub.add_parser("slack", help="run the Slack Socket-Mode capture/retrieve daemon")
     sub.add_parser("mcp", help="serve the pkm_* tools over stdio MCP")
@@ -71,6 +75,13 @@ def build_parser() -> ArgumentParser:
         "--skip-when-empty",
         action="store_true",
         help="do not post when there is nothing to report",
+    )
+
+    lint = sub.add_parser("lint", help="scan the vault for the 13 maintenance issues")
+    lint.add_argument(
+        "--no-log",
+        action="store_true",
+        help="print the report but do not append a log.md entry",
     )
 
     return parser
@@ -102,6 +113,7 @@ def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
         "mcp": run_mcp,
         "reindex": run_reindex,
         "summary": run_summary,
+        "lint": run_lint,
     }
     handlers[command](namespace, config)
 
@@ -201,6 +213,33 @@ def run_summary(
         f"summary {namespace.kind}: "
         f"{'posted' if posted else 'skipped (empty)'} to {channel}"
     )
+
+
+def run_lint(namespace: Namespace, config: Config) -> None:
+    """Scan the vault and print the grouped lint report (``thoth lint [--no-log]``).
+
+    Builds a real :class:`~thoth.vault.Vault` and a
+    :class:`~thoth.lint.LintEngine`, runs the 13-check pass (SPEC section 11), prints
+    :meth:`~thoth.lint.LintReport.render` (the findings grouped by severity), and --
+    unless ``--no-log`` is set -- appends exactly one ``log.md`` entry via
+    :meth:`~thoth.lint.LintEngine.record` (check 13, "report + log"). A trailing
+    ``lint: N issue(s) found`` line is printed for the Mon-08:00 cron log. All heavy
+    imports are local to the handler so importing this module never needs the linter.
+
+    Args:
+        namespace: The parsed args (carries ``--no-log``).
+        config: The frozen runtime config (used to build the vault).
+    """
+    from .lint import LintEngine
+    from .vault import Vault
+
+    vault = Vault(config)
+    engine = LintEngine(config, vault)
+    report = engine.run()
+    print(report.render())
+    if not namespace.no_log:
+        engine.record(report)
+    print(f"lint: {report.total} issue(s) found")
 
 
 # ---- collaborator construction (heavy imports kept inside) -------------------------

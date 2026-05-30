@@ -61,7 +61,7 @@ from thoth.llm import (
     parse_json_block,
     validate_file_plan,
 )
-from thoth.vault import SchemaError, SlugError, Vault, VaultError, redact_secrets
+from thoth.vault import SchemaError, SlugError, Vault, VaultError
 
 __all__ = [
     "Capture",
@@ -542,9 +542,11 @@ class Ingestor:
             source_url: The provenance URL stamped into frontmatter, if any.
         """
         rel = f"raw/{subdir}/{cls.slug}.md"
-        # write_raw stores sha256 over the *redacted* body, so the idempotency compare
-        # must use the same digest or a re-ingest of secret-bearing text never matches.
-        new_sha = Vault.body_sha256(redact_secrets(body))
+        # write_raw stamps the parse-stable redacted digest (Vault.stored_body_sha256),
+        # so the idempotency compare MUST use the same derivation -- otherwise an
+        # unchanged body ending in a newline (the normal extractor case) never matches
+        # and is wrongly re-reported as drift.
+        new_sha = Vault.stored_body_sha256(body)
         existing_sha = self._existing_raw_sha(rel)
         if existing_sha is not None and existing_sha == new_sha:
             return RawCaptureResult(raw_path=rel, disposition="skipped_unchanged")

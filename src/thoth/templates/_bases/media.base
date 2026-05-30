@@ -1,0 +1,25 @@
+filters:
+  and:
+    - file.inFolder("media")
+    - file.ext == "md"
+properties:
+  media_type: { displayName: Type }
+  creator:    { displayName: Creator }
+  priority:   { displayName: Priority }
+  status:     { displayName: Status }
+  url:        { displayName: URL }
+views:
+  - type: table
+    name: To Consume
+    filters:
+      and:
+        - status == "to_consume"
+    order: [file.name, media_type, creator, priority]
+    sort: [{ property: priority, direction: ASC }]
+  - type: table
+    name: In Progress or Done
+    filters:
+      or:
+        - status == "consuming"
+        - status == "consumed"
+    order: [file.name, media_type, status, creator]
