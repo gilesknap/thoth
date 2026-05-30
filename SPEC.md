@@ -53,34 +53,35 @@ files+git, so any agent (incl. Hermes) can be dropped back in front of the same 
 
 ```
                          ISOLATED VPS
- ┌──────────────────────────────────────────────────────────────────┐
- │  APPLIANCE (we own, unattended)                                   │
- │  ┌────────────────┐    ┌───────────────────────────┐             │
- │  │ Slack bot      │    │ system cron               │             │
- │  │ (Bolt, Socket  │    │  06:30 reindex            │             │
- │  │  Mode daemon)  │    │  07:00 daily summary      │             │
- │  │ message.im /   │    │  Mon 07:00 weekly         │             │
- │  │ file_shared    │    │  Mon 08:00 lint           │             │
- │  └──────┬─────────┘    │  every 6h config-backup   │             │
- │         │              └─────────────┬─────────────┘             │
- │         │  capture / retrieve        │ compose-from-vault        │
- │         ▼                            ▼                           │
- │  ┌───────────────────────────────────────────────┐  ┌─────────┐ │
- │  │ ingest.py / query.py / summary.py / lint.py    │  │HINDSIGHT│ │
- │  │   ── all call ──>  vault.py (closed surface)   │─▶│local_   │ │
- │  │   Anthropic API (PAYG key)   Gemini (via HS)   │◀─│embedded │ │
- │  └──────────────────────┬────────────────────────┘  │ Postgres│ │
- │                         │ git_sync (pull→write→commit)└────▲────┘ │
- │  ┌──────────────────────▼────────────────────────┐  reindex│     │
- │  │  MCP SERVER  (stdio, `mcp serve`)              │  from   │     │
- │  │  pkm_ingest / pkm_search / pkm_todos / pkm_recent│  vault │     │
- │  └──────────────────────┬────────────────────────┘         │     │
- │                         │            ┌────────────────────────────┘
- │                  ┌──────▼─────────────────┐                       │
- │                  │   CANONICAL VAULT      │  raw/ entities/ ...    │
- │                  │   (/opt/pkm-vault)     │  SCHEMA index log      │
- │                  └──────────┬─────────────┘                       │
- └─────────────────────────────┼─────────────────────────────────────┘
+ ┌────────────────────────────────────────────────────────────────────┐
+ │  APPLIANCE (we own, unattended)                                    │
+ │  ┌────────────────┐  ┌───────────────────────────┐                 │
+ │  │ Slack bot      │  │ system cron               │                 │
+ │  │ (Bolt, Socket  │  │  06:30 reindex            │                 │
+ │  │  Mode daemon)  │  │  07:00 daily summary      │                 │
+ │  │ message.im /   │  │  Mon 07:00 weekly         │                 │
+ │  │ file_shared    │  │  Mon 08:00 lint           │                 │
+ │  └──────┬─────────┘  │  every 6h config-backup   │                 │
+ │         │            └─────────────┬─────────────┘                 │
+ │         │  capture / retrieve      │  compose-from-vault           │
+ │         ▼                          ▼                               │
+ │  ┌──────────────────────────────────────────────────┐  ┌─────────┐ │
+ │  │ ingest.py / query.py / summary.py / lint.py      │  │HINDSIGHT│ │
+ │  │   ── all call ──▶  vault.py (closed surface)     │─▶│local_   │ │
+ │  │   Anthropic API (PAYG key)   Gemini (via HS)     │◀─│embedded │ │
+ │  └────────────────────────┬─────────────────────────┘  │Postgres │ │
+ │                           │ git_sync (pull→commit)     └───▲─────┘ │
+ │                           │                                │       │
+ │  ┌──────────────────────────────────────────────────┐      │       │
+ │  │ MCP SERVER  (stdio, `mcp serve`)                 │      │       │
+ │  │ pkm_ingest / pkm_search / pkm_todos / pkm_recent │      │       │
+ │  └────────────────────────┬─────────────────────────┘      │       │
+ │                           │                                │       │
+ │                  ┌──────────────────────┐                  │       │
+ │                  │   CANONICAL VAULT    │── reindex ───────┘       │
+ │                  │   (/opt/pkm-vault)   │                          │
+ │                  └──────────┬───────────┘                          │
+ └─────────────────────────────┼──────────────────────────────────────┘
                                │ git pull --rebase / push (gh helper)
                                ▼
                  ┌──────────────────────────┐      ┌──────────────────────────┐
