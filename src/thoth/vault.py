@@ -300,6 +300,57 @@ class Vault:
         """Return the hex SHA-256 of the body text (the ``raw/`` idempotency key)."""
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def bytes_sha256(data: bytes) -> str:
+        """Return the hex SHA-256 of raw bytes (the binary-asset idempotency key)."""
+        return hashlib.sha256(data).hexdigest()
+
+    def asset_exists(self, asset_filename: str) -> bool:
+        """Return ``True`` if ``raw/assets/<asset_filename>`` already exists.
+
+        The filename is validated and confined first (so a malformed or escaping
+        name is rejected, not silently reported absent).
+
+        Args:
+            asset_filename: The asset filename (validated by
+                :meth:`validate_asset_filename`).
+
+        Returns:
+            ``True`` if the confined asset path exists as a file, else ``False``.
+
+        Raises:
+            SlugError: on an invalid asset filename.
+            PathConfinementError: if the destination escapes the vault root.
+        """
+        self.validate_asset_filename(asset_filename)
+        return self.resolve(f"raw/assets/{asset_filename}").is_file()
+
+    def asset_sha256(self, asset_filename: str) -> str:
+        """Return the hex SHA-256 of an existing asset's bytes.
+
+        The filename is validated and confined first. Used by the ingest pass to
+        decide whether a re-uploaded binary is byte-identical (idempotent skip) or a
+        genuine change (drift) before calling :meth:`save_asset`.
+
+        Args:
+            asset_filename: The asset filename (validated by
+                :meth:`validate_asset_filename`).
+
+        Returns:
+            The hex SHA-256 of the asset's bytes.
+
+        Raises:
+            SlugError: on an invalid asset filename.
+            PathConfinementError: if the destination escapes the vault root.
+            VaultError: if the asset does not exist.
+        """
+        self.validate_asset_filename(asset_filename)
+        rel = f"raw/assets/{asset_filename}"
+        absolute = self.resolve(rel)
+        if not absolute.is_file():
+            raise VaultError(f"asset does not exist: {rel!r}")
+        return self.bytes_sha256(absolute.read_bytes())
+
     # ---- write curated / raw pages (validate-then-write) -------------------------
 
     def write_page(

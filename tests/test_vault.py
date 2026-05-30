@@ -524,6 +524,45 @@ def test_save_asset_missing_source(vault: Vault, tmp_path: Path) -> None:
         vault.save_asset(tmp_path / "nope.bin", "ok-name.png")
 
 
+# --- asset idempotency helpers -----------------------------------------------------
+
+
+def test_bytes_sha256_matches_hashlib() -> None:
+    """bytes_sha256 equals hashlib over the same bytes (the asset idempotency key)."""
+    payload = bytes(range(256))
+    assert Vault.bytes_sha256(payload) == hashlib.sha256(payload).hexdigest()
+
+
+def test_asset_exists_reports_presence(vault: Vault, tmp_path: Path) -> None:
+    """asset_exists is False before a save and True after, for the same filename."""
+    assert vault.asset_exists("diagram-abc123.png") is False
+    src = tmp_path / "d.bin"
+    src.write_bytes(b"bytes")
+    vault.save_asset(src, "diagram-abc123.png")
+    assert vault.asset_exists("diagram-abc123.png") is True
+
+
+def test_asset_exists_validates_filename(vault: Vault) -> None:
+    """asset_exists rejects a malformed/escaping asset filename (not 'absent')."""
+    with pytest.raises(SlugError):
+        vault.asset_exists("../escape.png")
+
+
+def test_asset_sha256_returns_digest_of_bytes(vault: Vault, tmp_path: Path) -> None:
+    """asset_sha256 returns the SHA-256 of the stored asset's bytes."""
+    payload = b"\x89PNG\r\n\x1a\n" + bytes(range(32))
+    src = tmp_path / "img.bin"
+    src.write_bytes(payload)
+    vault.save_asset(src, "photo-aa11bb.png")
+    assert vault.asset_sha256("photo-aa11bb.png") == hashlib.sha256(payload).hexdigest()
+
+
+def test_asset_sha256_missing_raises(vault: Vault) -> None:
+    """asset_sha256 raises VaultError for an absent asset."""
+    with pytest.raises(VaultError, match="does not exist"):
+        vault.asset_sha256("absent-000000.png")
+
+
 # --- append_index ------------------------------------------------------------------
 
 
