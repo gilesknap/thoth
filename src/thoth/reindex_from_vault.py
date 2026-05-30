@@ -24,8 +24,9 @@ Two facts from the SPEC shape the design:
   page; forget-and-prune per deleted page). The
   one operation ``hindsight.py`` does not expose -- the full-rebuild bank wipe -- is
   isolated in :meth:`Reindexer.reset_bank` behind the same injectable
-  :class:`~thoth.hindsight.SubprocessRunner` seam, driving ``BASE_ARGS +``
-  :data:`RESET_SUBCOMMAND` (a best-guess ``db reset`` per SPEC section 8, overridable in
+  :class:`~thoth.hindsight.SubprocessRunner` seam, driving
+  ``base_args + RESET_SUBCOMMAND + [bank]`` (a best-guess ``db reset`` per SPEC
+  section 8, with the bank id positional like every other subcommand, overridable in
   one edit), so tests assert the exact argv without spawning anything.
 
 The three reindex triggers (SPEC section 8) are: per-ingest incremental (handled by the
@@ -35,7 +36,7 @@ reindex``), and a manual/on-recovery full rebuild (``thoth reindex --full-rebuil
 Only the standard library plus :class:`thoth.config.Config`, :class:`thoth.hindsight`
 seams, and :class:`thoth.vault.Vault` are imported at module top level; no ``hindsight``
 Python package is ever imported, so importing this module at pytest collection is always
-CI-safe even where the ``hindsight-embed`` binary and its backend are absent.
+CI-safe even where the ``hindsight`` binary and its backend are absent.
 """
 
 from __future__ import annotations
@@ -51,12 +52,12 @@ import frontmatter
 
 from thoth.config import Config
 from thoth.hindsight import (
-    BASE_ARGS,
     Hindsight,
     HindsightError,
     SubprocessRunner,
     default_runner,
 )
+from thoth.hindsight import base_args as default_base_args
 from thoth.vault import Vault
 
 __all__ = [
@@ -88,7 +89,8 @@ not curated knowledge.
 
 # UNVERIFIED bank-reset subcommand (SPEC section 8 "db reset / equivalent"; section 15
 # open item). Isolated as a module constant so the VPS-time fix is one edit here,
-# mirroring hindsight.py's *_SUBCOMMAND pattern; reset_bank() appends it to BASE_ARGS.
+# mirroring hindsight.py's *_SUBCOMMAND pattern; reset_bank() builds
+# base_args + RESET_SUBCOMMAND + [bank] (the bank id positional, as for every verb).
 RESET_SUBCOMMAND: tuple[str, ...] = ("db", "reset")
 """UNVERIFIED subcommand words for the full-rebuild bank wipe (overridable VPS-time)."""
 
@@ -198,7 +200,8 @@ class Reindexer:
         hindsight: Hindsight,
         *,
         runner: SubprocessRunner | None = None,
-        base_args: Sequence[str] = BASE_ARGS,
+        base_args: Sequence[str] | None = None,
+        bank: str | None = None,
         timeout: float = 120.0,
     ) -> None:
         """Build a :class:`Reindexer`.
@@ -212,8 +215,11 @@ class Reindexer:
             runner: The :class:`~thoth.hindsight.SubprocessRunner` seam used by
                 :meth:`reset_bank`; defaults to
                 :func:`thoth.hindsight.default_runner`.
-            base_args: The attested CLI prefix the reset subcommand is appended to;
-                defaults to :data:`thoth.hindsight.BASE_ARGS`.
+            base_args: The CLI prefix (binary + optional ``-p <profile>``) the reset
+                subcommand is appended to; defaults to the env-driven
+                :func:`thoth.hindsight.base_args`.
+            bank: The Hindsight bank id (positional, like every verb); defaults to the
+                supplied ``hindsight`` instance's ``bank``.
             timeout: Seconds to allow the reset CLI call before
                 :class:`subprocess.TimeoutExpired`.
         """
@@ -221,7 +227,10 @@ class Reindexer:
         self._vault = vault
         self._hindsight = hindsight
         self._runner: SubprocessRunner = default_runner if runner is None else runner
-        self._base_args: tuple[str, ...] = tuple(base_args)
+        self._base_args: tuple[str, ...] = (
+            tuple(base_args) if base_args is not None else default_base_args()
+        )
+        self._bank: str = bank if bank is not None else hindsight.bank
         self._timeout = timeout
 
     @property
@@ -287,15 +296,15 @@ class Reindexer:
     def reset_bank(self) -> None:
         """Wipe the Hindsight bank for a full rebuild (the one op ``hindsight`` lacks).
 
-        Runs ``base_args + RESET_SUBCOMMAND`` through the injected runner. The
-        subcommand spelling is UNVERIFIED (SPEC section 8); a non-zero exit is a hard
-        failure because a full rebuild that cannot wipe must not proceed to re-retain
-        on top of stale facts.
+        Runs ``base_args + RESET_SUBCOMMAND + [bank]`` through the injected runner (the
+        bank id positional, like every verb). The subcommand spelling is UNVERIFIED
+        (SPEC section 8); a non-zero exit is a hard failure because a full rebuild that
+        cannot wipe must not proceed to re-retain on top of stale facts.
 
         Raises:
             ReindexError: if the reset CLI exits non-zero (stderr surfaced).
         """
-        argv: list[str] = [*self._base_args, *RESET_SUBCOMMAND]
+        argv: list[str] = [*self._base_args, *RESET_SUBCOMMAND, self._bank]
         result = self._runner(argv, timeout=self._timeout)
         if result.returncode != 0:
             raise ReindexError(

@@ -22,6 +22,7 @@ import pytest
 from thoth.git_sync import bin_dir
 
 CONFIG_BACKUP_SCRIPT = "config-backup.sh"
+HINDSIGHT_BACKUP_SCRIPT = "hindsight-backup.sh"
 MAIN = "main"
 
 
@@ -161,6 +162,140 @@ def test_config_backup_does_not_commit_gitignored_env(
     files = _git(config_repo.bare, "ls-tree", "-r", "--name-only", MAIN).split()
     assert ".env" not in files
     assert ".gitignore" in files
+
+
+# --- bin/hindsight-backup.sh: presence + syntax + gating + behaviour --------------
+
+
+def test_hindsight_backup_script_exists_and_is_executable() -> None:
+    """bin/hindsight-backup.sh is shipped and has the executable bit set."""
+    script = bin_dir() / HINDSIGHT_BACKUP_SCRIPT
+    assert script.is_file()
+    assert os.access(script, os.X_OK)
+
+
+def test_hindsight_backup_script_has_valid_bash_syntax() -> None:
+    """``bash -n`` parses the hindsight-backup script without error."""
+    script = bin_dir() / HINDSIGHT_BACKUP_SCRIPT
+    subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+def _run_hindsight_backup(
+    home: Path, *, enabled: bool, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the shipped hindsight-backup.sh against a tmp THOTH_HOME (no Postgres)."""
+    script = bin_dir() / HINDSIGHT_BACKUP_SCRIPT
+    env = dict(os.environ)
+    env["THOTH_HOME"] = str(home)
+    if enabled:
+        env["THOTH_HINDSIGHT_BACKUP"] = "1"
+    else:
+        env.pop("THOTH_HINDSIGHT_BACKUP", None)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def test_hindsight_backup_disabled_by_default_is_a_clean_noop(tmp_path: Path) -> None:
+    """With THOTH_HINDSIGHT_BACKUP unset the script exits 0 and writes nothing."""
+    home = tmp_path / "home"
+    (home / "hindsight").mkdir(parents=True)
+    (home / "hindsight" / "reindex-manifest.json").write_text("{}\n")
+    result = _run_hindsight_backup(home, enabled=False)
+    assert "disabled" in result.stdout
+    # No backups dir created when disabled.
+    assert not (home / "hindsight" / "backups").exists()
+
+
+def test_hindsight_backup_enabled_copies_manifest_and_noops_without_pg_dump(
+    tmp_path: Path,
+) -> None:
+    """Enabled but pg_dump absent: manifest copied, bank dump skipped (stays green)."""
+    home = tmp_path / "home"
+    (home / "hindsight").mkdir(parents=True)
+    (home / "hindsight" / "reindex-manifest.json").write_text('{"page": 1}\n')
+    # Point pg_dump at a binary that cannot exist so the guard takes the skip path.
+    result = _run_hindsight_backup(
+        home,
+        enabled=True,
+        extra_env={"THOTH_HINDSIGHT_PG_DUMP": "thoth-no-such-pg-dump-binary"},
+    )
+    assert "skipping bank dump" in result.stdout
+    assert "manifest copied" in result.stdout
+    backups = home / "hindsight" / "backups"
+    manifests = list(backups.glob("reindex-manifest-*.json"))
+    assert len(manifests) == 1
+    # No bank dump landed (pg_dump absent).
+    assert list(backups.glob("bank-*.sql.gz")) == []
+
+
+def test_hindsight_backup_dumps_bank_and_prunes_generations(tmp_path: Path) -> None:
+    """A fake pg_dump path produces a gzipped dump; pruning keeps N generations."""
+    home = tmp_path / "home"
+    backups = home / "hindsight" / "backups"
+    backups.mkdir(parents=True)
+    (home / "hindsight" / "reindex-manifest.json").write_text('{"page": 1}\n')
+
+    # A fake pg_dump that emits >64 bytes of "SQL" so the dump is kept.
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    pg_dump = fakebin / "pg_dump"
+    pg_dump.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "-- fake dump $* --"\n'
+        'for i in 1 2 3 4 5; do echo "INSERT INTO t VALUES ($i);"; done\n'
+    )
+    pg_dump.chmod(0o755)
+
+    # Pre-seed 4 older generations of each artifact so the run prunes down to 2.
+    for n in range(4):
+        stamp = f"2026-05-2{n}T00-00Z"
+        (backups / f"bank-{stamp}.sql.gz").write_bytes(b"x" * 128)
+        (backups / f"reindex-manifest-{stamp}.json").write_text("{}\n")
+
+    env = {
+        "THOTH_HINDSIGHT_PG_DUMP": str(pg_dump),
+        "THOTH_HINDSIGHT_BACKUP_GENERATIONS": "2",
+        "PATH": f"{fakebin}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = _run_hindsight_backup(home, enabled=True, extra_env=env)
+    assert "bank dumped" in result.stdout
+    # Exactly the kept window survives for both artifact kinds.
+    assert len(list(backups.glob("bank-*.sql.gz"))) == 2
+    assert len(list(backups.glob("reindex-manifest-*.json"))) == 2
+    # The newest bank dump is the one this run produced and is gzip (starts with 1f 8b).
+    newest = max(backups.glob("bank-*.sql.gz"), key=lambda p: p.stat().st_mtime)
+    assert newest.read_bytes()[:2] == b"\x1f\x8b"
+
+
+def test_hindsight_backup_is_subordinate_to_full_rebuild_in_docstring() -> None:
+    """The script documents the index stays disposable (SPEC section 10 unchanged)."""
+    text = (bin_dir() / HINDSIGHT_BACKUP_SCRIPT).read_text(encoding="utf-8")
+    assert "disposable" in text.lower()
+    assert "--full-rebuild" in text
+    # Logical dump, not a data-dir copy.
+    assert "pg_dump" in text
+
+
+def test_crontab_chains_hindsight_backup_after_successful_reindex() -> None:
+    """The reindex cron line chains the (gated) hindsight snapshot on success."""
+    text = (_deploy_dir() / "crontab").read_text(encoding="utf-8")
+    reindex_lines = [
+        line
+        for line in text.splitlines()
+        if "thoth reindex" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(reindex_lines) == 1
+    line = reindex_lines[0]
+    # `&&` so the snapshot only runs when reindex exits 0.
+    assert "&&" in line
+    assert HINDSIGHT_BACKUP_SCRIPT in line
 
 
 # --- deploy/thoth-slack.service ---------------------------------------------------

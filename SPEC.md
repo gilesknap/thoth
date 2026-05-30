@@ -164,8 +164,9 @@ few focused sessions. Every line is yours.
 
 ### Dependencies (the entire stack)
 
-`slack_bolt` (Socket Mode) · `anthropic` · `mcp` (FastMCP) · `hindsight-client` *or* shell to `hindsight-embed`
-· `python-frontmatter` + `pyyaml` · `httpx` · `exa-py` / Firecrawl REST · local `whisper` (optional, voice) ·
+`slack_bolt` (Socket Mode) · `anthropic` · `mcp` (FastMCP) · shell to the `hindsight` CLI (env-overridable
+binary; VPS still has `hindsight-embed`) · `python-frontmatter` + `pyyaml` · `httpx` · `tenacity` (bounded retry
+around the Hindsight subprocess) · `exa-py` / Firecrawl REST · local `whisper` (optional, voice) ·
 PostgreSQL (Hindsight subprocess, as today). Gemini is reached *through* Hindsight, so no separate embed code
 unless we later bypass it.
 
@@ -345,19 +346,41 @@ fast vault-only lookup for when you want *only* your own pages).
 
 ## 8. Semantic index — Hindsight, called directly (carried fwd: Appendix → Reindex job)
 
-Hindsight stays exactly as specced (`local_embedded`, `bank_id: hermes`, Gemini extraction +
-`text-embedding-004` embeddings, local Postgres subprocess) — we just call it **directly** instead of through
-the Hermes-era `memory.provider` wiring. `hindsight.py` wraps `retain` / `recall`; `reindex_from_vault.py` is carried
-forward almost verbatim (Appendix → Reindex job: body-`sha256` idempotency, `SOURCE:`-sentinel path attachment, prune-on-
-delete, `--full-rebuild`). Three triggers, unchanged: **per-ingest incremental** (primary), **nightly
+Hindsight stays exactly as specced (`local_embedded`, **`bank_id: thoth`** (renamed off the Hermes-era
+`hermes`; overridable via `THOTH_HINDSIGHT_BANK`), Gemini extraction + `text-embedding-004` embeddings, local
+Postgres subprocess) — we just call it **directly** instead of through the Hermes-era `memory.provider` wiring.
+`hindsight.py` wraps `retain` / `recall`; `reindex_from_vault.py` is carried forward almost verbatim (Appendix →
+Reindex job: body-`sha256` idempotency, **tag-based** path attachment with the `SOURCE:` sentinel as fallback,
+prune-on-delete, `--full-rebuild`). Three triggers, unchanged: **per-ingest incremental** (primary), **nightly
 catch-up** for out-of-band Obsidian edits (cron 06:30), **full rebuild** on recovery.
+
+**CLI surface (corrected to the official `hindsight` CLI — https://hindsight.vectorize.io/sdks/cli).** The binary
+is **`hindsight`** (not `hindsight-embed`; overridable via `THOTH_HINDSIGHT_BINARY` so the VPS, which currently
+has `hindsight-embed` installed under the hermes user, can reconcile). `-p <profile>` is the **named CLI
+profile** (optional, `THOTH_HINDSIGHT_PROFILE`), **not** the bank. The **bank id is a positional argument** of
+each subcommand, and the verbs are **two tokens** under `memory`:
+`hindsight [-p <profile>] memory retain <bank_id> "<text>" [--context …] [--async]` and
+`hindsight [-p <profile>] memory recall <bank_id> "<query>" -o json [--tags <rel> --tags-match all]`. Recall is
+parsed from its **`-o json`** output (we never scrape pretty stdout). Bulk retain is `memory retain-files
+<bank_id> notes.txt`. The exact binary/flag/verb spellings and the per-hit tag round-trip are **confirmed
+against the installed binary at VPS-time**; everything that could differ is env- or constant-overridable.
+
+**Provenance survives LLM fact-extraction.** Hindsight runs LLM fact-extraction (not token chunking), so a
+whole-page `retain` may be split into several atomic facts and the in-band `SOURCE: <rel-path>` sentinel can
+attach to only one of them or none. **Tags are therefore the primary provenance channel:** `retain` passes the
+vault-relative path as a tag (alongside `page_type`), and recall recovers the path from each hit's `rel` tag,
+falling back to the `SOURCE:` sentinel only when tags are absent. Both channels are kept; tags are preferred.
+
+**Resilience.** The checked subprocess calls (`retain`, `recall`) are wrapped in a bounded `tenacity` retry
+(default 3 attempts, exponential backoff with a short cap) that re-attempts only **transient** signals (non-zero
+exit / spawn error / daemon-not-ready) and **fails fast** on permanent ones (bad arguments / auth, exit 2).
+`forget` and `git_sync` are *not* retried.
 
 The Hermes-integration keys (`auto_recall`, `auto_retain`, `memory_mode`, `recall_budget`) were memory-
 *provider* wiring; in the thin app we drive retain/recall explicitly, so `hindsight/config.json` shrinks to
 what the engine itself needs (mode, bank, `llm_provider`, `llm_model`). **Open items unchanged (§15):** the
-exact client surface (`reference=` vs the `SOURCE:` sentinel, the `hindsight-embed` subcommand spellings,
-the embedding-model/dimension) must be verified against the installed package — the CLI/subprocess variant
-is the safe default until then.
+embedding-model/dimension still wants confirming against the installed package; the CLI/subprocess variant is
+the implemented path.
 
 ---
 
@@ -401,6 +424,16 @@ backed up (on VPS loss, start fresh — you lose only dedupe history + mid-fligh
 the *only* state outside the vault, kept tiny and pruned. **Backup model:** the `pkm-vault` repo *is* the durable knowledge backup; `thoth` repo backs up
 code+config; secrets live only in `.env` (chmod 600) and a password manager. Full recovery (Appendix → Backup/recovery) simplifies to:
 clone `thoth`, clone `pkm-vault`, restore `.env`, `reindex --full-rebuild`, start the systemd unit.
+
+**Optional fast-restore snapshot (the index stays disposable).** `bin/hindsight-backup.sh` may, after a
+*successful* nightly reindex, take a **best-effort, config-gated** snapshot of the Hindsight bank — a **logical
+`pg_dump`** of the bank's Postgres database (not a data-dir copy) plus a copy of `reindex-manifest.json` —
+retaining ~3 generations and pruning older. It is **disabled by default** (`THOTH_HINDSIGHT_BACKUP=1` to
+enable) and no-ops cleanly when `pg_dump`/the `local_embedded` daemon socket is absent, so CI and a dev box stay
+green. It is strictly **subordinate to `--full-rebuild`**: the index remains disposable (above) — a missing
+snapshot is never an error, the snapshot only buys a faster cold start than a from-scratch re-embed. The exact
+pg connection/socket is VPS-time, so the dump command is fully overridable
+(`THOTH_HINDSIGHT_PG_DUMP`/`THOTH_HINDSIGHT_PG_DATABASE`/`THOTH_HINDSIGHT_PG_DSN`).
 
 ---
 
@@ -467,8 +500,14 @@ changes is the *cut-over*: instead of rewriting a persona file and re-pointing a
 ## 15. Open questions
 
 **Carried forward (still real, verify against installed software):**
-1. **Hindsight client surface** — `reference=` vs `SOURCE:` sentinel; real class/CLI subcommands; per-page
-   `forget`/upsert; embedding model + dimension. CLI/subprocess variant is the safe default. (§8; see Appendix → Reindex job, which preserves the UNVERIFIED-symbol warnings)
+1. **Hindsight client surface** — **mostly resolved** to the official CLI
+   (https://hindsight.vectorize.io/sdks/cli): binary `hindsight` (env-overridable; VPS still has
+   `hindsight-embed`), `-p` = profile, **bank id positional**, two-token `memory retain|recall <bank> …`,
+   recall via `-o json`, **tags carry provenance** (`SOURCE:` sentinel as fallback). Still to **verify against
+   the installed binary at VPS-time**: the exact binary/verb/flag spelling, the per-hit tag round-trip, a
+   per-page `forget` (none in the official surface — full rebuild is the authoritative reset), the bank-reset
+   subcommand, and the embedding model + dimension. (§8; see Appendix → Reindex job, which preserves the
+   remaining UNVERIFIED-symbol warnings)
 2. **Bases vs Dataview** — confirm the installed Obsidian ships Bases and the date syntax parses; else Dataview.
    Summaries do their own date math regardless. (see Appendix → Dashboards)
 3. **`obsidian://` path form** + **Slack custom-scheme** rendering — verify on the actual devices. (see Appendix → Retrieval & obsidian links)
@@ -1123,10 +1162,11 @@ the real note in their own Obsidian.
 5. Embed images inline with Obsidian wiki-embeds; the curated page describes AND
    embeds the asset. Never store base64. Never write a separate descriptive sidecar.
 6. Auto-tag and cross-link. Never ask the user to file or tag.
-7. Retain the page into Hindsight, attaching its vault path (reference=<path> if
-   supported, else a `SOURCE: <path>` sentinel line + path tag); probe with recall
-   that the page path comes back (auto_retain is off, so this is the only thing
-   indexing the page). Append to `log.md`; then commit+push.
+7. Retain the page into Hindsight, attaching its vault path as a `rel` **tag** (the
+   primary provenance channel, which survives LLM fact-extraction) with a
+   `SOURCE: <path>` sentinel line as fallback; probe with recall that the page path
+   comes back (auto_retain is off, so this is the only thing indexing the page). Append
+   to `log.md`; then commit+push.
 8. Confirm in 1–2 lines: what it is, where it landed, the tags applied.
 
 ## Retrieving content
@@ -1292,14 +1332,13 @@ the wiki's `sha256`-of-body convention. The hash for each curated page is tracke
 curated pages' `updated:` dates.
 
 > **⚠️ Illustrative pending API verification.** The class/method names below (`Hindsight(...)`, `hs.forget`,
-> `hs.forget_bank`, `hs.retain(reference=…)`) are **not attested** against the installed deployment — the only
-> confirmed local interfaces are the **`hindsight-embed` CLI** and the in-process `hindsight_*` calls (the pip
-> package is `hindsight-client`, but its Python class name, constructor, and `forget`/upsert-by-reference
-> semantics are unverified — see §15 open items). **Do not ship this verbatim.** Two paths: (A) the
-> **subprocess-over-CLI** version (below) drives only the attested `hindsight-embed -p hermes` surface and is
-> the safe concrete implementation; (B) if you verify the Python client's real symbols, the Python sketch is
-> the cleaner port. The body-hash idempotency, `SOURCE:`-sentinel path attachment, and prune-on-delete logic
-> are identical between them.
+> `hs.forget_bank`, `hs.retain(reference=…)`) are **not attested** against any installed Python client. **The
+> implemented path is the subprocess-over-CLI version (below)**, which drives the **official `hindsight` CLI**
+> (https://hindsight.vectorize.io/sdks/cli) — binary `hindsight` (env-overridable; the VPS still has
+> `hindsight-embed`), `-p <profile>`, **bank id positional**, two-token `memory retain|recall <bank> …`, recall
+> via `-o json`, **tags carry provenance**. **Do not ship this Python sketch verbatim.** The body-hash
+> idempotency, path attachment, and prune-on-delete logic are identical between the two; the real code is
+> `src/thoth/reindex_from_vault.py` + `src/thoth/hindsight.py`.
 
 ```python
 #!/usr/bin/env python3
@@ -1307,9 +1346,9 @@ curated pages' `updated:` dates.
 # Rebuilds / refreshes the Hindsight index from the canonical Obsidian vault.
 # Idempotent: unchanged pages (by body sha256) are skipped.
 #
-# WARNING: `Hindsight`, `.forget`, `.forget_bank`, and retain(reference=) are NOT verified
-# against the installed `hindsight-client`. Confirm the real symbols or use the
-# CLI/subprocess variant below, which only touches the attested `hindsight-embed` surface.
+# WARNING: `Hindsight`, `.forget`, `.forget_bank`, and retain(reference=) are NOT a real
+# Python client. The IMPLEMENTED path is the CLI/subprocess variant below (official
+# `hindsight` CLI: binary `hindsight`, bank positional, `memory <verb>`, recall -o json).
 
 import hashlib, json, os, re
 from pathlib import Path
@@ -1318,7 +1357,7 @@ from datetime import datetime, timezone
 
 VAULT     = Path(os.environ["PKM_VAULT"])           # /opt/pkm-vault
 MANIFEST  = Path.home() / ".thoth/hindsight/reindex-manifest.json"
-BANK      = "hermes"
+BANK      = "thoth"                                 # renamed off hermes; env THOTH_HINDSIGHT_BANK
 
 # Only curated, fact-bearing pages are indexed. raw/ is immutable source bytes;
 # navigational/meta files are structure, not facts; underscore dirs are excluded.
@@ -1377,35 +1416,46 @@ def main(full_rebuild: bool):
     print(f"reindex: {changed} updated, {skipped} unchanged, {len(seen)} live pages")
 ```
 
-**Concrete CLI/subprocess variant (attested surface — preferred until the Python client is verified).** Drives
-only `hindsight-embed -p hermes`, the one confirmed `local_embedded` interface. The exact
-`retain`/`forget`/`query` subcommand spelling must still be confirmed with `hindsight-embed -p hermes --help`,
-but the shape is:
+**Concrete CLI/subprocess variant (the IMPLEMENTED path — official `hindsight` CLI).** The binary is
+`hindsight` (env `THOTH_HINDSIGHT_BINARY`; VPS still has `hindsight-embed`), `-p <profile>` is the optional
+named profile (env `THOTH_HINDSIGHT_PROFILE`, **not** the bank), the **bank id is positional**, the verbs are
+two tokens under `memory`, and recall is parsed from `-o json`. The exact binary/verb/flag spelling and the
+per-hit tag round-trip are confirmed against the installed binary at VPS-time, but the shape is:
 
 ```python
 import subprocess
-BANK_ARGS = ["hindsight-embed", "-p", "hermes"]   # attested CLI; confirm subcommands via --help
+PREFIX = ["hindsight"]            # + ["-p", profile] when a profile is configured
+BANK   = "thoth"                  # positional bank id (env THOTH_HINDSIGHT_BANK)
 
 def hs_retain(rel: str, md: str, ptype: str):
-    # Path travels as the SOURCE: sentinel inside the fact text (no `reference` flag needed).
-    subprocess.run(BANK_ARGS + ["retain", "--text", f"SOURCE: {rel}\n\n{md}",
-                                "--tags", f"{ptype},{rel}"], check=True)
+    # TAGS are the primary provenance channel (LLM fact-extraction can split a page and
+    # strand the in-band SOURCE: sentinel); the sentinel is kept as a fallback.
+    subprocess.run(PREFIX + ["memory", "retain", BANK, f"SOURCE: {rel}\n\n{md}",
+                             "--tags", f"{ptype},{rel}"], check=True)   # wrap in tenacity retry
+
+def hs_recall(query: str):
+    # -o json: parse structured output, recover the path from each hit's `rel` tag.
+    out = subprocess.run(PREFIX + ["memory", "recall", BANK, query, "-o", "json"],
+                         check=True, capture_output=True, text=True).stdout
+    return out   # parse_recall(out): tag-first, SOURCE: fallback
 
 def hs_forget(rel: str):
-    # If the CLI cannot forget-by-path, rely on a --full-rebuild wipe instead (see below).
-    subprocess.run(BANK_ARGS + ["forget", "--match", rel], check=False)
+    # No per-path forget in the official surface; best-effort, no retry — the
+    # authoritative reset is a --full-rebuild wipe (see below).
+    subprocess.run(PREFIX + ["memory", "forget", BANK, rel], check=False)
 ```
 
-If the CLI exposes no per-page `forget`, fall back to: incremental runs *add* (duplicate facts deduped or
+The official surface has no per-page `forget`, so: incremental runs *add* (duplicate facts deduped or
 tolerated), and **`--full-rebuild` is the authoritative reset** — wipe the bank
-(`hindsight-embed -p hermes db reset` / equivalent, confirm name) and re-retain every live page. Because the
-vault is canonical, a periodic full rebuild always converges the index regardless of upsert support.
+(`hindsight … db reset <bank>` / equivalent, confirm name) and re-retain every live page. Because the vault is
+canonical, a periodic full rebuild always converges the index regardless of upsert support. The checked
+`retain`/`recall` calls are wrapped in a bounded `tenacity` retry (transient-only; fail-fast on bad args/auth).
 
 Properties: **idempotent** (no changes ⇒ zero LLM/embedding work); **self-healing on index loss** (run
 `--full-rebuild` to wipe and deterministically re-derive from the vault); **deletion-aware** (stale facts
 pruned where per-page forget exists, otherwise cleared by full rebuild); **scoped to curated knowledge**
-(`raw/` and underscore/structure files excluded); **client-agnostic** (path carried in-band via the `SOURCE:`
-sentinel).
+(`raw/` and underscore/structure files excluded); **client-agnostic** (path carried as a `rel` **tag** —
+surviving LLM fact-extraction — with the in-band `SOURCE:` sentinel as a fallback).
 
 **Three triggers.** (1) **Per-ingest, incremental (primary)** — the ingest retains exactly the pages it
 touched and probes they landed; no separate job for the common case. (2) **Nightly catch-up (safety net)** —
@@ -1415,22 +1465,22 @@ appliance never saw); pin an explicit Gemini model (`gemini-2.5-flash`). (3) **F
 on-recovery** — `PKM_VAULT=/opt/pkm-vault python3 reindex_from_vault.py --full-rebuild`.
 
 **Retain example — page references, not chatter.** For the curated page
-`entities/program-motion-controller.md`, Hindsight retains (illustrative, every fact carrying the same path —
-as a `reference` if supported, else via the `SOURCE:` sentinel + `tags`):
+`entities/program-motion-controller.md`, Hindsight retains (illustrative, every fact recoverable to the same
+path — primarily via its `rel` **tag**, with the `SOURCE:` sentinel as fallback):
 
 ```text
 path = "entities/program-motion-controller.md"
-  (attached as reference=<path> if the client supports it; otherwise each fact text
-   begins with a sentinel line "SOURCE: entities/program-motion-controller.md", and
-   the path is also added to tags)
+  (added to tags as the primary provenance channel — `rel:<path>` — so it survives the
+   LLM fact-extraction that may split the page into atomic facts; each fact text also
+   begins with a fallback sentinel line "SOURCE: entities/program-motion-controller.md")
  ├─ world fact: "PMC = Program Motion Controller, central coordinator of the motor-control stack"
  ├─ world fact: "PMC drives the DCM (Drive Control Module) hardware interface"
  ├─ world fact: "PMC consumes CS Demands from the control system"
  └─ (entity-graph edges: PMC—DCM, PMC—IOC network architecture)
 ```
 
-A recall returns the **page path** (echoed `reference` or parsed `SOURCE:` line), which the chat layer renders
-as a clickable `obsidian://` deep link plus the vault-relative path.
+A recall returns the **page path** (recovered from each hit's `rel` tag, with the `SOURCE:` line as fallback),
+which the chat layer renders as a clickable `obsidian://` deep link plus the vault-relative path.
 
 **Cost / tuning notes (Gemini free-tier sizing).** Both extraction (`gemini-2.5-flash`) and embeddings
 (`text-embedding-004`, 3,072-dim) run on the **Gemini free tier** — ~60,000 `text-embedding-004`
@@ -1545,7 +1595,7 @@ backup**, Hindsight is disposable, and app config has its own separate push-only
 | Asset | Backup mechanism | Recoverable from | RPO |
 |---|---|---|---|
 | Knowledge (vault markdown + `raw/assets/` binaries) | `pkm-vault` git history on GitHub + every cloned device | `git clone`; any commit = a point-in-time snapshot | ≤ minutes |
-| Hindsight semantic index (local Postgres, `bank_id=hermes`) | **Not backed up — rebuilt** | the reindex job | n/a (regenerated) |
+| Hindsight semantic index (local Postgres, `bank_id=thoth`) | **Rebuilt** (disposable); OPTIONAL gated `pg_dump` + manifest snapshot for faster cold start (`bin/hindsight-backup.sh`, ~3 generations) | the reindex job (`--full-rebuild`); or restore the latest snapshot | n/a (regenerated) |
 | App code + config (`thoth` repo) | `thoth` repo, config-backup cron | `git clone` of `thoth` | 6h |
 | Transient state (`~/.thoth/state.db`) | **Not backed up** (disposable) | start fresh — only dedupe history + mid-flight captures lost, both cheap | n/a |
 | Secrets (`~/.thoth/.env`) | **Never** in any repo — password manager only | manual re-entry | n/a |

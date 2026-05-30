@@ -13,8 +13,11 @@ PATH=/opt/thoth/.venv/bin:/usr/local/bin:/usr/bin:/bin
 
 # 06:30 — nightly Hindsight catch-up reindex for out-of-band Obsidian edits (runs after
 # the vault has been pulled, before the 07:00 summary). Incremental: unchanged pages are
-# skipped, so this is near-zero on quiet days.
-30 6 * * *   thoth reindex >> /var/log/thoth-reindex.log 2>&1
+# skipped, so this is near-zero on quiet days. On SUCCESS, chains an OPTIONAL best-effort
+# fast-restore snapshot of the Hindsight bank (logical pg_dump + manifest copy); the
+# snapshot is config-gated (THOTH_HINDSIGHT_BACKUP=1) and no-ops cleanly when disabled or
+# when pg_dump/the daemon socket is absent — the index stays disposable (SPEC section 10).
+30 6 * * *   thoth reindex >> /var/log/thoth-reindex.log 2>&1 && /opt/thoth/bin/hindsight-backup.sh >> /var/log/thoth-reindex.log 2>&1
 
 # 07:00 daily — the daily PKM digest to the Slack summary channel (SLACK_SUMMARY_CHANNEL).
 0 7 * * *    thoth summary daily >> /var/log/thoth-summary.log 2>&1

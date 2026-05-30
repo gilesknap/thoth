@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv",
     "python-frontmatter",
     "pyyaml",
+    "tenacity",
     "tzdata",
 ]
 dynamic = ["version"]
