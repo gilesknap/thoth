@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# thoth/bin/vault-commit — commit + rebase + push after an ingest batch.
+#
+# Carried forward verbatim from the SPEC (Appendix -> Git wrappers & .gitignore).
+# Commit FIRST so the working tree is clean, THEN rebase onto any Obsidian pushes
+# that landed during the batch. Committing before the rebase means no autostash is
+# needed, so a conflicting Obsidian push surfaces as a clean rebase conflict (fail
+# loudly) instead of a half-applied mid-stash-pop state. The agent never
+# force-pushes. Auth is gh's credential helper over HTTPS (never SSH, never a
+# PAT-in-URL);
+# GIT_CONFIG_GLOBAL=/dev/null neutralises any global insteadOf ssh-rewrite.
+#
+# Reconciliation for tests/CI ONLY: THOTH_PUSH_REMOTE defaults to the verbatim SPEC
+# push URL, and THOTH_GIT_REMOTE / THOTH_GIT_BRANCH default to "origin" / "main", so
+# production behaviour is byte-equivalent to the SPEC while a test can redirect both
+# the rebase and the push at a LOCAL bare repo in tmp_path. The credential-helper
+# line is a documented no-op for a local-path remote. Default GitHub owner: gilesknap.
+set -euo pipefail
+VAULT="${PKM_VAULT:-/opt/pkm-vault}"
+MSG="${1:-ingest $(date -u +%Y-%m-%dT%H:%MZ)}"
+REMOTE="${THOTH_GIT_REMOTE:-origin}"
+BRANCH="${THOTH_GIT_BRANCH:-main}"
+PUSH_REMOTE="${THOTH_PUSH_REMOTE:-https://github.com/gilesknap/pkm-vault.git}"
+cd "$VAULT"
+git add -A
+git diff --cached --quiet && { echo "nothing to commit"; exit 0; }
+git commit -m "agent: $MSG"
+if ! GIT_CONFIG_GLOBAL=/dev/null git -c credential.helper='!gh auth git-credential' \
+        pull --rebase "$REMOTE" "$BRANCH"; then
+    echo "VAULT CONFLICT during rebase — resolve in Obsidian; not pushing." >&2
+    GIT_CONFIG_GLOBAL=/dev/null git rebase --abort || true
+    exit 1   # wrapper surfaces the conflicting path over Slack; never clobber
+fi
+GIT_CONFIG_GLOBAL=/dev/null git -c credential.helper='!gh auth git-credential' \
+    push "$PUSH_REMOTE" "$BRANCH"
