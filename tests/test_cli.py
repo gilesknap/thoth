@@ -213,6 +213,56 @@ def test_run_reindex_runs_with_flag(
     assert _FakeReindexer.instances[0].runs == [full]
 
 
+class _CrashingReindexer:
+    """A Reindexer whose run() raises, to exercise the cron errors-to-Slack path."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def run(self, *, full_rebuild: bool = False) -> Any:
+        """Always raise (a reindex crash)."""
+        raise RuntimeError("reindex exploded")
+
+
+class _RecordingAlerter:
+    """Records alert_exception calls (the errors-to-Slack seam, issue #15)."""
+
+    def __init__(self) -> None:
+        self.exceptions: list[tuple[str, BaseException]] = []
+
+    def alert_exception(self, where: str, exc: BaseException) -> bool:
+        """Record the alert and report success."""
+        self.exceptions.append((where, exc))
+        return True
+
+
+def test_run_reindex_crash_alerts_then_reraises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A reindex crash posts an errors-to-Slack alert and re-raises (issue #15).
+
+    Acceptance: a cron-entrypoint exception produces a visible Slack notification; the
+    original error still propagates so the cron log records the non-zero exit.
+    """
+    import thoth.alerts as alerts_mod
+    import thoth.reindex_from_vault as reindex_mod
+
+    monkeypatch.setattr(reindex_mod, "Reindexer", _CrashingReindexer)
+    recorder = _RecordingAlerter()
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: recorder)
+    config = load_config(
+        {"PKM_VAULT": str(tmp_path), "THOTH_HOME": str(tmp_path / "home")}
+    )
+    namespace = __main__.build_parser().parse_args(["reindex"])
+
+    with pytest.raises(RuntimeError, match="reindex exploded"):
+        __main__.run_reindex(namespace, config)
+    assert len(recorder.exceptions) == 1
+    where, exc = recorder.exceptions[0]
+    assert where == "cron: reindex"
+    assert isinstance(exc, RuntimeError)
+
+
 # --- run_summary (real SummaryEngine over a seeded vault, fake poster) -------------
 
 
@@ -268,6 +318,8 @@ def vault_config(tmp_path: Path) -> Config:
         {
             "PKM_VAULT": str(root),
             "SLACK_SUMMARY_CHANNEL": "D_SUMMARY",
+            # Keep the liveness-marker state.db (read by the heartbeat) under tmp_path.
+            "THOTH_HOME": str(tmp_path / "home"),
         }
     )
 
@@ -309,7 +361,13 @@ def test_run_summary_skip_when_empty_does_not_post(tmp_path: Path) -> None:
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / "index.md").write_text("# Home\n", encoding="utf-8")
     (root / "log.md").write_text("# Vault Log\n", encoding="utf-8")
-    config = load_config({"PKM_VAULT": str(root), "SLACK_SUMMARY_CHANNEL": "D_SUMMARY"})
+    config = load_config(
+        {
+            "PKM_VAULT": str(root),
+            "SLACK_SUMMARY_CHANNEL": "D_SUMMARY",
+            "THOTH_HOME": str(tmp_path / "home"),
+        }
+    )
 
     poster = _FakePoster()
     namespace = __main__.build_parser().parse_args(
@@ -334,12 +392,75 @@ def test_run_summary_requires_summary_channel(tmp_path: Path) -> None:
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / "index.md").write_text("# Home\n", encoding="utf-8")
     (root / "log.md").write_text("# Vault Log\n", encoding="utf-8")
-    config = load_config({"PKM_VAULT": str(root)})  # no summary channel
+    config = load_config(
+        {"PKM_VAULT": str(root), "THOTH_HOME": str(tmp_path / "home")}
+    )  # no summary channel
 
     poster = _FakePoster()
     namespace = __main__.build_parser().parse_args(["summary", "daily"])
     with pytest.raises(ConfigError, match="SLACK_SUMMARY_CHANNEL"):
         __main__.run_summary(namespace, config, poster_factory=lambda cfg: poster)
+
+
+def test_run_summary_daily_includes_liveness_heartbeat(
+    vault_config: Config,
+) -> None:
+    """The daily digest posted by the cron entrypoint carries the liveness heartbeat.
+
+    Acceptance (issue #15): the daily summary reports last-success timestamps for
+    capture/reindex/push -- here a push marker is seeded in the same state.db the
+    entrypoint reads, and the posted digest names it.
+    """
+    from thoth.state import MARKER_PUSH, MarkerStore
+
+    markers = MarkerStore(vault_config.state_db_path, clock=lambda: 1_700_000_000.0)
+    markers.record(MARKER_PUSH)
+
+    poster = _FakePoster()
+    namespace = __main__.build_parser().parse_args(["summary", "daily"])
+    __main__.run_summary(namespace, vault_config, poster_factory=lambda cfg: poster)
+
+    assert len(poster.posts) == 1
+    _, text = poster.posts[0]
+    assert "still alive -- last " in text
+    # The seeded push marker shows a concrete time; absent stages read "never".
+    assert "push 20" in text
+    assert "ingest never" in text
+
+
+def test_run_summary_crash_alerts_then_reraises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A summary crash posts an errors-to-Slack alert and re-raises (issue #15)."""
+    import thoth.alerts as alerts_mod
+    import thoth.summary as summary_mod
+
+    class _CrashingEngine:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def daily_digest(self) -> Any:
+            raise RuntimeError("summary exploded")
+
+    monkeypatch.setattr(summary_mod, "SummaryEngine", _CrashingEngine)
+    recorder = _RecordingAlerter()
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: recorder)
+    root = tmp_path / "pkm-vault"
+    root.mkdir()
+    config = load_config(
+        {
+            "PKM_VAULT": str(root),
+            "SLACK_SUMMARY_CHANNEL": "D_SUMMARY",
+            "THOTH_HOME": str(tmp_path / "home"),
+        }
+    )
+    namespace = __main__.build_parser().parse_args(["summary", "daily"])
+
+    with pytest.raises(RuntimeError, match="summary exploded"):
+        __main__.run_summary(
+            namespace, config, poster_factory=lambda cfg: _FakePoster()
+        )
+    assert recorder.exceptions[0][0] == "cron: summary"
 
 
 # --- run_lint (real LintEngine over a seeded tmp vault) ----------------------------

@@ -26,10 +26,12 @@ parses or writes page content (strict separation from :mod:`thoth.vault`).
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from thoth.config import Config
@@ -82,6 +84,26 @@ class GitResult:
     stdout: str
     stderr: str
     committed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Divergence:
+    """How far the local vault branch is ahead of its push remote (issue #15).
+
+    Computed deterministically from git (never an LLM) so the unpushed-divergence alert
+    (:meth:`thoth.alerts.Alerter.alert_unpushed_divergence`) can report "N commits
+    unpushed since T" when a rebase conflict refuses the push.
+
+    Attributes:
+        commits_ahead: Number of local commits not present on the remote tracking ref
+            (``git rev-list --count <remote>/<branch>..HEAD``). ``-1`` when it could not
+            be determined (e.g. no remote tracking ref / not a git tree).
+        since: Author time of the *oldest* unpushed commit (the first that diverged from
+            the remote), or ``None`` when unknown / nothing is ahead.
+    """
+
+    commits_ahead: int
+    since: datetime | None
 
 
 def _resolve_bin_dir(module_path: Path) -> Path:
@@ -221,6 +243,70 @@ class GitSync:
             )
         return result
 
+    def divergence(self, *, timeout: float = 30.0) -> Divergence:
+        """Count local vault commits ahead of the rebase tracking ref.
+
+        Measured against the ``THOTH_GIT_REMOTE`` / ``THOTH_GIT_BRANCH`` tracking ref
+        the wrappers rebase onto (defaults ``origin`` / ``main``) -- not
+        ``THOTH_PUSH_REMOTE``, which may differ. Only called from the conflict path,
+        where ``vault-pull``'s ``pull --rebase`` has just refreshed that ref, so the
+        count is accurate at alert time.
+
+        Runs read-only ``git`` directly (not a sync script):
+        ``rev-list --count <remote>/<branch>..HEAD`` for the
+        ahead-count and the author time of the oldest commit in that range for
+        ``since``. Any failure (no remote tracking ref, not a git tree, git error) is
+        swallowed and reported as :class:`Divergence` ``(commits_ahead=-1, since=None)``
+        so this can be called from inside a conflict handler without raising anew.
+
+        Args:
+            timeout: Seconds to allow each git probe.
+
+        Returns:
+            The :class:`Divergence` describing the unpushed local commits.
+        """
+        remote = self._child_env.get("THOTH_GIT_REMOTE", "origin")
+        branch = self._child_env.get("THOTH_GIT_BRANCH", "main")
+        rng = f"{remote}/{branch}..HEAD"
+        count = self._git_text(("rev-list", "--count", rng), timeout=timeout)
+        if count is None:
+            return Divergence(commits_ahead=-1, since=None)
+        try:
+            ahead = int(count.strip())
+        except ValueError:
+            return Divergence(commits_ahead=-1, since=None)
+        if ahead <= 0:
+            return Divergence(commits_ahead=ahead if ahead == 0 else -1, since=None)
+        # Author time (Unix seconds) of the OLDEST unpushed commit (the first that
+        # diverged) -> the "unpushed since T" timestamp.
+        oldest = self._git_text(
+            ("log", "--reverse", "--format=%at", rng), timeout=timeout
+        )
+        since = _parse_first_epoch(oldest)
+        return Divergence(commits_ahead=ahead, since=since)
+
+    def _git_text(self, args: Sequence[str], *, timeout: float) -> str | None:
+        """Run ``git <args>`` read-only in the vault, returning stdout or ``None``.
+
+        Returns ``None`` on any non-zero exit or spawn failure so callers in an
+        exception handler never see a new exception.
+        """
+        try:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=str(self._vault_root),
+                env=self._child_env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode != 0:
+            return None
+        return completed.stdout
+
     def _run(self, script: str, args: Sequence[str], *, timeout: float) -> GitResult:
         """Run one sync script and classify its result.
 
@@ -266,3 +352,20 @@ class GitSync:
             f"{script} failed (exit {result.returncode}). "
             f"stdout: {result.stdout.strip()!r} stderr: {result.stderr.strip()!r}"
         )
+
+
+def _parse_first_epoch(text: str | None) -> datetime | None:
+    """Parse the first line of git ``%at`` output (Unix seconds) into an aware datetime.
+
+    Returns ``None`` for empty / unparseable input so a divergence probe never raises.
+    """
+    if not text:
+        return None
+    first = text.strip().splitlines()[0].strip() if text.strip() else ""
+    if not first:
+        return None
+    try:
+        epoch = int(first)
+    except ValueError:
+        return None
+    return datetime.fromtimestamp(epoch, tz=_dt.UTC)

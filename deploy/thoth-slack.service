@@ -21,6 +21,22 @@ Description=thoth PKM Slack daemon (capture/retrieve, Socket Mode)
 After=network-online.target
 Wants=network-online.target
 
+# Bound restart flapping (SPEC section 10 supervision, issue #15). With
+# Restart=on-failure (below), systemd restarts the daemon on a crash; StartLimitBurst
+# restarts within StartLimitIntervalSec then enters a permanent `failed` state instead of
+# looping forever. The StartLimit* directives live in [Unit] (systemd moved them here from
+# [Service]). How flapping SURFACES to the human: this box has no on-host monitoring, so
+# the backstops are (1) the errors-to-Slack handler — the daemon posts each unhandled
+# exception to SLACK_ALERT_CHANNEL before it exits (thoth.slack_app.serve_with_alerting),
+# so a crash loop yields a burst of Slack alerts; and (2) the daily heartbeat — once the
+# unit is `failed` it stops recording the `capture`/`push` liveness markers, so the next
+# 07:00 digest's "still alive — last ingest/push at T" line goes stale, making the silence
+# itself diagnostic. For a hard backstop, add an OnFailure= unit that pings a dead-man's
+# switch (e.g. healthchecks.io) on entering `failed`; left out of the shipped unit to keep
+# zero external deps, but documented here.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 # Dedicated unprivileged account for least privilege (SPEC section 12). Create the `pkm`
@@ -36,11 +52,15 @@ Environment=THOTH_HOME=/home/pkm/.thoth
 
 # Secrets (ANTHROPIC_API_KEY, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ALLOWED_USERS,
 # SLACK_SUMMARY_CHANNEL, EXA_API_KEY, FIRECRAWL_API_KEY, GEMINI_API_KEY, ...) come from the
-# chmod-600 .env — never from this tracked unit file.
+# chmod-600 .env — never from this tracked unit file. Optional: set SLACK_ALERT_CHANNEL in
+# .env to route errors-to-Slack alerts to a dedicated channel; unset, alerts fall back to the
+# first SLACK_ALLOWED_USERS DM.
 EnvironmentFile=/home/pkm/.thoth/.env
 
 WorkingDirectory=/opt/thoth
 ExecStart=/opt/thoth/.venv/bin/thoth slack
+# Restart on a crash, paced by RestartSec, and bounded by the [Unit] StartLimit* so a
+# wedged daemon enters `failed` (and stops the heartbeat) rather than spinning (issue #15).
 Restart=on-failure
 RestartSec=5
 

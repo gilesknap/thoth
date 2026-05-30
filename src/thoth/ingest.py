@@ -71,6 +71,7 @@ from thoth.llm import (
     parse_json_block,
     validate_file_plan,
 )
+from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
 from thoth.vault import (
     TYPE_ENUMERATION,
     VALID_TYPES,
@@ -275,6 +276,7 @@ class Ingestor:
         git: GitSync,
         *,
         schema_md: str | None = None,
+        markers: MarkerStore | None = None,
     ) -> None:
         """Store the injected collaborators.
 
@@ -287,6 +289,11 @@ class Ingestor:
             git: The deterministic git sync wrapper.
             schema_md: Optional SCHEMA.md text passed as ``system_extra`` to the curate
                 call so the model files to the live schema.
+            markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired, a
+                successful ingest records a ``capture`` marker and a successful push
+                records a ``push`` marker so the daily heartbeat can report them
+                (issue #15). ``None`` (the default) disables marker recording, so
+                existing callers and tests are unaffected.
         """
         self._config = config
         self._vault = vault
@@ -295,6 +302,21 @@ class Ingestor:
         self._hindsight = hindsight
         self._git = git
         self._schema_md = schema_md
+        self._markers = markers
+
+    def _record_marker(self, name: str) -> None:
+        """Record a liveness marker (best-effort; never lets bookkeeping break ingest).
+
+        A failure to write the disposable marker DB must not fail or abort a capture
+        that otherwise succeeded, so any error is swallowed (the heartbeat's job is to
+        make *silence* diagnostic, not to gate the pipeline).
+        """
+        if self._markers is None:
+            return
+        try:
+            self._markers.record(name)
+        except Exception:  # noqa: BLE001 - marker bookkeeping is best-effort
+            pass
 
     # ---- the full pipeline -------------------------------------------------------
 
@@ -347,7 +369,14 @@ class Ingestor:
         self._retain_pages(page_paths, classification)
 
         report = self._build_report(capture, classification, raw, page_paths)
-        return self._commit(report, classification)
+        committed = self._commit(report, classification)
+        # Record the capture liveness marker only on a clean (non-conflict) ingest, so a
+        # wedged sync leaves BOTH the capture and push markers stale -- silence is then
+        # the heartbeat's diagnostic (issue #15). The push marker is recorded inside
+        # _commit on an actual push.
+        if not committed.conflict:
+            self._record_marker(MARKER_CAPTURE)
+        return committed
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
 
@@ -1109,6 +1138,10 @@ class Ingestor:
             )
         except GitSyncError as exc:
             raise IngestError(f"commit failed: {exc}") from exc
+        if result.committed:
+            # A non-empty vault-commit ran the rebase + push to completion, so the
+            # remote is now current -- record the push liveness marker (issue #15).
+            self._record_marker(MARKER_PUSH)
         return _replace_report(
             report,
             committed=result.committed,
@@ -1171,6 +1204,8 @@ class Ingestor:
         except GitSyncError:
             # The hold is durable locally even if the push failed; do not raise.
             return report
+        if result.committed:
+            self._record_marker(MARKER_PUSH)
         return _replace_report(
             report,
             committed=result.committed,

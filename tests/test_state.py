@@ -13,7 +13,13 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-from thoth.state import EventStore
+from thoth.state import (
+    MARKER_CAPTURE,
+    MARKER_PUSH,
+    MARKER_REINDEX,
+    EventStore,
+    MarkerStore,
+)
 
 TTL = 3600.0
 
@@ -145,3 +151,117 @@ def test_uses_wal_journal_mode(tmp_path: Path) -> None:
         assert str(mode).lower() == "wal"
     finally:
         store.close()
+
+
+# --- MarkerStore (liveness heartbeat markers, issue #15) --------------------------
+
+
+def _markers(tmp_path: Path, clock: Callable[[], float] | None = None) -> MarkerStore:
+    """Build a MarkerStore at a tmp state.db with an optional injected clock."""
+    return MarkerStore(tmp_path / "state.db", clock=clock)
+
+
+def test_marker_record_and_get_round_trip(tmp_path: Path) -> None:
+    """A recorded marker is read back at its clock time; an unknown marker is None."""
+    store = _markers(tmp_path, clock=lambda: 1234.5)
+    try:
+        assert store.get(MARKER_PUSH) is None
+        store.record(MARKER_PUSH)
+        assert store.get(MARKER_PUSH) == 1234.5
+        # An empty name is a no-op and reads back None.
+        store.record("")
+        assert store.get("") is None
+    finally:
+        store.close()
+
+
+def test_marker_record_explicit_ts_overrides_clock(tmp_path: Path) -> None:
+    """An explicit ts is stored verbatim (used to stamp a past success time)."""
+    store = _markers(tmp_path, clock=lambda: 0.0)
+    try:
+        store.record(MARKER_REINDEX, ts=999.0)
+        assert store.get(MARKER_REINDEX) == 999.0
+    finally:
+        store.close()
+
+
+def test_marker_record_upserts_latest_time(tmp_path: Path) -> None:
+    """Recording the same marker twice keeps the latest success time (one row)."""
+    now = {"t": 100.0}
+    store = _markers(tmp_path, clock=lambda: now["t"])
+    try:
+        store.record(MARKER_CAPTURE)
+        now["t"] = 200.0
+        store.record(MARKER_CAPTURE)
+        assert store.get(MARKER_CAPTURE) == 200.0
+        assert store.all() == {MARKER_CAPTURE: 200.0}
+    finally:
+        store.close()
+
+
+def test_marker_all_returns_every_recorded(tmp_path: Path) -> None:
+    """all() returns each recorded marker; absent markers simply do not appear."""
+    store = _markers(tmp_path, clock=lambda: 50.0)
+    try:
+        store.record(MARKER_CAPTURE)
+        store.record(MARKER_PUSH, ts=60.0)
+        assert store.all() == {MARKER_CAPTURE: 50.0, MARKER_PUSH: 60.0}
+        assert MARKER_REINDEX not in store.all()
+    finally:
+        store.close()
+
+
+def test_markers_survive_a_simulated_restart(tmp_path: Path) -> None:
+    """A marker recorded before a restart is read by a fresh store over the same DB.
+
+    This is the heartbeat durability acceptance: the daily summary runs as a *separate*
+    process from the daemon that recorded the push marker, so a fresh
+    :class:`MarkerStore` over the same ``state.db`` must read the prior time.
+    """
+    db = tmp_path / "state.db"
+    first = MarkerStore(db, clock=lambda: 1000.0)
+    try:
+        first.record(MARKER_PUSH)
+    finally:
+        first.close()
+    second = MarkerStore(db, clock=lambda: 2000.0)
+    try:
+        assert second.get(MARKER_PUSH) == 1000.0
+    finally:
+        second.close()
+
+
+def test_markers_share_db_with_event_store(tmp_path: Path) -> None:
+    """The markers table coexists with processed_events in one state.db file."""
+    db = tmp_path / "state.db"
+    events = EventStore(db, clock=lambda: 0.0)
+    markers = MarkerStore(db, clock=lambda: 0.0)
+    try:
+        events.seen("E1", ttl_seconds=TTL)
+        markers.record(MARKER_REINDEX)
+        # Both tables are present and independently readable.
+        assert events.seen("E1", ttl_seconds=TTL) is True
+        assert markers.get(MARKER_REINDEX) == 0.0
+    finally:
+        events.close()
+        markers.close()
+
+
+def test_marker_store_creates_parent_directory(tmp_path: Path) -> None:
+    """A markers DB under a not-yet-existing THOTH_HOME is created (parents made)."""
+    db = tmp_path / "nested" / "home" / "state.db"
+    store = MarkerStore(db, clock=lambda: 0.0)
+    try:
+        store.record(MARKER_CAPTURE)
+        assert db.is_file()
+    finally:
+        store.close()
+
+
+def test_marker_store_context_manager(tmp_path: Path) -> None:
+    """The markers store works as a context manager and persists across instances."""
+    db = tmp_path / "state.db"
+    with MarkerStore(db, clock=lambda: 7.0) as store:
+        store.record(MARKER_PUSH)
+    with MarkerStore(db, clock=lambda: 8.0) as store:
+        assert store.get(MARKER_PUSH) == 7.0

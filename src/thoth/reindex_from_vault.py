@@ -58,6 +58,7 @@ from thoth.hindsight import (
     default_runner,
 )
 from thoth.hindsight import base_args as default_base_args
+from thoth.state import MARKER_REINDEX, MarkerStore
 from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 __all__ = [
@@ -207,6 +208,7 @@ class Reindexer:
         base_args: Sequence[str] | None = None,
         bank: str | None = None,
         timeout: float = 120.0,
+        markers: MarkerStore | None = None,
     ) -> None:
         """Build a :class:`Reindexer`.
 
@@ -226,6 +228,10 @@ class Reindexer:
                 supplied ``hindsight`` instance's ``bank``.
             timeout: Seconds to allow the reset CLI call before
                 :class:`subprocess.TimeoutExpired`.
+            markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired, a
+                successful :meth:`run` records a ``reindex`` marker so the daily
+                heartbeat can report "last reindex at T" (issue #15). ``None`` (the
+                default) disables recording, so existing callers/tests are unaffected.
         """
         self._config = config
         self._vault = vault
@@ -236,6 +242,7 @@ class Reindexer:
         )
         self._bank: str = bank if bank is not None else hindsight.bank
         self._timeout = timeout
+        self._markers = markers
 
     @property
     def manifest_file(self) -> Path:
@@ -358,6 +365,7 @@ class Reindexer:
 
         pruned = self._prune_deleted(manifest, seen)
         self.write_manifest(manifest)
+        self._record_marker()
         return ReindexResult(
             changed=changed,
             skipped=skipped,
@@ -365,6 +373,20 @@ class Reindexer:
             live_pages=len(seen),
             full_rebuild=full_rebuild,
         )
+
+    def _record_marker(self) -> None:
+        """Record the ``reindex`` liveness marker (best-effort, issue #15).
+
+        A reindex that completed the walk + manifest write is a live signal; a failure
+        to write the disposable marker DB must not turn a successful reindex into an
+        error, so any error is swallowed.
+        """
+        if self._markers is None:
+            return
+        try:
+            self._markers.record(MARKER_REINDEX)
+        except Exception:  # noqa: BLE001 - marker bookkeeping is best-effort
+            pass
 
     # ---- internals ---------------------------------------------------------------
 

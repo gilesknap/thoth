@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
 
 from thoth.config import Config, load_config
-from thoth.git_sync import VaultConflictError
+from thoth.git_sync import Divergence, GitSync, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
 from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
@@ -33,6 +34,7 @@ from thoth.slack_app import (
     render_citation,
     render_ingest_report,
     render_query_result,
+    serve_with_alerting,
 )
 from thoth.state import EventStore
 
@@ -225,6 +227,39 @@ class FakeSlackClient:
         return self._payload
 
 
+class FakeAlerter:
+    """Records every alert routed through it (the errors-to-Slack seam, issue #15)."""
+
+    def __init__(self) -> None:
+        self.exceptions: list[tuple[str, BaseException]] = []
+        self.divergences: list[tuple[int, datetime | None, str]] = []
+
+    def alert_exception(self, where: str, exc: BaseException) -> bool:
+        """Record an unhandled-exception alert."""
+        self.exceptions.append((where, exc))
+        return True
+
+    def alert_unpushed_divergence(
+        self, *, commits_ahead: int, since: datetime | None, detail: str = ""
+    ) -> bool:
+        """Record an unpushed-divergence alert."""
+        self.divergences.append((commits_ahead, since, detail))
+        return True
+
+
+class FakeGitSync:
+    """A duck-typed GitSync whose ``divergence`` returns a canned value (no git)."""
+
+    def __init__(self, divergence: Divergence) -> None:
+        self._divergence = divergence
+        self.calls = 0
+
+    def divergence(self, *, timeout: float = 30.0) -> Divergence:
+        """Record the call and return the canned divergence."""
+        self.calls += 1
+        return self._divergence
+
+
 def _handlers(
     config: Config,
     *,
@@ -234,12 +269,15 @@ def _handlers(
     allowed: frozenset[str] = frozenset({ALLOWED}),
     dedupe: EventDedupe | None = None,
     pending_saves: PendingSaves | None = None,
+    alerter: FakeAlerter | None = None,
+    git: FakeGitSync | None = None,
 ) -> tuple[Handlers, FakeIngestor, FakeQueryEngine]:
     """Construct Handlers wired to fakes, returning the fakes for assertions.
 
     When ``research`` is given the free-text path takes the blended ask; otherwise it is
     ``None`` and the free-text path stays vault-only (the existing behaviour). The
-    research fake is reachable on the returned ``Handlers.research`` for assertions.
+    research fake is reachable on the returned ``Handlers.research`` for assertions. An
+    ``alerter`` + ``git`` enable the unpushed-divergence alert (issue #15).
     """
     ing = ingestor if ingestor is not None else FakeIngestor()
     qry = query_engine if query_engine is not None else FakeQueryEngine()
@@ -255,6 +293,10 @@ def _handlers(
         kwargs["dedupe"] = dedupe
     if pending_saves is not None:
         kwargs["pending_saves"] = pending_saves
+    if alerter is not None:
+        kwargs["alerter"] = alerter
+    if git is not None:
+        kwargs["git"] = cast(GitSync, git)
     return Handlers(**kwargs), ing, qry
 
 
@@ -678,6 +720,135 @@ def test_handle_message_vault_conflict_named_path(config: Config) -> None:
     assert len(say.messages) == 1
     assert "conflict" in say.messages[0].lower()
     assert "entities/foo.md" in say.messages[0]
+
+
+# --------------------------------------------------------------------------------------
+# unpushed-divergence alert (issue #15)
+# --------------------------------------------------------------------------------------
+
+
+def test_conflict_report_routes_an_unpushed_divergence_alert(config: Config) -> None:
+    """A report.conflict ingest also routes an unpushed-divergence alert to Slack.
+
+    Acceptance (issue #15): forcing a push conflict produces a visible alert with the
+    commits-ahead count + oldest-unpushed time read from git.
+    """
+    report = _report(
+        committed=False, conflict=True, message="VAULT CONFLICT: paths concepts/x.md"
+    )
+    ing = FakeIngestor(report=report)
+    alerter = FakeAlerter()
+    since = datetime(2026, 5, 29, 8, 0, tzinfo=UTC)
+    git = FakeGitSync(Divergence(commits_ahead=2, since=since))
+    handlers, _, _ = _handlers(config, ingestor=ing, alerter=alerter, git=git)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "capture: a note", "ts": "9.9"}, say
+    )
+    # The in-thread reply is still the fail-loud conflict line...
+    assert any("conflict" in m.lower() for m in say.messages)
+    # ...and exactly one divergence alert was routed with the git-derived count + time.
+    assert git.calls == 1
+    assert alerter.divergences == [(2, since, "VAULT CONFLICT: paths concepts/x.md")]
+
+
+def test_raised_vault_conflict_routes_a_divergence_alert(config: Config) -> None:
+    """A raised VaultConflictError (not just a report) also routes the alert."""
+    ing = FakeIngestor(error=VaultConflictError("VAULT CONFLICT on entities/foo.md"))
+    alerter = FakeAlerter()
+    git = FakeGitSync(Divergence(commits_ahead=1, since=None))
+    handlers, _, _ = _handlers(config, ingestor=ing, alerter=alerter, git=git)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "https://example.com", "ts": "8.8"}, say
+    )
+    assert len(alerter.divergences) == 1
+    ahead, _since, detail = alerter.divergences[0]
+    assert ahead == 1
+    assert "entities/foo.md" in detail
+
+
+def test_no_divergence_alert_on_a_clean_ingest(config: Config) -> None:
+    """A normal (non-conflict) ingest routes no divergence alert."""
+    alerter = FakeAlerter()
+    git = FakeGitSync(Divergence(commits_ahead=0, since=None))
+    handlers, _, _ = _handlers(config, alerter=alerter, git=git)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "capture: hello", "ts": "1.1"}, say
+    )
+    assert alerter.divergences == []
+    assert git.calls == 0
+
+
+def test_conflict_without_alerter_is_a_clean_noop(config: Config) -> None:
+    """With no alerter wired a conflict still replies but routes no alert (no crash)."""
+    report = _report(committed=False, conflict=True, message="VAULT CONFLICT")
+    handlers, _, _ = _handlers(config, ingestor=FakeIngestor(report=report))
+    say = Recorder()
+    # Must not raise even though no alerter/git is configured.
+    handlers.handle_message({"user": ALLOWED, "text": "capture: x", "ts": "2.2"}, say)
+    assert any("conflict" in m.lower() for m in say.messages)
+
+
+# --------------------------------------------------------------------------------------
+# serve_with_alerting: daemon top-level supervision (issue #15)
+# --------------------------------------------------------------------------------------
+
+
+def test_serve_with_alerting_reports_and_reraises_on_crash() -> None:
+    """An unhandled daemon exception is alerted, then re-raised (systemd sees exit).
+
+    Acceptance (issue #15): killing the daemon / exhausting a quota surfaces a Slack
+    alert within a bounded window -- here the top-level loop posts before the process
+    exits non-zero.
+    """
+    alerter = FakeAlerter()
+    boom = RuntimeError("socket died")
+
+    def serve() -> None:
+        raise boom
+
+    with pytest.raises(RuntimeError, match="socket died"):
+        serve_with_alerting(serve, alerter)
+    assert alerter.exceptions == [("slack daemon", boom)]
+
+
+def test_serve_with_alerting_clean_return_posts_nothing() -> None:
+    """A daemon loop that returns normally routes no alert."""
+    alerter = FakeAlerter()
+    ran = {"n": 0}
+
+    def serve() -> None:
+        ran["n"] += 1
+
+    serve_with_alerting(serve, alerter)
+    assert ran["n"] == 1
+    assert alerter.exceptions == []
+
+
+def test_serve_with_alerting_clean_stop_is_silent() -> None:
+    """A clean stop (SystemExit/KeyboardInterrupt) re-raises without alerting.
+
+    A routine ``systemctl stop`` / deploy restart unwinds the blocking loop via
+    SystemExit or KeyboardInterrupt; that is not a crash and must not post an alert
+    (which would cause alert fatigue), but it still propagates so the process exits.
+    """
+    alerter = FakeAlerter()
+
+    def serve_sysexit() -> None:
+        raise SystemExit(0)
+
+    with pytest.raises(SystemExit):
+        serve_with_alerting(serve_sysexit, alerter)
+
+    def serve_ctrl_c() -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        serve_with_alerting(serve_ctrl_c, alerter)
+
+    assert alerter.exceptions == []
 
 
 # --------------------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from thoth.config import Config, load_config
+from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MARKER_REINDEX, MarkerStore
 from thoth.summary import (
     ACTION_OPEN_STATUSES,
     DUE_SOON_DAYS,
@@ -858,3 +859,106 @@ def test_dataclasses_are_frozen() -> None:
 def test_summary_error_is_exception() -> None:
     """SummaryError is a plain Exception subclass."""
     assert issubclass(SummaryError, Exception)
+
+
+# --------------------------------------------------------------------------------------
+# liveness heartbeat (issue #15)
+# --------------------------------------------------------------------------------------
+
+
+def _epoch(when: datetime) -> float:
+    """Return the POSIX timestamp for a tz-aware datetime."""
+    return when.timestamp()
+
+
+def test_heartbeat_line_none_without_markers(vault: Vault, config: Config) -> None:
+    """With no MarkerStore wired the heartbeat is omitted (returns None)."""
+    engine = SummaryEngine(config, vault, now=NOW)
+    assert engine.heartbeat_line() is None
+    # ...and the daily digest carries no liveness line.
+    assert "still alive" not in engine.daily_digest().text
+
+
+def test_heartbeat_reports_seeded_marker_times(
+    vault: Vault, config: Config, tmp_path: Path
+) -> None:
+    """The daily heartbeat reports last-success times for capture/reindex/push.
+
+    Acceptance (issue #15): with seeded markers and an injected ``now`` the digest's
+    "still alive -- last ingest/reindex/push at T" line shows each recorded time.
+    """
+    markers = MarkerStore(tmp_path / "state.db")
+    # Seed three distinct success times (London-local, formatted by the heartbeat).
+    markers.record(MARKER_CAPTURE, ts=_epoch(datetime(2026, 6, 1, 6, 5, tzinfo=LONDON)))
+    markers.record(
+        MARKER_REINDEX, ts=_epoch(datetime(2026, 6, 1, 6, 30, tzinfo=LONDON))
+    )
+    markers.record(MARKER_PUSH, ts=_epoch(datetime(2026, 6, 1, 6, 50, tzinfo=LONDON)))
+
+    engine = SummaryEngine(config, vault, now=NOW, markers=markers)
+    line = engine.heartbeat_line()
+    assert line is not None
+    assert line.startswith("still alive -- last ")
+    assert "ingest 2026-06-01 06:05" in line
+    assert "reindex 2026-06-01 06:30" in line
+    assert "push 2026-06-01 06:50" in line
+
+    # The line also appears verbatim in the rendered daily digest.
+    assert "still alive -- last " in engine.daily_digest().text
+
+
+def test_heartbeat_reports_never_for_missing_marker(
+    vault: Vault, config: Config, tmp_path: Path
+) -> None:
+    """A stage that never succeeded reads ``never`` so silence is visible."""
+    markers = MarkerStore(tmp_path / "state.db")
+    markers.record(MARKER_PUSH, ts=_epoch(datetime(2026, 6, 1, 6, 50, tzinfo=LONDON)))
+    engine = SummaryEngine(config, vault, now=NOW, markers=markers)
+    line = engine.heartbeat_line()
+    assert line is not None
+    assert "ingest never" in line
+    assert "reindex never" in line
+    assert "push 2026-06-01 06:50" in line
+
+
+def test_heartbeat_present_even_on_empty_day(
+    vault: Vault, config: Config, tmp_path: Path
+) -> None:
+    """An otherwise-empty digest still carries the heartbeat (silence is diagnostic).
+
+    The digest stays ``is_empty`` (the heartbeat is plumbing, not news) but the rendered
+    text contains both the "Nothing to report" line and the liveness footer.
+    """
+    markers = MarkerStore(tmp_path / "state.db")
+    markers.record(MARKER_PUSH, ts=_epoch(datetime(2026, 5, 20, 6, 0, tzinfo=LONDON)))
+    engine = SummaryEngine(config, vault, now=NOW, markers=markers)
+    daily = engine.daily_digest()
+    assert daily.is_empty is True
+    assert "Nothing to report" in daily.text
+    # The stale push time (11 days ago) is visible despite the quiet day.
+    assert "still alive -- last " in daily.text
+    assert "push 2026-05-20 06:00" in daily.text
+
+
+def test_heartbeat_does_not_make_empty_digest_nonempty(
+    vault: Vault, config: Config, tmp_path: Path
+) -> None:
+    """The heartbeat never flips is_empty (skip-when-empty still skips a quiet day)."""
+    markers = MarkerStore(tmp_path / "state.db")
+    markers.record(MARKER_CAPTURE)
+    engine = SummaryEngine(config, vault, now=NOW, markers=markers)
+    assert engine.daily_digest().is_empty is True
+
+
+def test_heartbeat_survives_marker_read_failure(vault: Vault, config: Config) -> None:
+    """A MarkerStore that raises on read does not break the digest (best-effort)."""
+
+    class _BoomMarkers:
+        def all(self) -> dict[str, float]:
+            raise RuntimeError("db gone")
+
+    engine = SummaryEngine(config, vault, now=NOW, markers=_BoomMarkers())  # type: ignore[arg-type]
+    line = engine.heartbeat_line()
+    # Every marker reads "never" rather than crashing the daily digest.
+    assert line is not None
+    assert line.count("never") == 3

@@ -23,7 +23,8 @@ functions so a test can substitute a fake for the entrypoint that would otherwis
 from __future__ import annotations
 
 from argparse import ArgumentParser, Namespace
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from . import __version__
@@ -153,22 +154,28 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
 
     Constructs a :class:`~thoth.reindex_from_vault.Reindexer` over a real
     :class:`~thoth.vault.Vault` and :class:`~thoth.hindsight.Hindsight` and runs one
-    pass, forwarding ``--full-rebuild``. The resulting counts are printed for the cron
-    log.
+    pass, forwarding ``--full-rebuild``. A successful run records the ``reindex``
+    liveness marker for the daily heartbeat, and a crash is reported to the
+    errors-to-Slack target before being re-raised so the cron log still shows the
+    failure (issue #15). The resulting counts are printed for the cron log.
     """
     from .hindsight import Hindsight
     from .reindex_from_vault import Reindexer
+    from .state import MarkerStore
     from .vault import Vault
 
-    vault = Vault(config)
-    hindsight = Hindsight(config)
-    reindexer = Reindexer(config, vault, hindsight)
-    result = reindexer.run(full_rebuild=bool(namespace.full_rebuild))
-    print(
-        f"reindex: changed={result.changed} skipped={result.skipped} "
-        f"pruned={result.pruned} live={result.live_pages} "
-        f"full_rebuild={result.full_rebuild}"
-    )
+    with _cron_alerting("cron: reindex", config):
+        vault = Vault(config)
+        hindsight = Hindsight(config)
+        reindexer = Reindexer(
+            config, vault, hindsight, markers=MarkerStore(config.state_db_path)
+        )
+        result = reindexer.run(full_rebuild=bool(namespace.full_rebuild))
+        print(
+            f"reindex: changed={result.changed} skipped={result.skipped} "
+            f"pruned={result.pruned} live={result.live_pages} "
+            f"full_rebuild={result.full_rebuild}"
+        )
 
 
 def run_summary(
@@ -193,26 +200,31 @@ def run_summary(
         poster_factory: Builds a :class:`~thoth.summary.SlackPoster` from ``config``;
             defaults to a real Slack ``WebClient`` builder.
     """
+    from .state import MarkerStore
     from .summary import SummaryEngine
 
-    vault = _make_vault(config)
-    engine = SummaryEngine(config, vault)
-    digest = (
-        engine.weekly_digest() if namespace.kind == "weekly" else engine.daily_digest()
-    )
-    channel = config.require_slack_summary_channel()
-    factory = poster_factory if poster_factory is not None else _make_web_client
-    poster = factory(config)
-    posted = engine.post(
-        poster,
-        digest,
-        channel=channel,
-        skip_when_empty=bool(namespace.skip_when_empty),
-    )
-    print(
-        f"summary {namespace.kind}: "
-        f"{'posted' if posted else 'skipped (empty)'} to {channel}"
-    )
+    with _cron_alerting("cron: summary", config):
+        vault = _make_vault(config)
+        # The daily digest reads the liveness markers for its heartbeat (issue #15).
+        engine = SummaryEngine(config, vault, markers=MarkerStore(config.state_db_path))
+        digest = (
+            engine.weekly_digest()
+            if namespace.kind == "weekly"
+            else engine.daily_digest()
+        )
+        channel = config.require_slack_summary_channel()
+        factory = poster_factory if poster_factory is not None else _make_web_client
+        poster = factory(config)
+        posted = engine.post(
+            poster,
+            digest,
+            channel=channel,
+            skip_when_empty=bool(namespace.skip_when_empty),
+        )
+        print(
+            f"summary {namespace.kind}: "
+            f"{'posted' if posted else 'skipped (empty)'} to {channel}"
+        )
 
 
 def run_lint(namespace: Namespace, config: Config) -> None:
@@ -240,6 +252,39 @@ def run_lint(namespace: Namespace, config: Config) -> None:
     if not namespace.no_log:
         engine.record(report)
     print(f"lint: {report.total} issue(s) found")
+
+
+# ---- unattended observability (issue #15) ------------------------------------------
+
+
+@contextmanager
+def _cron_alerting(where: str, config: Config) -> Iterator[None]:
+    """Report a cron-entrypoint crash to the errors-to-Slack target, then re-raise.
+
+    A one-shot cron job that dies only writes to its ``/var/log`` file, which nobody
+    watches on an isolated VPS (issue #15). This wraps the job body so an unhandled
+    exception is posted to the alert target (:class:`thoth.alerts.Alerter`, best-effort)
+    before being re-raised -- so the cron log still records the non-zero exit, and a
+    human gets a Slack message. Building the alerter is itself guarded: a failure to
+    even construct it must not mask the original error.
+
+    Args:
+        where: A short label for the failing entrypoint (e.g. ``"cron: reindex"``).
+        config: The frozen runtime config (resolves the alert target + bot token).
+
+    Yields:
+        ``None``; the caller runs its job body inside the ``with`` block.
+    """
+    try:
+        yield
+    except BaseException as exc:  # noqa: BLE001 - report ANY crash, then re-raise
+        try:
+            from .alerts import make_alerter
+
+            make_alerter(config).alert_exception(where, exc)
+        except Exception:  # noqa: BLE001 - alerting must never mask the real error
+            pass
+        raise
 
 
 # ---- collaborator construction (heavy imports kept inside) -------------------------
@@ -275,6 +320,7 @@ def _build_graph(config: Config) -> _Graph:
     from .llm import LLM
     from .query import QueryEngine
     from .research import ResearchEngine
+    from .state import MarkerStore
     from .vault import Vault
 
     vault = Vault(config)
@@ -282,7 +328,10 @@ def _build_graph(config: Config) -> _Graph:
     extractor = Extractor(config)
     hindsight = Hindsight(config)
     git = GitSync(config)
-    ingestor = Ingestor(config, vault, llm, extractor, hindsight, git)
+    # Liveness markers so a successful capture/push records its time for the daily
+    # heartbeat (issue #15); the same disposable state.db backs the dedupe table.
+    markers = MarkerStore(config.state_db_path)
+    ingestor = Ingestor(config, vault, llm, extractor, hindsight, git, markers=markers)
     query_engine = QueryEngine(config, vault, hindsight, llm)
     research = ResearchEngine(config, vault, query_engine, extractor, llm)
     return _Graph(ingestor=ingestor, query_engine=query_engine, research=research)

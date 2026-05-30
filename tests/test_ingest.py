@@ -18,7 +18,7 @@ import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -36,6 +36,7 @@ from thoth.ingest import (
     RawCaptureResult,
 )
 from thoth.llm import LLM
+from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
 from thoth.vault import TYPE_ENUMERATION, VALID_TYPES, Vault
 
 MAIN = "main"
@@ -428,6 +429,7 @@ def _build_ingestor(
     client: Any,
     extractor: FakeExtractor,
     hindsight: FakeHindsight,
+    markers: MarkerStore | None = None,
 ) -> Ingestor:
     """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes."""
     llm = LLM(harness.config, client=client)
@@ -438,6 +440,7 @@ def _build_ingestor(
         extractor,  # type: ignore[arg-type]  # structural fake
         hindsight,  # type: ignore[arg-type]  # structural fake
         harness.git,
+        markers=markers,
     )
 
 
@@ -1193,6 +1196,99 @@ def test_commit_conflict_surfaces_in_report(harness: IngestHarness) -> None:
     assert "concepts/transformer-models.md" in report.message
     # The page is already filed locally (fail-loud, content not lost; no --force).
     assert harness.vault.page_exists("concepts/transformer-models.md")
+
+
+# --------------------------------------------------------------------------- #
+# liveness markers recorded on a successful capture/push (issue #15).
+# --------------------------------------------------------------------------- #
+
+
+def test_successful_ingest_records_capture_and_push_markers(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A clean URL ingest records both the capture and push liveness markers."""
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body text")
+    markers = MarkerStore(tmp_path / "marker.db", clock=lambda: 4242.0)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+        markers=markers,
+    )
+
+    report = ingestor.ingest(Capture(url="https://e.com/a"))
+
+    assert report.committed is True
+    assert markers.get(MARKER_CAPTURE) == 4242.0
+    assert markers.get(MARKER_PUSH) == 4242.0
+
+
+def test_conflict_records_no_push_marker(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A push conflict files content locally but records NO push marker (no push ran).
+
+    The capture marker is also absent: on a conflict the ingest path does not advance
+    either marker, so the stale "last push" time is exactly the diagnostic the daily
+    heartbeat surfaces.
+    """
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="local body")
+    markers = MarkerStore(tmp_path / "marker.db", clock=lambda: 1.0)
+    conflicting_git = _ConflictingGitSync(harness.config, env=harness.env)
+    llm = LLM(
+        harness.config, client=_ScriptedClient(_classify_json(), _file_plan_json())
+    )
+    ingestor = Ingestor(
+        harness.config,
+        harness.vault,
+        llm,
+        FakeExtractor(doc=doc),  # type: ignore[arg-type]
+        FakeHindsight(),  # type: ignore[arg-type]
+        conflicting_git,
+        markers=markers,
+    )
+
+    report = ingestor.ingest(Capture(url="https://e.com/a"))
+
+    assert report.conflict is True
+    assert markers.get(MARKER_PUSH) is None
+    assert markers.get(MARKER_CAPTURE) is None
+
+
+def test_marker_write_failure_does_not_break_ingest(
+    harness: IngestHarness,
+) -> None:
+    """A MarkerStore that raises on record does not fail an otherwise-good ingest."""
+
+    class _BoomMarkers:
+        def record(self, name: str, *, ts: float | None = None) -> None:
+            raise RuntimeError("marker db gone")
+
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+        markers=cast(MarkerStore, _BoomMarkers()),
+    )
+    # The capture still succeeds despite the marker write blowing up (best-effort).
+    report = ingestor.ingest(Capture(url="https://e.com/a"))
+    assert report.committed is True
+
+
+def test_no_markers_store_is_a_clean_noop(harness: IngestHarness) -> None:
+    """The default (no MarkerStore) records nothing and ingests normally."""
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+    report = ingestor.ingest(Capture(url="https://e.com/a"))
+    assert report.committed is True
 
 
 def test_retain_failure_surfaces_after_durable_write(harness: IngestHarness) -> None:
