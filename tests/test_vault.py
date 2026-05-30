@@ -524,6 +524,30 @@ def test_save_asset_missing_source(vault: Vault, tmp_path: Path) -> None:
         vault.save_asset(tmp_path / "nope.bin", "ok-name.png")
 
 
+# --- remove_page -------------------------------------------------------------------
+
+
+def test_remove_page_deletes_existing_and_is_idempotent(vault: Vault) -> None:
+    """remove_page deletes a confined page (True) then no-ops if absent (False)."""
+    rel = vault.write_page(
+        "inbox",
+        "hold-abc123",
+        {"title": "Held", "type": "inbox", "source": "slack", "tags": ["inbox"]},
+        "held body",
+    )
+    assert vault.page_exists(rel)
+    assert vault.remove_page(rel) is True
+    assert not vault.page_exists(rel)
+    # A second removal of the now-missing page is a harmless no-op.
+    assert vault.remove_page(rel) is False
+
+
+def test_remove_page_rejects_path_escape(vault: Vault) -> None:
+    """remove_page confines the path: an escaping path is rejected, never deleted."""
+    with pytest.raises(PathConfinementError):
+        vault.remove_page("../escape.md")
+
+
 # --- asset idempotency helpers -----------------------------------------------------
 
 

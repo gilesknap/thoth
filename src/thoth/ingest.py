@@ -6,12 +6,21 @@ appliance LLM touch disk or the network directly: every byte that reaches the va
 goes through :class:`thoth.vault.Vault` (so paths are confined and the folder/type/slug
 contract is enforced) and every web fetch goes through the SSRF-guarded
 :class:`thoth.extract.Extractor`. git is a deterministic collaborator, never an LLM
-tool. The nine passes are:
+tool. The passes are:
 
 0. **orient** -- :meth:`thoth.git_sync.GitSync.pull` so writes land on current state.
+0b. **persist inbound (durable hold)** -- :meth:`Ingestor.persist_inbound` extracts the
+   inbound text/bytes (the only network step) and writes a durable ``inbox/`` holding
+   page keyed on the body SHA-256 *before any LLM call*, so an Anthropic outage can
+   never lose a capture (per issue #14 -- capture durability decoupled from the
+   classify call; SPEC section 6 "pass 0b").
+   If the later classify/curate cannot run because the LLM is unavailable, the held raw
+   is committed and a *deferred-curation* report is returned for a later reindex/sweep;
+   on success the now-superseded holding page is removed.
 1. **classify** -- one cheap Claude call -> a :class:`Classification` whose ``type`` and
    ``slug`` are validated through :class:`~thoth.vault.Vault` before use.
-2. **capture raw** -- :class:`~thoth.extract.Extractor` by kind; the body SHA-256 is
+2. **capture raw** -- :class:`~thoth.extract.Extractor` by kind (reusing the text
+   already extracted in pass 0b, so the source is fetched once); the body SHA-256 is
    compared to any existing raw page's stored digest *before* writing, so an identical
    re-ingest is skipped and a changed body is flagged as drift (the idempotency rule).
    A binary (image/PDF) capture applies the same rule over the *bytes* SHA-256: an
@@ -43,6 +52,7 @@ collection is always safe (the heavy clients live behind the injected seams).
 
 from __future__ import annotations
 
+import hashlib
 import tempfile
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -70,6 +80,7 @@ __all__ = [
     "IngestError",
     "IngestReport",
     "Ingestor",
+    "LLMUnavailableError",
     "RawCaptureResult",
 ]
 
@@ -97,6 +108,19 @@ _INDEX_SECTION_BY_TYPE: dict[str, str] = {
 
 class IngestError(Exception):
     """Raised when an ingest pass fails validation, extraction, or a vault write."""
+
+
+class LLMUnavailableError(IngestError):
+    """Raised when an LLM *client call* (classify/curate) itself fails.
+
+    A subclass of :class:`IngestError` so existing ``except IngestError`` / test
+    ``pytest.raises(IngestError)`` sites are unaffected, but distinguishable so
+    :meth:`Ingestor.ingest` can treat a transport/availability failure as a *deferred
+    curation* (the inbound item is already persisted durably to ``inbox/`` before any
+    LLM call, per issue #14) rather than a lost capture. A *validation* failure (an
+    out-of-vocabulary type, a bad slug, an unparseable or schema-invalid plan) stays a
+    plain :class:`IngestError` and still aborts -- the validation gate is preserved.
+    """
 
 
 class CaptureKind(StrEnum):
@@ -174,18 +198,49 @@ class RawCaptureResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _Prefetched:
+    """Extracted text captured before classify, reused by :meth:`Ingestor.capture_raw`.
+
+    Attributes:
+        body: The extracted raw body text (URL markdown / plain text / transcript).
+        source_url: The provenance URL, if any (a web-extracted article carries one).
+    """
+
+    body: str
+    source_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Holding:
+    """The durable pre-LLM holding write plus any prefetched extraction to reuse.
+
+    Attributes:
+        result: The :class:`RawCaptureResult` for the ``inbox/`` holding page.
+        prefetched: The extracted text reused by :meth:`Ingestor.capture_raw` so the
+            source is not fetched twice, or ``None`` for a binary capture (no text yet).
+    """
+
+    result: RawCaptureResult
+    prefetched: _Prefetched | None
+
+
+@dataclass(frozen=True, slots=True)
 class IngestReport:
     """Structured outcome the Slack/MCP layer renders (SPEC step 8).
 
     Attributes:
         page_paths: Curated page paths written/updated.
-        raw_paths: Raw source page paths written (may be empty).
+        raw_paths: Raw source page paths written (may be empty). On a deferred capture
+            this is the durable ``inbox/`` holding page.
         asset_paths: Binary asset paths saved (may be empty).
         obsidian_links: ``obsidian://`` deep links built by the harness via
             :meth:`thoth.vault.Vault.obsidian_uri` (one per curated page; unfabricable).
         wikilinks: ``[[slug]]`` handles for the curated pages.
         committed: Whether :meth:`thoth.git_sync.GitSync.commit` made a commit.
         conflict: Whether a :class:`~thoth.git_sync.VaultConflictError` was surfaced.
+        deferred: ``True`` when the inbound item was persisted durably but the
+            classify/curate pass was skipped because the LLM was unavailable; a later
+            reindex/sweep re-curates the held raw item (SPEC section 6).
         message: A short human-readable status line.
     """
 
@@ -196,6 +251,7 @@ class IngestReport:
     wikilinks: list[str]
     committed: bool
     conflict: bool = False
+    deferred: bool = False
     message: str = ""
 
 
@@ -236,14 +292,22 @@ class Ingestor:
     # ---- the full pipeline -------------------------------------------------------
 
     def ingest(self, capture: Capture) -> IngestReport:
-        """Run all nine passes and return a structured report.
+        """Run the bounded passes and return a structured report.
 
-        Pulls the vault, classifies, captures the raw source (idempotent on body
-        SHA-256), fetches candidate pages, curates and writes the file-plan, updates
-        navigation, retains into the index, and commits. A rebase conflict at commit is
-        surfaced as ``IngestReport.conflict`` (the content is already filed locally; no
-        ``--force``). No curated/navigation write happens until validation passes, so a
-        rejected plan leaves nothing beyond a possible raw page on disk.
+        Capture durability is **decoupled from the classify LLM call** (per issue #14):
+        the inbound item is extracted and persisted to a durable ``inbox/`` holding page
+        (idempotent on the body SHA-256) *before* any LLM call, so an Anthropic outage
+        can never lose a capture. Classify/curate then run as a best-effort second
+        stage; if the LLM is unavailable (a :class:`LLMUnavailableError`) the held raw
+        is already safe, the holding page is committed, and a *deferred-curation* report
+        is returned for a later reindex/sweep to re-curate. On success the (now
+        superseded) holding page is removed and the curated/raw/navigation/retain passes
+        run as before.
+
+        The **validation gate is preserved**: a rejected plan (bad type/slug, an
+        unparseable or schema-invalid output) still raises :class:`IngestError`; only a
+        *transport* failure defers. A rebase conflict at commit is surfaced as
+        :attr:`IngestReport.conflict` (content filed locally; no ``--force``).
 
         Args:
             capture: The inbound item to ingest.
@@ -252,14 +316,24 @@ class Ingestor:
             The :class:`IngestReport` describing every file touched.
 
         Raises:
-            IngestError: on a classification, extraction, validation, or non-conflict
-                git failure.
+            IngestError: on an extraction, validation, or non-conflict git failure (an
+                LLM-availability failure is reported as deferred, not raised).
         """
         self._orient()
-        classification = self.classify(capture)
-        raw = self.capture_raw(capture, classification)
-        candidates = self.fetch_candidates(classification)
-        plan = self.curate(capture, classification, raw, candidates)
+        holding = self.persist_inbound(capture)
+        try:
+            classification = self.classify(capture)
+            raw = self.capture_raw(
+                capture, classification, prefetched=holding.prefetched
+            )
+            candidates = self.fetch_candidates(classification)
+            plan = self.curate(capture, classification, raw, candidates)
+        except LLMUnavailableError as exc:
+            return self._commit_deferred(holding, exc)
+
+        # Curation succeeded: the holding page is superseded by the curated/raw pages.
+        if holding.result.raw_path is not None:
+            self._vault.remove_page(holding.result.raw_path)
 
         page_paths = self._written_page_paths(plan)
         self._apply_navigation(plan, page_paths)
@@ -267,6 +341,51 @@ class Ingestor:
 
         report = self._build_report(capture, classification, raw, page_paths)
         return self._commit(report, classification)
+
+    # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
+
+    def persist_inbound(self, capture: Capture) -> _Holding:
+        """Extract and persist the inbound item durably *before* any LLM call.
+
+        Writes a holding page under ``inbox/<sha12>.md`` whose body is the extracted
+        text (a URL article's markdown, plain text, or an audio transcript) -- or, for a
+        binary capture (image/PDF, no text yet), a short provenance stub naming the
+        source so a later sweep can re-fetch and curate it. The slug is derived from the
+        body SHA-256, so re-persisting identical content lands on the same path and is
+        idempotent (``skipped_unchanged``). This is the *capture-never-lost* guarantee:
+        the text is on disk and committable before classify/curate run.
+
+        The extraction itself (the only network step) happens here, so an
+        :class:`thoth.extract.ExtractError` still aborts the ingest loudly (nothing is
+        lost -- there was nothing to persist). The extracted text is returned on the
+        :class:`_Holding` so the later :meth:`capture_raw` reuses it without a second
+        fetch.
+
+        Args:
+            capture: The inbound item.
+
+        Returns:
+            A :class:`_Holding` carrying the holding :class:`RawCaptureResult` and the
+            prefetched extraction (if any) for reuse by :meth:`capture_raw`.
+
+        Raises:
+            IngestError: on an extraction failure or a vault write error.
+        """
+        kind = self._capture_kind(capture)
+        try:
+            prefetched = self._extract_text(capture, kind)
+        except ExtractError as exc:
+            raise IngestError(f"capture failed during extraction: {exc}") from exc
+        body = prefetched.body if prefetched is not None else None
+        if body is None:
+            # A binary with no extracted text yet: hold a provenance stub so the capture
+            # is durable and a later sweep can re-fetch + curate the source.
+            body = self._binary_stub_body(capture)
+        try:
+            result = self._write_inbox_holding(body, capture.source)
+        except VaultError as exc:
+            raise IngestError(f"capture failed during vault write: {exc}") from exc
+        return _Holding(result=result, prefetched=prefetched)
 
     # ---- pass 0: orient ----------------------------------------------------------
 
@@ -301,7 +420,9 @@ class Ingestor:
         try:
             response = self._llm.complete([Message(role="user", content=prompt)])
         except Exception as exc:  # noqa: BLE001 - any client failure aborts classify
-            raise IngestError(f"classify LLM call failed: {exc}") from exc
+            # A transport/availability failure -> deferrable (raw is already durable);
+            # validation failures below stay a plain IngestError (abort, gate kept).
+            raise LLMUnavailableError(f"classify LLM call failed: {exc}") from exc
         obj = self._parse_block(response, "classification")
 
         page_type = obj.get("type")
@@ -336,7 +457,13 @@ class Ingestor:
 
     # ---- pass 2: capture raw -----------------------------------------------------
 
-    def capture_raw(self, capture: Capture, cls: Classification) -> RawCaptureResult:
+    def capture_raw(
+        self,
+        capture: Capture,
+        cls: Classification,
+        *,
+        prefetched: _Prefetched | None = None,
+    ) -> RawCaptureResult:
         """Extract the immutable source and write it under ``raw/`` (idempotent).
 
         Dispatches on the capture kind: a URL is extracted to clean markdown, a PDF or
@@ -347,9 +474,17 @@ class Ingestor:
         writing: an identical body is skipped (``'skipped_unchanged'``) and a changed
         body is flagged and rewritten (``'updated_drift'``). Images never become base64.
 
+        When ``prefetched`` is supplied (the text extracted by :meth:`persist_inbound`
+        before classify), the text-bearing kinds reuse it instead of re-fetching, so a
+        URL/audio source is fetched/transcribed exactly once per ingest; binary kinds
+        ignore it (they save the binary fresh under the classified slug). Calling this
+        directly with no ``prefetched`` re-extracts, the standalone behaviour.
+
         Args:
             capture: The inbound item.
             cls: Its validated classification (supplies the raw slug).
+            prefetched: Text already extracted before classify, reused to avoid a second
+                fetch; ``None`` re-extracts.
 
         Returns:
             A :class:`RawCaptureResult` recording the path and disposition.
@@ -363,6 +498,10 @@ class Ingestor:
             if kind is CaptureKind.IMAGE:
                 return self._capture_image(capture, cls)
             if kind is CaptureKind.URL:
+                if prefetched is not None:
+                    return self._write_raw_doc(
+                        "articles", cls, prefetched.body, prefetched.source_url
+                    )
                 doc = self._extractor.web_extract(_require(capture.url, "url"))
                 return self._write_raw_doc(
                     "articles", cls, doc.markdown, doc.source_url
@@ -370,12 +509,17 @@ class Ingestor:
             if kind is CaptureKind.PDF:
                 return self._capture_pdf(capture, cls)
             if kind is CaptureKind.AUDIO:
+                if prefetched is not None:
+                    return self._write_raw_doc(
+                        "transcripts", cls, prefetched.body, None
+                    )
                 transcript = self._extractor.transcribe(_require(capture.path, "path"))
                 return self._write_raw_doc("transcripts", cls, transcript, None)
             # TEXT
-            return self._write_raw_doc(
-                "articles", cls, _require(capture.text, "text"), None
-            )
+            text = prefetched.body if prefetched is not None else None
+            if text is None:
+                text = _require(capture.text, "text")
+            return self._write_raw_doc("articles", cls, text, None)
         except ExtractError as exc:
             raise IngestError(f"capture failed during extraction: {exc}") from exc
         except VaultError as exc:
@@ -441,7 +585,8 @@ class Ingestor:
                 system_extra=self._schema_md,
             )
         except Exception as exc:  # noqa: BLE001 - any client failure aborts curate
-            raise IngestError(f"curate LLM call failed: {exc}") from exc
+            # Transport/availability failure -> deferrable (raw is already durable).
+            raise LLMUnavailableError(f"curate LLM call failed: {exc}") from exc
         plan = self._parse_block(response, "file plan")
         try:
             validate_file_plan(plan)
@@ -495,6 +640,83 @@ class Ingestor:
                     if len(hits) >= limit:
                         return hits
         return hits
+
+    # ---- internals: durable pre-LLM holding --------------------------------------
+
+    def _extract_text(self, capture: Capture, kind: CaptureKind) -> _Prefetched | None:
+        """Extract the text body for a text-bearing capture (no LLM), else ``None``.
+
+        Runs the single network/IO step per kind -- web-extract a URL, transcribe audio,
+        or take inline text verbatim -- and returns the body plus any provenance URL.
+        Binary kinds (image/PDF) have no text body yet, so ``None`` is returned and the
+        caller holds a provenance stub instead.
+
+        Raises:
+            ExtractError: on a web-extract / transcribe failure (raised to the caller).
+        """
+        if kind is CaptureKind.URL:
+            doc = self._extractor.web_extract(_require(capture.url, "url"))
+            return _Prefetched(body=doc.markdown, source_url=doc.source_url)
+        if kind is CaptureKind.AUDIO:
+            transcript = self._extractor.transcribe(_require(capture.path, "path"))
+            return _Prefetched(body=transcript, source_url=None)
+        if kind is CaptureKind.TEXT:
+            return _Prefetched(body=_require(capture.text, "text"), source_url=None)
+        return None
+
+    @staticmethod
+    def _binary_stub_body(capture: Capture) -> str:
+        """Build the holding-page body for a binary capture awaiting curation.
+
+        Records the source URL / filename so a later reindex/sweep can re-fetch and
+        curate the binary; carries no base64 (the bytes are fetched server-side when the
+        item is curated).
+        """
+        ref = capture.url or capture.filename or "(binary upload)"
+        return (
+            f"# Held capture\n\n"
+            f"Binary source: `{ref}`\n\n"
+            "_LLM unavailable at capture time; held for a later reindex/sweep to "
+            "fetch and curate._"
+        )
+
+    def _write_inbox_holding(self, body: str, source: str) -> RawCaptureResult:
+        """Write the durable ``inbox/<sha12>.md`` holding page (idempotent on body SHA).
+
+        The slug is the first 12 hex chars of the body SHA-256, so re-persisting an
+        identical body lands on the same path and is skipped (``skipped_unchanged``);
+        the page records ``type: inbox`` so a later sweep can find un-curated holds. The
+        ``source`` is the capture's own origin (``mcp``/``slack``/...), threaded through
+        so a deferred item is held under its true provenance for the re-curate sweep; it
+        is validated against :data:`~thoth.vault.VALID_SOURCES` by
+        :meth:`Vault.write_page`. The durable digest compare uses
+        :meth:`Vault.stored_body_sha256` (the same digest the writer stamps), matching
+        :meth:`_write_raw_doc`.
+
+        Args:
+            body: The extracted inbound text (or a binary provenance stub) to hold.
+            source: The capture's frontmatter ``source`` value.
+
+        Returns:
+            A :class:`RawCaptureResult` naming the held page and its disposition.
+        """
+        slug = f"hold-{hashlib.sha256(body.encode('utf-8')).hexdigest()[:12]}"
+        rel = f"inbox/{slug}.md"
+        new_sha = Vault.stored_body_sha256(body)
+        existing_sha = self._existing_raw_sha(rel)
+        if existing_sha is not None and existing_sha == new_sha:
+            return RawCaptureResult(raw_path=rel, disposition="skipped_unchanged")
+        disposition = "updated_drift" if existing_sha is not None else "created"
+        meta: dict[str, object] = {
+            "title": "Held capture",
+            "type": "inbox",
+            "source": source,
+            "tags": ["inbox"],
+            # Stamp the body digest so re-persist is idempotent (mirrors write_raw).
+            "sha256": new_sha,
+        }
+        self._vault.write_page("inbox", slug, meta, body)
+        return RawCaptureResult(raw_path=rel, disposition=disposition)
 
     # ---- internals: raw capture --------------------------------------------------
 
@@ -889,6 +1111,68 @@ class Ingestor:
             message=f"Filed {len(report.page_paths)} page(s).",
         )
 
+    def _commit_deferred(
+        self, holding: _Holding, exc: LLMUnavailableError
+    ) -> IngestReport:
+        """Commit the durable holding page; report deferred curation (SPEC section 6).
+
+        The inbound item is already on disk (``inbox/`` holding page); the LLM was
+        unavailable, so classify/curate are skipped. The holding page is logged and
+        committed (best-effort -- a conflict or git failure is surfaced on the report,
+        not raised, since the capture is already durable locally), and a ``deferred``
+        report is returned so the Slack/MCP reply can say "saved raw, curation deferred"
+        and a later reindex/sweep re-curates the held item.
+
+        Args:
+            holding: The durable pre-LLM holding write.
+            exc: The :class:`LLMUnavailableError` that triggered the deferral.
+
+        Returns:
+            A ``deferred`` :class:`IngestReport` naming the held raw page.
+        """
+        rel = holding.result.raw_path
+        raw_paths = [rel] if rel is not None else []
+        try:
+            self._vault.append_log("ingest", "deferred capture", raw_paths)
+        except VaultError:
+            # Navigation is best-effort here; the durable hold is what matters.
+            pass
+        report = IngestReport(
+            page_paths=[],
+            raw_paths=raw_paths,
+            asset_paths=list(holding.result.asset_paths),
+            obsidian_links=[],
+            wikilinks=[],
+            committed=False,
+            conflict=False,
+            deferred=True,
+            message=(
+                "Saved raw, curation deferred -- LLM unavailable. A later "
+                f"reindex/sweep will re-curate the held item. ({exc})"
+            ),
+        )
+        try:
+            result = self._git.commit("deferred capture")
+        except VaultConflictError as conflict:
+            return _replace_report(
+                report,
+                committed=False,
+                conflict=True,
+                message=(
+                    "Saved raw locally, curation deferred (LLM unavailable), but the "
+                    f"push was refused; resolve in Obsidian. ({conflict})"
+                ),
+            )
+        except GitSyncError:
+            # The hold is durable locally even if the push failed; do not raise.
+            return report
+        return _replace_report(
+            report,
+            committed=result.committed,
+            conflict=False,
+            message=report.message,
+        )
+
     # ---- pass 8: report ----------------------------------------------------------
 
     def _build_report(
@@ -1044,5 +1328,6 @@ def _replace_report(
         wikilinks=report.wikilinks,
         committed=committed,
         conflict=conflict,
+        deferred=report.deferred,
         message=message,
     )
