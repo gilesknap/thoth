@@ -13,11 +13,30 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 description = "agent PKM with semantic index, slack connector and MCP"
-dependencies = ["httpx", "python-dotenv", "python-frontmatter", "pyyaml"]
+dependencies = [
+    "httpx",
+    "python-dotenv",
+    "python-frontmatter",
+    "pyyaml",
+    "tzdata",
+]
 dynamic = ["version"]
 license.file = "LICENSE"
 readme = "README.md"
 requires-python = ">=3.11"
+
+# Runtime-only clients for the live appliance. These are deliberately NOT base
+# dependencies: they are absent in CI (which installs base + dev only) and are
+# imported lazily inside functions, so pytest collection stays import-safe. Install
+# them on the appliance with ``pip install thoth[runtime]``.
+[project.optional-dependencies]
+runtime = [
+    "anthropic",
+    "exa-py",
+    "firecrawl-py",
+    "mcp",
+    "slack-bolt",
+]
 
 [dependency-groups]
 dev = [

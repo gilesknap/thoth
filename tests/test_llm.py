@@ -17,11 +17,15 @@ from thoth.llm import (
     LLMError,
     Message,
     SchemaValidationError,
+    assistant_blocks_message,
     build_create_kwargs,
     build_system_blocks,
     extract_text,
     make_client,
     parse_json_block,
+    response_content_blocks,
+    tool_result_block,
+    user_blocks_message,
     validate_answer,
     validate_file_plan,
 )
@@ -218,6 +222,118 @@ def test_extract_text_empty_when_no_content() -> None:
     """A response with no content yields the empty string, not an error."""
     assert extract_text({}) == ""
     assert extract_text({"content": []}) == ""
+
+
+# --- native content-block helpers (tool-use transcript) ----------------------
+
+
+def test_response_content_blocks_preserves_tool_use_dict_shape() -> None:
+    """Every block (text + tool_use) is returned as a plain dict, in order."""
+    response = {
+        "content": [
+            {"type": "text", "text": "thinking"},
+            {"type": "tool_use", "id": "toolu_1", "name": "web_search", "input": {}},
+        ]
+    }
+    blocks = response_content_blocks(response)
+    assert blocks == response["content"]
+    # The tool_use id round-trips so a later tool_result can reference it.
+    assert blocks[1]["id"] == "toolu_1"
+
+
+def test_response_content_blocks_normalises_object_blocks_via_model_dump() -> None:
+    """SDK-style objects with model_dump() are reduced to JSON-able dicts."""
+
+    class _Block:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
+
+        def model_dump(self) -> dict[str, Any]:
+            return dict(self._payload)
+
+    class _Resp:
+        def __init__(self) -> None:
+            self.content = [
+                _Block({"type": "tool_use", "id": "toolu_x", "name": "n", "input": {}})
+            ]
+
+    blocks = response_content_blocks(_Resp())
+    assert blocks == [{"type": "tool_use", "id": "toolu_x", "name": "n", "input": {}}]
+
+
+def test_response_content_blocks_normalises_plain_attribute_objects() -> None:
+    """An object lacking model_dump() falls back to documented attributes by type."""
+
+    class _Block:
+        def __init__(self, **kw: Any) -> None:
+            for key, value in kw.items():
+                setattr(self, key, value)
+
+    class _Resp:
+        def __init__(self) -> None:
+            self.content = [
+                _Block(type="text", text="hi"),
+                _Block(
+                    type="tool_use", id="toolu_2", name="vault_read", input={"p": 1}
+                ),
+            ]
+
+    blocks = response_content_blocks(_Resp())
+    assert blocks[0] == {"type": "text", "text": "hi"}
+    assert blocks[1] == {
+        "type": "tool_use",
+        "id": "toolu_2",
+        "name": "vault_read",
+        "input": {"p": 1},
+    }
+
+
+def test_assistant_blocks_message_wraps_native_blocks() -> None:
+    """assistant_blocks_message echoes the response's blocks as an assistant turn."""
+    response = {"content": [{"type": "tool_use", "id": "t1", "name": "n", "input": {}}]}
+    msg = assistant_blocks_message(response)
+    assert msg.role == "assistant"
+    assert msg.content == response["content"]
+
+
+def test_tool_result_block_keys_to_tool_use_id_and_flags_error() -> None:
+    """tool_result_block builds the API block; is_error is set only when asked."""
+    ok = tool_result_block("toolu_1", "output text")
+    assert ok == {
+        "type": "tool_result",
+        "tool_use_id": "toolu_1",
+        "content": "output text",
+    }
+    assert "is_error" not in ok
+
+    err = tool_result_block("toolu_2", "boom", is_error=True)
+    assert err["tool_use_id"] == "toolu_2"
+    assert err["is_error"] is True
+
+
+def test_user_blocks_message_wraps_blocks_as_user_turn() -> None:
+    """user_blocks_message wraps tool_result blocks as a single user turn."""
+    blocks = [tool_result_block("t1", "r")]
+    msg = user_blocks_message(blocks)
+    assert msg.role == "user"
+    assert msg.content == blocks
+
+
+def test_build_create_kwargs_passes_structured_block_content_through() -> None:
+    """A Message carrying block-list content is forwarded to messages verbatim."""
+    blocks = [tool_result_block("t1", "r")]
+    msgs = [
+        Message(role="user", content="hello"),
+        Message(role="assistant", content=[{"type": "text", "text": "hi"}]),
+        Message(role="user", content=blocks),
+    ]
+    kwargs = build_create_kwargs(load_config({"PKM_VAULT": "/x"}), msgs)
+    assert kwargs["messages"][0] == {"role": "user", "content": "hello"}
+    assert kwargs["messages"][1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+    }
+    assert kwargs["messages"][2] == {"role": "user", "content": blocks}
 
 
 # --- parse_json_block --------------------------------------------------------

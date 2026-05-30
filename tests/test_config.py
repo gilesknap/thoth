@@ -45,6 +45,7 @@ def test_happy_path_minimal() -> None:
     assert cfg.anthropic_api_key is None
     assert cfg.slack_bot_token is None
     assert cfg.slack_app_token is None
+    assert cfg.slack_summary_channel is None
     assert cfg.exa_api_key is None
     assert cfg.firecrawl_api_key is None
     assert cfg.gemini_api_key is None
@@ -60,6 +61,7 @@ def test_all_fields_populated() -> None:
         "ANTHROPIC_MODEL": "claude-x-1",
         "SLACK_BOT_TOKEN": FAKE_SHORT,
         "SLACK_APP_TOKEN": FAKE_SHORT,
+        "SLACK_SUMMARY_CHANNEL": "D0B61LKA3NV",
         "EXA_API_KEY": FAKE_TOKEN,
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
@@ -72,9 +74,20 @@ def test_all_fields_populated() -> None:
     assert cfg.anthropic_model == "claude-x-1"
     assert cfg.slack_bot_token == FAKE_SHORT
     assert cfg.slack_app_token == FAKE_SHORT
+    assert cfg.slack_summary_channel == "D0B61LKA3NV"
     assert cfg.exa_api_key == FAKE_TOKEN
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
+
+
+def test_require_slack_summary_channel() -> None:
+    """require_slack_summary_channel returns the id or raises when unset."""
+    cfg = load_config({"PKM_VAULT": "/x", "SLACK_SUMMARY_CHANNEL": "D123"})
+    assert cfg.require_slack_summary_channel() == "D123"
+
+    cfg_missing = load_config({"PKM_VAULT": "/x"})
+    with pytest.raises(ConfigError, match="SLACK_SUMMARY_CHANNEL"):
+        cfg_missing.require_slack_summary_channel()
 
 
 def test_missing_required_raises() -> None:

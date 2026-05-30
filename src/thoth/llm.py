@@ -56,11 +56,15 @@ __all__ = [
     "LLMError",
     "Message",
     "SchemaValidationError",
+    "assistant_blocks_message",
     "build_create_kwargs",
     "build_system_blocks",
     "extract_text",
     "make_client",
     "parse_json_block",
+    "response_content_blocks",
+    "tool_result_block",
+    "user_blocks_message",
     "validate_answer",
     "validate_file_plan",
 ]
@@ -243,12 +247,22 @@ class AnthropicLike(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """One chat turn handed to the model."""
+    """One chat turn handed to the model.
+
+    ``content`` is either a plain string (an ordinary text turn) or a list of native
+    Anthropic content blocks (a ``text`` / ``tool_use`` / ``tool_result`` block list,
+    the last keyed by ``tool_use_id``). The structured form is what
+    a multi-turn tool-use conversation requires: the assistant turn after a
+    ``stop_reason='tool_use'`` response must echo the model's ``tool_use`` block(s) and
+    the following user turn must carry a ``tool_result`` block per ``tool_use_id`` (the
+    real Messages API rejects a tool-use exchange flattened to text). The block list is
+    passed through to ``messages.create`` verbatim by :func:`build_create_kwargs`.
+    """
 
     role: str
     """Either ``'user'`` or ``'assistant'``."""
-    content: str
-    """The turn's text content."""
+    content: str | list[dict[str, Any]]
+    """The turn's text, or a list of native Anthropic content blocks."""
 
 
 def build_system_blocks(extra: str | None = None) -> list[dict[str, Any]]:
@@ -428,6 +442,122 @@ def extract_text(response: Any) -> str:
         if block_type == "text" and isinstance(text, str):
             parts.append(text)
     return "".join(parts)
+
+
+def _block_as_dict(block: Any) -> dict[str, Any]:
+    """Normalise one content block (an SDK object or a dict) to a plain ``dict``.
+
+    The real Anthropic SDK returns content blocks as typed objects; a test fake returns
+    plain dicts. To echo the assistant's ``tool_use`` block(s) back into the next
+    request verbatim (so the ``tool_use_id`` keys line up with the ``tool_result``
+    blocks the harness sends), each block is reduced to the JSON-able dict the Messages
+    API expects. An object is converted via its ``.model_dump()`` (Pydantic v2, what the
+    SDK uses) or, failing that, by reading the documented attributes for the block type.
+
+    Args:
+        block: A content block (typed SDK object or a dict-shaped stand-in).
+
+    Returns:
+        A plain ``dict`` suitable to place back into a ``messages`` content list.
+    """
+    if isinstance(block, dict):
+        return dict(block)
+    dump = getattr(block, "model_dump", None)
+    if callable(dump):
+        dumped = dump()
+        if isinstance(dumped, dict):
+            return dumped
+    block_type = getattr(block, "type", None)
+    out: dict[str, Any] = {"type": block_type}
+    if block_type == "text":
+        out["text"] = getattr(block, "text", "")
+    elif block_type == "tool_use":
+        out["id"] = getattr(block, "id", None)
+        out["name"] = getattr(block, "name", None)
+        out["input"] = getattr(block, "input", {})
+    return out
+
+
+def response_content_blocks(response: Any) -> list[dict[str, Any]]:
+    """Return a response's content blocks as plain dicts, ready to re-send.
+
+    This is the structured counterpart of :func:`extract_text`: where that flattens a
+    response to its text, this preserves *every* block (text and ``tool_use`` alike) so
+    an assistant turn can be echoed verbatim into the next ``messages.create`` call. The
+    ``tool_use`` blocks must round-trip with their ``id`` intact so the following
+    ``tool_result`` blocks can reference them (the API requires the match).
+
+    Args:
+        response: An Anthropic response object or a dict-shaped stand-in.
+
+    Returns:
+        The content blocks as plain dicts, in order (empty when there is no content).
+    """
+    content = (
+        response.get("content")
+        if isinstance(response, dict)
+        else getattr(response, "content", None)
+    )
+    if content is None:
+        return []
+    return [_block_as_dict(block) for block in content]
+
+
+def assistant_blocks_message(response: Any) -> Message:
+    """Wrap a response's content blocks as an assistant :class:`Message` to re-send.
+
+    The returned message carries the native blocks (including any ``tool_use`` blocks),
+    so appending it to the running transcript reproduces the assistant turn exactly --
+    the precondition the Messages API places on the turn that *precedes* a user
+    ``tool_result`` turn.
+
+    Args:
+        response: The Anthropic response whose assistant turn is being echoed.
+
+    Returns:
+        A :class:`Message` with ``role='assistant'`` and structured-block content.
+    """
+    return Message(role="assistant", content=response_content_blocks(response))
+
+
+def tool_result_block(
+    tool_use_id: str, content: str, *, is_error: bool = False
+) -> dict[str, Any]:
+    """Build one ``tool_result`` content block keyed to a prior ``tool_use`` block.
+
+    The Messages API requires the user turn after a ``stop_reason='tool_use'`` response
+    to contain a ``tool_result`` block whose ``tool_use_id`` matches the originating
+    ``tool_use`` block; ``is_error=True`` marks a tool failure the model should recover
+    from (an SSRF/extract rejection, an unknown tool, a bad argument).
+
+    Args:
+        tool_use_id: The ``id`` of the ``tool_use`` block this result answers.
+        content: The textual tool output (or error message).
+        is_error: Whether the tool failed (sets the API ``is_error`` flag).
+
+    Returns:
+        A ``tool_result`` content-block dict.
+    """
+    block: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+    }
+    if is_error:
+        block["is_error"] = True
+    return block
+
+
+def user_blocks_message(blocks: list[dict[str, Any]]) -> Message:
+    """Wrap a list of content blocks (typically ``tool_result``) as a user turn.
+
+    Args:
+        blocks: The content blocks to send as one user turn.
+
+    Returns:
+        A :class:`Message` with ``role='user'`` and structured-block content.
+    """
+    return Message(role="user", content=blocks)
 
 
 # Matches a ```json ... ``` (or bare ``` ... ```) fenced block; group 1 is the body.
