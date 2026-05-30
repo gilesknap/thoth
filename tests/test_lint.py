@@ -764,9 +764,7 @@ def test_source_drift_no_false_positive_for_writer_output(
         ("transcripts", "multiline", "line one\nline two\n\n"),
         ("articles", "leading-blank", "\nbody after a leading blank line\n"),
     ):
-        vault.write_raw(
-            subdir, slug, {"source_url": "https://example.com/x"}, body
-        )
+        vault.write_raw(subdir, slug, {"source_url": "https://example.com/x"}, body)
     assert _engine(vault, config).check_source_drift() == []
 
 
