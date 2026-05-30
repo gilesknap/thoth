@@ -8,10 +8,13 @@ is a vault file; lose the VPS and you lose only dedupe history + mid-flight capt
 both cheap, so the DB is explicitly **not** backed up and **not** part of recovery.
 
 The store is **single-writer** by construction: exactly one daemon process (the Slack
-bot) opens it, so there is no git / two-writer surface to reconcile. It is opened in
-WAL journal mode with a bounded busy-timeout so a brief lock (for example a concurrent
-prune) waits rather than erroring, and every connection is closed cleanly so tests leak
-no file handles.
+bot) opens it, so there is no git / two-writer surface to reconcile. Each operation
+opens a short-lived connection in WAL journal mode with a bounded busy-timeout (so a
+brief lock -- for example a concurrent prune -- waits rather than erroring) and closes
+it immediately, so no connection ever outlives a call and nothing can leak a handle or
+emit an ``unclosed database`` ``ResourceWarning`` (a hard error under ``-W error``,
+notably on Python 3.13+). Dedupe is one check per Slack event, so per-call connect
+cost is negligible.
 
 Currently one table is implemented -- ``processed_events(event_id, ts)`` (the Slack
 redelivery dedupe, pruned past a TTL, SPEC section 10). The ``captures`` and
@@ -29,7 +32,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
 
@@ -45,10 +49,11 @@ class EventStore:
     ``processed_events(event_id TEXT PRIMARY KEY, ts REAL)`` where ``ts`` is the
     wall-clock seconds the id was first recorded, used to prune past the TTL.
 
-    The connection is opened lazily on first use and kept open for the (single-writer)
-    process lifetime; :meth:`close` releases it and the instance is usable as a context
-    manager so a test closes it deterministically. The clock is injectable so the TTL
-    pruning is testable without sleeping.
+    Each call opens a short-lived connection and closes it before returning, so no
+    handle outlives the operation (no caller discipline is required and nothing can leak
+    an ``unclosed database`` ``ResourceWarning``). :meth:`close` and the context-manager
+    protocol are retained as no-ops for API compatibility. The clock is injectable so
+    the TTL pruning is testable without sleeping.
     """
 
     _SCHEMA: str = (
@@ -71,30 +76,34 @@ class EventStore:
         """
         self._db_path = db_path
         self._clock = clock if clock is not None else time.time
-        self._conn: sqlite3.Connection | None = None
 
     # ---- connection lifecycle ----------------------------------------------------
 
-    def _connect(self) -> sqlite3.Connection:
-        """Return the open connection, creating the file, schema, and pragmas once."""
-        if self._conn is None:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self._db_path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Yield a short-lived connection (file, schema, pragmas), closed on exit."""
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self._db_path)
+        try:
             # WAL + a bounded busy timeout suit a single-writer daemon: a brief lock
             # (a concurrent prune) waits rather than raising, and readers never block
             # the writer. The timeout is generous but finite so a test never hangs.
+            # WAL is a persistent on-disk property, so setting it per connection is
+            # idempotent and keeps the db in WAL mode across the open/close cycle.
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(self._SCHEMA)
             conn.commit()
-            self._conn = conn
-        return self._conn
+            yield conn
+        finally:
+            conn.close()
 
     def close(self) -> None:
-        """Close the underlying connection if it is open (idempotent)."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        """No-op (idempotent): connections are per-operation and already closed.
+
+        Retained so existing callers and the context-manager protocol stay valid.
+        """
+        return None
 
     def __enter__(self) -> EventStore:
         """Enter a context manager managing the connection lifetime."""
@@ -130,18 +139,18 @@ class EventStore:
         """
         if not event_id:
             return False
-        conn = self._connect()
-        self.prune(ttl_seconds=ttl_seconds)
         now = self._clock()
-        # INSERT OR IGNORE is the atomic test-and-set: the PRIMARY KEY makes a second
-        # insert of the same id a no-op, so rowcount tells us whether it was new.
-        cursor = conn.execute(
-            "INSERT OR IGNORE INTO processed_events (event_id, ts) VALUES (?, ?)",
-            (event_id, now),
-        )
-        conn.commit()
-        # rowcount == 1 means the row was inserted (id was new -> unseen).
-        return cursor.rowcount == 0
+        with self._connect() as conn:
+            self._prune(conn, cutoff=now - ttl_seconds)
+            # INSERT OR IGNORE is the atomic test-and-set: the PRIMARY KEY makes a
+            # second insert of the same id a no-op, so rowcount tells us if it was new.
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO processed_events (event_id, ts) VALUES (?, ?)",
+                (event_id, now),
+            )
+            conn.commit()
+            # rowcount == 1 means the row was inserted (id was new -> unseen).
+            return cursor.rowcount == 0
 
     def mark(self, event_id: str, *, ttl_seconds: float) -> None:
         """Record ``event_id`` as processed now (no-op for an empty id).
@@ -151,13 +160,14 @@ class EventStore:
         """
         if not event_id:
             return
-        conn = self._connect()
-        self.prune(ttl_seconds=ttl_seconds)
-        conn.execute(
-            "INSERT OR REPLACE INTO processed_events (event_id, ts) VALUES (?, ?)",
-            (event_id, self._clock()),
-        )
-        conn.commit()
+        now = self._clock()
+        with self._connect() as conn:
+            self._prune(conn, cutoff=now - ttl_seconds)
+            conn.execute(
+                "INSERT OR REPLACE INTO processed_events (event_id, ts) VALUES (?, ?)",
+                (event_id, now),
+            )
+            conn.commit()
 
     def prune(self, *, ttl_seconds: float) -> int:
         """Delete every recorded id older than ``ttl_seconds`` from now.
@@ -169,8 +179,12 @@ class EventStore:
         Returns:
             The number of rows deleted.
         """
-        conn = self._connect()
-        cutoff = self._clock() - ttl_seconds
+        with self._connect() as conn:
+            return self._prune(conn, cutoff=self._clock() - ttl_seconds)
+
+    @staticmethod
+    def _prune(conn: sqlite3.Connection, *, cutoff: float) -> int:
+        """Delete rows with ``ts < cutoff`` on an open connection; return the count."""
         cursor = conn.execute("DELETE FROM processed_events WHERE ts < ?", (cutoff,))
         conn.commit()
         return cursor.rowcount

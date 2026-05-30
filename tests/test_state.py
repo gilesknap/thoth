@@ -18,9 +18,7 @@ from thoth.state import EventStore
 TTL = 3600.0
 
 
-def _store(
-    tmp_path: Path, clock: Callable[[], float] | None = None
-) -> EventStore:
+def _store(tmp_path: Path, clock: Callable[[], float] | None = None) -> EventStore:
     """Build an EventStore at a tmp state.db with an optional injected clock."""
     db = tmp_path / "state.db"
     return EventStore(db, clock=clock)
