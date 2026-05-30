@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Contribute to the project &#8212; thoth 0.1.dev15+g5f4551210 documentation</title>
+    <title>First-light smoke checklist &#8212; thoth 0.1.dev15+g5f4551210 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=30646c52"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'how-to/contribute';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'how-to/first-light';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="First-light smoke checklist" href="first-light.html" />
-    <link rel="prev" title="How-to Guides" href="../how-to.html" />
+    <link rel="next" title="Recover from a lost VPS" href="recovery.html" />
+    <link rel="prev" title="Contribute to the project" href="contribute.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -421,8 +421,8 @@
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Contribute to the project</a></li>
-<li class="toctree-l1"><a class="reference internal" href="first-light.html">First-light smoke checklist</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contribute.html">Contribute to the project</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">First-light smoke checklist</a></li>
 <li class="toctree-l1"><a class="reference internal" href="recovery.html">Recover from a lost VPS</a></li>
 </ul>
 </div>
@@ -467,7 +467,7 @@
     
     <li class="breadcrumb-item"><a href="../how-to.html" class="nav-link">How-to Guides</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Contribute to the project</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">First-light smoke checklist</span></li>
   </ul>
 </nav>
 </div>
@@ -484,30 +484,136 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="contribute-to-the-project">
-<h1>Contribute to the project<a class="headerlink" href="#contribute-to-the-project" title="Link to this heading">#</a></h1>
-<p>Contributions and issues are most welcome! All issues and pull requests are
-handled through <a class="reference external" href="https://github.com/gilesknap/thoth/issues">GitHub</a>. Also, please check for any existing issues before
-filing a new one. If you have a great idea but it involves big changes, please
-file a ticket before making a pull request! We want to make sure you don’t spend
-your time coding something that might not fit the scope of the project.</p>
-<section id="issue-or-discussion">
-<h2>Issue or Discussion?<a class="headerlink" href="#issue-or-discussion" title="Link to this heading">#</a></h2>
-<p>Github also offers <a class="reference external" href="https://github.com/gilesknap/thoth/discussions">discussions</a> as a place to ask questions and share ideas. If
-your issue is open ended and it is not obvious when it can be “closed”, please
-raise it as a discussion instead.</p>
+  <section id="first-light-smoke-checklist">
+<h1>First-light smoke checklist<a class="headerlink" href="#first-light-smoke-checklist" title="Link to this heading">#</a></h1>
+<p>CI exercises every external boundary against an injected fake – no real Slack,
+Anthropic, Hindsight, MCP, Exa, Firecrawl, Postgres, or git remote is touched (SPEC
+section 12). So the <strong>first time</strong> the appliance runs against the real services (on the
+VPS, after deploy) is the first time those seams are exercised for real. This page is the
+runbook for that <em>first light</em>: one happy-path check per real boundary, plus the single
+command that runs the opt-in live smoke suite.</p>
+<p>Work through it top-to-bottom on the VPS, as the <code class="docutils literal notranslate"><span class="pre">pkm</span></code> user, with <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code>
+populated and the venv on <code class="docutils literal notranslate"><span class="pre">PATH</span></code> (<code class="docutils literal notranslate"><span class="pre">source</span> <span class="pre">/opt/thoth/.venv/bin/activate</span></code>). Each step is a
+<strong>one-shot</strong> check; none of them mutate canonical knowledge beyond a single throwaway page
+you can delete afterwards.</p>
+<section id="prerequisites">
+<h2>0. Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">#</a></h2>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] /opt/thoth checked out, `uv sync --extra runtime` run (the runtime clients installed)
+- [ ] /opt/pkm-vault cloned and PKM_VAULT points at it
+- [ ] ~/.thoth/.env present (chmod 600) with the real keys/tokens
+- [ ] `thoth --version` prints a version
+</pre></div>
+</div>
 </section>
-<section id="code-coverage">
-<h2>Code Coverage<a class="headerlink" href="#code-coverage" title="Link to this heading">#</a></h2>
-<p>While 100% code coverage does not make a library bug-free, it significantly
-reduces the number of easily caught bugs! Please make sure coverage remains the
-same or is improved by a pull request!</p>
+<section id="anthropic-a-trivial-classify-returns-valid-json">
+<h2>1. Anthropic – a trivial classify returns valid JSON<a class="headerlink" href="#anthropic-a-trivial-classify-returns-valid-json" title="Link to this heading">#</a></h2>
+<p>The cheapest real LLM round-trip is the ingest <em>classify</em> call: one Claude message that
+must come back as a JSON routing object. If the model id, key, or system prompt is wrong
+this fails loud here rather than mid-capture.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span>anthropic
+</pre></div>
+</div>
+<p>Expected: the live test sends a one-line note, gets back a <code class="docutils literal notranslate"><span class="pre">Classification</span></code> with a
+non-empty <code class="docutils literal notranslate"><span class="pre">type</span></code> and <code class="docutils literal notranslate"><span class="pre">slug</span></code>, and passes. A <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code> means <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_API_KEY</span></code> is
+unset; a 404 means <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code> is a retired id (use the dated fallback).</p>
 </section>
-<section id="developer-information">
-<h2>Developer Information<a class="headerlink" href="#developer-information" title="Link to this heading">#</a></h2>
-<p>It is recommended that developers use a <a class="reference external" href="https://code.visualstudio.com/docs/devcontainers/containers">vscode devcontainer</a>. This repository contains configuration to set up a containerized development environment that suits its own needs.</p>
-<p>This project was created using the <a class="reference external" href="https://github.com/DiamondLightSource/python-copier-template">Diamond Light Source Copier Template</a> for Python projects.</p>
-<p>For more information on common tasks like setting up a developer environment, running the tests, and setting a pre-commit hook, see the template’s <a class="reference external" href="https://diamondlightsource.github.io/python-copier-template/5.1.0/how-to.html">How-to guides</a>.</p>
+<section id="hindsight-retain-then-recall-round-trips-with-tag-provenance-recoverable">
+<h2>2. Hindsight – retain then recall round-trips, with tag-provenance recoverable<a class="headerlink" href="#hindsight-retain-then-recall-round-trips-with-tag-provenance-recoverable" title="Link to this heading">#</a></h2>
+<p>Provenance is <strong>tag-keyed</strong> (SPEC section 8): <code class="docutils literal notranslate"><span class="pre">retain</span></code> carries the vault-relative path as
+a <code class="docutils literal notranslate"><span class="pre">rel</span></code> tag (the in-band <code class="docutils literal notranslate"><span class="pre">SOURCE:</span></code> sentinel is only a fallback, because LLM
+fact-extraction can split a page into atomic facts and strand the sentinel). This check
+confirms the round-trip <em>and</em> that recall recovers the path.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>hindsight<span class="w"> </span>memory<span class="w"> </span>retain<span class="w"> </span>thoth<span class="w"> </span><span class="s2">&quot;SOURCE: concepts/first-light.md</span>
+
+<span class="go">first light smoke probe&quot; --tags concepts,concepts/first-light.md</span>
+<span class="gp">$ </span>hindsight<span class="w"> </span>memory<span class="w"> </span>recall<span class="w"> </span>thoth<span class="w"> </span><span class="s2">&quot;first light smoke probe&quot;</span><span class="w"> </span>-o<span class="w"> </span>json
+</pre></div>
+</div>
+<p>Expected: the recall JSON contains a hit whose tags include
+<code class="docutils literal notranslate"><span class="pre">concepts/first-light.md</span></code>, so <code class="docutils literal notranslate"><span class="pre">thoth.hindsight.parse_recall</span></code> recovers that path
+(tags-first). Confirm the installed binary name/verbs match (<code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BINARY</span></code>,
+<code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BANK</span></code>) – the VPS may still have <code class="docutils literal notranslate"><span class="pre">hindsight-embed</span></code> installed. The live
+suite does the same round-trip through <code class="docutils literal notranslate"><span class="pre">thoth.hindsight.Hindsight</span></code>:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span>hindsight
+</pre></div>
+</div>
+</section>
+<section id="slack-socket-mode-connects-and-a-dm-round-trips-capture-reply">
+<h2>3. Slack – Socket Mode connects and a DM round-trips capture+reply<a class="headerlink" href="#slack-socket-mode-connects-and-a-dm-round-trips-capture-reply" title="Link to this heading">#</a></h2>
+<p>Start the daemon and send a DM from an allow-listed account.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>thoth<span class="w"> </span>slack
+</pre></div>
+</div>
+<p>Then, in Slack (from a <code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code> account), DM the bot:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] DM &quot;capture: first light test&quot; -&gt; bot replies with an obsidian:// link + [[wikilink]]
+- [ ] the page lands in the vault (check `git log` in /opt/pkm-vault)
+- [ ] DM &quot;research: what is first light&quot; -&gt; bot replies and offers to save
+- [ ] logs show &quot;connected&quot; (Socket Mode) and no auth errors
+</pre></div>
+</div>
+<p>Expected: a reply within a few seconds. A <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code> for <code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code> /
+<code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code> means the secrets are missing; silence usually means the app token lacks
+Socket Mode or the bot is not in the DM. Stop with <code class="docutils literal notranslate"><span class="pre">Ctrl-C</span></code> once the round-trip works.</p>
+</section>
+<section id="mcp-the-pkm-tools-list-and-one-executes-over-stdio">
+<h2>4. MCP – the pkm_* tools list and one executes over stdio<a class="headerlink" href="#mcp-the-pkm-tools-list-and-one-executes-over-stdio" title="Link to this heading">#</a></h2>
+<p>The MCP server speaks JSON-RPC over stdio. List tools, then call one.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>thoth<span class="w"> </span>mcp
+</pre></div>
+</div>
+<p>With an MCP client (Claude Desktop, or <code class="docutils literal notranslate"><span class="pre">mcp</span></code> dev tooling) pointed at that stdio command:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] tools/list returns the seven pkm_* tools (pkm_search, pkm_ask, pkm_ingest,
+      pkm_save_answer, pkm_todos, pkm_recent, pkm_write_page)
+- [ ] pkm_recent (days=7) executes and returns recent pages
+</pre></div>
+</div>
+<p>Expected: the seven tools enumerate and <code class="docutils literal notranslate"><span class="pre">pkm_recent</span></code> returns without error. The live suite
+builds the server in-process and asserts the registered tool set:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span>mcp
+</pre></div>
+</div>
+</section>
+<section id="exa-firecrawl-one-search-and-one-extract">
+<h2>5. Exa + Firecrawl – one search and one extract<a class="headerlink" href="#exa-firecrawl-one-search-and-one-extract" title="Link to this heading">#</a></h2>
+<p>The blended research path uses Exa for discovery and Firecrawl for extraction.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span><span class="s2">&quot;exa or firecrawl&quot;</span>
+</pre></div>
+</div>
+<p>Expected: the Exa search returns at least one <code class="docutils literal notranslate"><span class="pre">WebHit</span></code>, and the Firecrawl extract returns
+non-empty markdown for a stable public URL. An <code class="docutils literal notranslate"><span class="pre">ExtractError</span></code> mentioning a missing key
+means <code class="docutils literal notranslate"><span class="pre">EXA_API_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">FIRECRAWL_API_KEY</span></code> is unset.</p>
+</section>
+<section id="cron-entrypoints-incremental-reindex-and-a-summary-post">
+<h2>6. Cron entrypoints – incremental reindex and a summary post<a class="headerlink" href="#cron-entrypoints-incremental-reindex-and-a-summary-post" title="Link to this heading">#</a></h2>
+<p>The two cron-driven entrypoints (SPEC section 9, the deploy crontab) are one-shot console
+commands; run them by hand once.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>thoth<span class="w"> </span>reindex
+<span class="gp">$ </span>thoth<span class="w"> </span>summary<span class="w"> </span>daily
+</pre></div>
+</div>
+<p>Expected: <code class="docutils literal notranslate"><span class="pre">reindex</span></code> prints a <code class="docutils literal notranslate"><span class="pre">changed=/skipped=</span></code> line and is near-instant on a
+quiet vault (it is incremental – unchanged pages are skipped via the body-<code class="docutils literal notranslate"><span class="pre">sha256</span></code>
+manifest); on success it chains the optional <code class="docutils literal notranslate"><span class="pre">bin/hindsight-backup.sh</span></code> snapshot (a no-op
+unless <code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BACKUP=1</span></code>). <code class="docutils literal notranslate"><span class="pre">summary</span> <span class="pre">daily</span></code> composes the digest from the vault and
+posts it to <code class="docutils literal notranslate"><span class="pre">SLACK_SUMMARY_CHANNEL</span></code>; check the channel for the post and the heartbeat
+“still alive” line.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] `thoth reindex` exits 0 with a changed=/skipped= line
+- [ ] a full rebuild also works: `thoth reindex --full-rebuild`
+- [ ] `thoth summary daily` posts to the summary channel (heartbeat line present)
+</pre></div>
+</div>
+</section>
+<section id="running-the-whole-live-suite">
+<h2>Running the whole live suite<a class="headerlink" href="#running-the-whole-live-suite" title="Link to this heading">#</a></h2>
+<p>All of the per-boundary tests above live in one opt-in module that is <strong>skipped offline</strong>
+(so CI stays green) and only runs when <code class="docutils literal notranslate"><span class="pre">THOTH_LIVE_SMOKE=1</span></code> is set. To run every live
+smoke test in one go on the VPS and get a pass/fail report:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live
+</pre></div>
+</div>
+<p>Without the env flag the module is collected but every test is skipped, so the same
+command in CI (or on a dev box) reports all-skipped and passes. Clean up the throwaway
+<code class="docutils literal notranslate"><span class="pre">concepts/first-light.md</span></code> page afterwards if you created one.</p>
 </section>
 </section>
 
@@ -522,20 +628,20 @@ same or is improved by a pull request!</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../how-to.html"
+       href="contribute.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">How-to Guides</p>
+        <p class="prev-next-title">Contribute to the project</p>
       </div>
     </a>
     <a class="right-next"
-       href="first-light.html"
+       href="recovery.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">First-light smoke checklist</p>
+        <p class="prev-next-title">Recover from a lost VPS</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -558,9 +664,14 @@ same or is improved by a pull request!</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-or-discussion">Issue or Discussion?</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#code-coverage">Code Coverage</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#developer-information">Developer Information</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">0. Prerequisites</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#anthropic-a-trivial-classify-returns-valid-json">1. Anthropic – a trivial classify returns valid JSON</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hindsight-retain-then-recall-round-trips-with-tag-provenance-recoverable">2. Hindsight – retain then recall round-trips, with tag-provenance recoverable</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-socket-mode-connects-and-a-dm-round-trips-capture-reply">3. Slack – Socket Mode connects and a DM round-trips capture+reply</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-the-pkm-tools-list-and-one-executes-over-stdio">4. MCP – the pkm_* tools list and one executes over stdio</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exa-firecrawl-one-search-and-one-extract">5. Exa + Firecrawl – one search and one extract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cron-entrypoints-incremental-reindex-and-a-summary-post">6. Cron entrypoints – incremental reindex and a summary post</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-whole-live-suite">Running the whole live suite</a></li>
 </ul>
   </nav></div>
 
@@ -568,7 +679,7 @@ same or is improved by a pull request!</p>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/how-to/contribute.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/how-to/first-light.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -583,7 +694,7 @@ same or is improved by a pull request!</p>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/how-to/contribute.md.txt">
+    <a href="../_sources/how-to/first-light.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
