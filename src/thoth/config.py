@@ -62,6 +62,7 @@ class Config:
     anthropic_model: str
     slack_bot_token: str | None
     slack_app_token: str | None
+    slack_summary_channel: str | None
     exa_api_key: str | None
     firecrawl_api_key: str | None
     gemini_api_key: str | None
@@ -106,6 +107,20 @@ class Config:
         assert self.slack_bot_token is not None
         assert self.slack_app_token is not None
         return self.slack_bot_token, self.slack_app_token
+
+    def require_slack_summary_channel(self) -> str:
+        """Return the summary DM/channel id or raise :class:`ConfigError` if unset.
+
+        The daily/weekly digest (SPEC section 9) is posted to this Slack channel by the
+        ``thoth summary`` cron entrypoint. It lives in configuration
+        (``SLACK_SUMMARY_CHANNEL``) rather than as a literal so the target is not baked
+        into the code.
+        """
+        if self.slack_summary_channel is None:
+            raise ConfigError(
+                "SLACK_SUMMARY_CHANNEL is required to post a summary but is not set"
+            )
+        return self.slack_summary_channel
 
     def obsidian_uri(self, vault_relative_path: str) -> str:
         """Build an ``obsidian://open`` deep link for a vault-relative path.
@@ -206,6 +221,7 @@ def load_config(
         anthropic_model=lookup("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL,
         slack_bot_token=lookup("SLACK_BOT_TOKEN"),
         slack_app_token=lookup("SLACK_APP_TOKEN"),
+        slack_summary_channel=lookup("SLACK_SUMMARY_CHANNEL"),
         exa_api_key=lookup("EXA_API_KEY"),
         firecrawl_api_key=lookup("FIRECRAWL_API_KEY"),
         gemini_api_key=lookup("GEMINI_API_KEY"),

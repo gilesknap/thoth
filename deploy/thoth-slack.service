@@ -1,0 +1,55 @@
+# thoth-slack.service — the unattended Slack Socket-Mode capture/retrieve daemon.
+#
+# This is the single long-running unit of the appliance (SPEC sections 2, 4, 13 and
+# Appendix -> Backup/recovery step 6). It runs `thoth slack`, which blocks serving Slack
+# Socket Mode. The cron-driven jobs (reindex, summary, config-backup) are NOT services —
+# they are one-shot `thoth ...` invocations from the system crontab (see deploy/crontab).
+#
+# Unit name: the SPEC body (sections 2/4) calls this `pkm-slack.service` while the
+# recovery checklist (Appendix step 6) names `thoth-slack.service`. The discrepancy is
+# resolved here in favour of **thoth-slack.service** — it matches the app/repo name
+# (`thoth`) and the operational recovery step that re-enables it. Install it under that
+# name (`/etc/systemd/system/thoth-slack.service`).
+#
+# Secrets live only in ~/.thoth/.env (chmod 600, gitignored, never in any repo); the unit
+# sources them via EnvironmentFile so no token is ever written into this tracked file. The
+# two non-secret resolution vars are set inline per the SPEC (PKM_VAULT and the Obsidian
+# vault name the app resolves before any file op).
+
+[Unit]
+Description=thoth PKM Slack daemon (capture/retrieve, Socket Mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Dedicated unprivileged account for least privilege (SPEC section 12). Create the `pkm`
+# user + group before enabling, or edit these two lines to an existing unprivileged user.
+User=pkm
+Group=pkm
+
+# Non-secret resolution config (SPEC Appendix -> Vault identity). The app resolves the
+# concrete absolute vault path from PKM_VAULT before any file op.
+Environment=PKM_VAULT=/opt/pkm-vault
+Environment=OBSIDIAN_VAULT_NAME=pkm-vault
+Environment=THOTH_HOME=/home/pkm/.thoth
+
+# Secrets (ANTHROPIC_API_KEY, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ALLOWED_USERS,
+# SLACK_SUMMARY_CHANNEL, EXA_API_KEY, FIRECRAWL_API_KEY, GEMINI_API_KEY, ...) come from the
+# chmod-600 .env — never from this tracked unit file.
+EnvironmentFile=/home/pkm/.thoth/.env
+
+WorkingDirectory=/opt/thoth
+ExecStart=/opt/thoth/.venv/bin/thoth slack
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the daemon only needs to read its config and write the vault working tree.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/pkm-vault /home/pkm/.thoth
+
+[Install]
+WantedBy=multi-user.target

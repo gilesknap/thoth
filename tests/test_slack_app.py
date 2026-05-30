@@ -20,13 +20,16 @@ from thoth.config import Config, load_config
 from thoth.git_sync import VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
+from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
 from thoth.slack_app import (
     DEDUPE_TTL_SECONDS,
     EventDedupe,
     Handlers,
+    PendingSaves,
     SlackError,
     build_app,
     parse_allowed_users,
+    render_ask_result,
     render_citation,
     render_ingest_report,
     render_query_result,
@@ -125,6 +128,60 @@ class FakeQueryEngine:
         return self._result
 
 
+class FakeResearch:
+    """Records ask/save calls and returns canned results (or raises canned errors)."""
+
+    def __init__(
+        self,
+        result: AskResult | None = None,
+        error: Exception | None = None,
+        *,
+        saved_path: str = "queries/saved-answer.md",
+        save_error: Exception | None = None,
+    ) -> None:
+        self.asks: list[str] = []
+        self.saves: list[tuple[str, AskResult]] = []
+        self._result = result if result is not None else _ask_result()
+        self._error = error
+        self._saved_path = saved_path
+        self._save_error = save_error
+
+    def ask(
+        self, question: str, *, force_web: bool = False, max_pages: int = 5
+    ) -> AskResult:
+        """Record the question and return the canned blended result (or raise)."""
+        self.asks.append(question)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+    def save_answer(
+        self,
+        question: str,
+        result: AskResult,
+        *,
+        slug: str | None = None,
+        today: Any = None,
+    ) -> str:
+        """Record the save and return the canned path (or raise)."""
+        self.saves.append((question, result))
+        if self._save_error is not None:
+            raise self._save_error
+        return self._saved_path
+
+
+def _ask_result(**overrides: Any) -> AskResult:
+    """Build an AskResult with one vault citation and one web citation by default."""
+    base: dict[str, Any] = {
+        "answer": "Raft is a consensus algorithm.",
+        "vault_citations": [_citation()],
+        "web_citations": [WebCitation(url="https://example.com/raft", title="Raft")],
+        "used_web": True,
+    }
+    base.update(overrides)
+    return AskResult(**base)
+
+
 class Recorder:
     """A fake ``say`` callable that captures every reply string."""
 
@@ -172,10 +229,17 @@ def _handlers(
     *,
     ingestor: FakeIngestor | None = None,
     query_engine: FakeQueryEngine | None = None,
+    research: FakeResearch | None = None,
     allowed: frozenset[str] = frozenset({ALLOWED}),
     dedupe: EventDedupe | None = None,
+    pending_saves: PendingSaves | None = None,
 ) -> tuple[Handlers, FakeIngestor, FakeQueryEngine]:
-    """Construct Handlers wired to fakes, returning the fakes for assertions."""
+    """Construct Handlers wired to fakes, returning the fakes for assertions.
+
+    When ``research`` is given the free-text path takes the blended ask; otherwise it is
+    ``None`` and the free-text path stays vault-only (the existing behaviour). The
+    research fake is reachable on the returned ``Handlers.research`` for assertions.
+    """
     ing = ingestor if ingestor is not None else FakeIngestor()
     qry = query_engine if query_engine is not None else FakeQueryEngine()
     kwargs: dict[str, Any] = {
@@ -184,8 +248,12 @@ def _handlers(
         "query_engine": cast(QueryEngine, qry),
         "allowed_users": allowed,
     }
+    if research is not None:
+        kwargs["research"] = cast(ResearchEngine, research)
     if dedupe is not None:
         kwargs["dedupe"] = dedupe
+    if pending_saves is not None:
+        kwargs["pending_saves"] = pending_saves
     return Handlers(**kwargs), ing, qry
 
 
@@ -339,6 +407,89 @@ def test_handle_message_url_with_trailing_text_is_a_query(config: Config) -> Non
     )
     assert ing.captures == []
     assert qry.queries == ["what is https://example.com about?"]
+
+
+def test_handle_message_free_text_uses_research_when_wired(config: Config) -> None:
+    """With a research engine, free text takes the blended ask + offer-to-save."""
+    research = FakeResearch()
+    handlers, _, qry = _handlers(config, research=research)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "9.1"}, say
+    )
+    # The blended path was used, NOT the vault-only query path.
+    assert research.asks == ["explain raft"]
+    assert qry.queries == []
+    assert "Raft is a consensus algorithm." in say.messages[0]
+    # Both the web source and the offer-to-save surface.
+    assert "https://example.com/raft" in say.messages[0]
+    assert "Save this answer" in say.messages[0]
+
+
+def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
+    """A follow-up 'y' files the previous blended answer as a queries/ page."""
+    research = FakeResearch(saved_path="queries/explain-raft.md")
+    handlers, _, _ = _handlers(config, research=research)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "10.1"}, say
+    )
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "10.2"}, say
+    )
+    # save_answer was called once, with the original question and the remembered result.
+    assert len(research.saves) == 1
+    assert research.saves[0][0] == "explain raft"
+    assert "queries/explain-raft.md" in say.messages[-1]
+    # A second 'y' has nothing pending and falls through to a fresh ask (not a save).
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "10.3"}, say
+    )
+    assert len(research.saves) == 1
+    assert research.asks == ["explain raft", "y"]
+
+
+def test_handle_message_confirm_save_is_per_channel(config: Config) -> None:
+    """A 'y' in a channel with no pending answer does not save another channel's."""
+    research = FakeResearch()
+    handlers, _, _ = _handlers(config, research=research)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "11.1"}, say
+    )
+    # 'y' arrives in a DIFFERENT channel: no pending answer there -> falls through.
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "y", "channel": "D2", "ts": "11.2"}, say
+    )
+    assert research.saves == []
+    # D2's 'y' was treated as a fresh question instead.
+    assert research.asks == ["explain raft", "y"]
+
+
+def test_handle_message_save_rejection_is_fail_loud(config: Config) -> None:
+    """A vault rejection on save is surfaced fail-loud, never swallowed."""
+    research = FakeResearch(save_error=ResearchError("invalid slug"))
+    handlers, _, _ = _handlers(config, research=research)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "12.1"}, say
+    )
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "yes", "channel": "D1", "ts": "12.2"}, say
+    )
+    assert ":x:" in say.messages[-1]
+    assert "invalid slug" in say.messages[-1]
+
+
+def test_handle_message_confirm_without_research_falls_through(config: Config) -> None:
+    """Without a research engine, a 'y' is a normal vault-only query (no save path)."""
+    handlers, _, qry = _handlers(config)  # research is None
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "13.1"}, say
+    )
+    # It routed to the vault-only query path (the only one available).
+    assert qry.queries == ["y"]
 
 
 def test_handle_message_redelivery_dropped(config: Config) -> None:
@@ -637,6 +788,45 @@ def test_render_query_result_no_citations_notes_it() -> None:
     rendered = render_query_result(_result(citations=[]))
     assert "obsidian://" not in rendered
     assert "no vault sources" in rendered.lower()
+
+
+def test_render_ask_result_combines_vault_and_web_with_offer() -> None:
+    """render_ask_result lists vault + web sources and the offer-to-save line."""
+    result = _ask_result()
+    rendered = render_ask_result(result)
+    assert rendered.startswith("Raft is a consensus algorithm.")
+    # Vault citation (unfabricable link + wikilink) and web URL both appear.
+    assert "[[exa-search]]" in rendered
+    assert "https://example.com/raft" in rendered
+    assert "Save this answer" in rendered
+
+
+def test_render_ask_result_offer_suppressed_when_asked() -> None:
+    """offer_save=False omits the save line (used for an empty/edge answer)."""
+    rendered = render_ask_result(_ask_result(), offer_save=False)
+    assert "Save this answer" not in rendered
+
+
+def test_pending_saves_remember_take_is_one_shot() -> None:
+    """A remembered answer is returned once by take(), then gone."""
+    pending = PendingSaves()
+    result = _ask_result()
+    pending.remember("D1", "explain raft", result)
+    taken = pending.take("D1")
+    assert taken is not None
+    assert taken[0] == "explain raft"
+    assert taken[1] is result
+    # A second take finds nothing.
+    assert pending.take("D1") is None
+
+
+def test_pending_saves_prune_drops_expired_with_injected_clock() -> None:
+    """An offer older than the TTL is pruned and no longer takeable."""
+    clock = {"t": 1000.0}
+    pending = PendingSaves(ttl_seconds=100.0, clock=lambda: clock["t"])
+    pending.remember("D1", "q", _ask_result())
+    clock["t"] = 1101.0  # advance just past the TTL
+    assert pending.take("D1") is None
 
 
 def test_render_ingest_report_one_to_two_lines_with_links() -> None:

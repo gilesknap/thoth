@@ -2,11 +2,15 @@
 
 This module is the appliance's primary capture/retrieve surface (SPEC sections 6, 7
 and 10). It wires a Slack `Bolt <https://slack.dev/bolt-python>`_ Socket-Mode app to
-two collaborators that are constructed elsewhere and injected here: an
-:class:`~thoth.ingest.Ingestor` (capture) and a :class:`~thoth.query.QueryEngine`
-(retrieve). The daemon listens for ``message.im`` and ``file_shared`` events, gates
-them through an allow-list and a transient redelivery dedupe, routes free text to a
-query and a bare URL / file to an ingest, and replies in Slack ``mrkdwn``.
+collaborators that are constructed elsewhere and injected here: an
+:class:`~thoth.ingest.Ingestor` (capture), a :class:`~thoth.query.QueryEngine` (fast
+vault-only retrieve), and -- when wired -- a :class:`~thoth.research.ResearchEngine`
+(the blended web+vault Q&A that backs the default free-text path, SPEC section 7.1). The
+daemon listens for ``message.im`` and ``file_shared`` events, gates them through an
+allow-list and a transient redelivery dedupe, routes a bare URL / file to an ingest and
+free text to the blended ask (falling back to the vault-only query when no research
+engine is injected), offers to save a blended answer as a ``queries/`` page on a
+follow-up "y", and replies in Slack ``mrkdwn``.
 
 Design constraints enforced here:
 
@@ -45,16 +49,28 @@ from thoth.config import Config
 from thoth.git_sync import VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
+from thoth.research import AskResult, ResearchEngine, ResearchError
 
 DEDUPE_TTL_SECONDS: float = 3600.0
 """Prune processed-event ids older than one hour (SPEC section 10)."""
+
+PENDING_SAVE_TTL_SECONDS: float = 1800.0
+"""How long an unanswered save offer stays live (~30 min, SPEC section 10)."""
 
 # A free-text message whose body, once stripped, begins with one of these prefixes is
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
 _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
 
+# Affirmative replies that confirm a pending "save this answer to the vault?" offer.
+_CONFIRM_WORDS: frozenset[str] = frozenset(
+    {"y", "yes", "save", "save it", "ok", "okay"}
+)
+
 # The polite refusal sent to a user who is not on the allow-list, if anything at all.
 _REFUSAL_TEXT: str = "Sorry, you are not authorised to use this assistant."
+
+# The offer-to-save line appended to a blended answer (SPEC section 7.1 step 4).
+_SAVE_OFFER_TEXT: str = "_Save this answer to the vault? Reply *y* to file it._"
 
 
 class SlackError(Exception):
@@ -138,6 +154,37 @@ def render_query_result(result: QueryResult) -> str:
     else:
         lines.append("")
         lines.append("_No vault sources cited._")
+    return "\n".join(lines)
+
+
+def render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
+    """Render a blended web+vault Q&A answer as a ``mrkdwn`` block (SPEC section 7.1).
+
+    The prose answer comes first, then a ``Sources:`` list combining the harness-built
+    vault citations (:func:`render_citation`) and the web URLs the model actually read.
+    When ``offer_save`` is set (and the answer is non-empty), the offer-to-save line is
+    appended so the user can file the answer as a ``queries/`` page with a one-word
+    reply. Web citations are plain URLs; vault citations carry the unfabricable
+    ``obsidian://`` link, plain path, and ``[[wikilink]]``.
+
+    Args:
+        result: The blended answer to render.
+        offer_save: Whether to append the "save this answer?" offer line.
+
+    Returns:
+        A ``mrkdwn`` string ready for ``chat.postMessage``.
+    """
+    lines = [result.answer.strip()]
+    if result.vault_citations or result.web_citations:
+        lines.append("")
+        lines.append("*Sources:*")
+        lines.extend(f"- {render_citation(c)}" for c in result.vault_citations)
+        for web in result.web_citations:
+            label = web.title or web.url
+            lines.append(f"- <{web.url}|{label}> - {web.url}")
+    if offer_save:
+        lines.append("")
+        lines.append(_SAVE_OFFER_TEXT)
     return "\n".join(lines)
 
 
@@ -245,6 +292,63 @@ class EventDedupe:
         }
 
 
+class PendingSaves:
+    """Transient per-channel buffer of the last blended answer awaiting a save reply.
+
+    The blended-ask path (SPEC section 7.1) ends by offering to save the answer; a
+    follow-up "y" confirms. This holds the ``(question, AskResult)`` for the most recent
+    answer per channel until it is confirmed, superseded, or expires (the
+    ``ttl_seconds`` window, ~30 min, SPEC section 10). It is **transient working memory
+    only**, never a store -- the in-memory seam the Phase-3 SQLite ``conversations``
+    table would later sit behind. The clock is injectable for deterministic tests.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = PENDING_SAVE_TTL_SECONDS,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        """Build an empty pending-save buffer.
+
+        Args:
+            ttl_seconds: How long an unanswered save offer is remembered.
+            clock: A monotonic-ish time source returning seconds; defaults to
+                :func:`time.monotonic`.
+        """
+        self._ttl = ttl_seconds
+        self._clock = clock if clock is not None else time.monotonic
+        self._pending: dict[str, tuple[float, str, AskResult]] = {}
+
+    def remember(self, channel: str, question: str, result: AskResult) -> None:
+        """Record the latest savable answer for ``channel`` (no-op for an empty id)."""
+        if channel:
+            self._pending[channel] = (self._clock(), question, result)
+
+    def take(self, channel: str) -> tuple[str, AskResult] | None:
+        """Pop and return the live ``(question, result)`` for ``channel``, if any.
+
+        Prunes expired entries first, then removes and returns the pending answer for
+        ``channel`` (so a single "y" saves it exactly once); returns ``None`` when there
+        is no live offer.
+        """
+        self.prune()
+        entry = self._pending.pop(channel, None)
+        if entry is None:
+            return None
+        _, question, result = entry
+        return question, result
+
+    def prune(self) -> None:
+        """Drop every pending offer older than ``ttl_seconds`` from now."""
+        cutoff = self._clock() - self._ttl
+        self._pending = {
+            channel: entry
+            for channel, entry in self._pending.items()
+            if entry[0] >= cutoff
+        }
+
+
 class SlackClientLike(Protocol):
     """The slice of the Bolt web client used by the handlers."""
 
@@ -269,7 +373,9 @@ class Handlers:
     ingestor: Ingestor
     query_engine: QueryEngine
     allowed_users: frozenset[str]
+    research: ResearchEngine | None = None
     dedupe: EventDedupe = field(default_factory=EventDedupe)
+    pending_saves: PendingSaves = field(default_factory=PendingSaves)
 
     def is_allowed(self, user_id: str) -> bool:
         """Return ``True`` iff ``user_id`` is on the allow-list (fail-closed)."""
@@ -280,12 +386,20 @@ class Handlers:
 
         Ignores bot/own messages and message subtypes (edits, joins) so the daemon does
         not loop on its own replies. Enforces the allow-list (replying with a polite
-        refusal to a known sender that is not allowed) and the redelivery dedupe. Routes
-        a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- to
-        :meth:`thoth.ingest.Ingestor.ingest`, and any other free text to
-        :meth:`thoth.query.QueryEngine.answer`, replying with the matching ``mrkdwn``
-        renderer. A surfaced :class:`~thoth.git_sync.VaultConflictError` is rendered
-        fail-loud rather than swallowed.
+        refusal to a known but not-allowed sender) and the redelivery dedupe. Routing
+        (SPEC sections 6, 7.1):
+
+        * a bare ``y``/``yes``/``save`` reply confirms a pending "save this answer?"
+          offer and files the last blended answer as a ``queries/`` page;
+        * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
+          ingest (:meth:`thoth.ingest.Ingestor.ingest`);
+        * any other free text is the **blended** Q&A path
+          (:meth:`thoth.research.ResearchEngine.ask`) when a research engine is wired,
+          replying with the offer-to-save; if none is wired it falls back to the
+          vault-only :meth:`thoth.query.QueryEngine.answer`.
+
+        A surfaced :class:`~thoth.git_sync.VaultConflictError` is rendered fail-loud
+        rather than swallowed.
 
         Args:
             event: The Slack event payload.
@@ -303,13 +417,18 @@ class Handlers:
         text = str(event.get("text", "")).strip()
         if not text:
             return
+        channel = self._channel(event)
         source = self._source_label()
+        if self._is_confirm_save(text) and self._try_confirm_save(channel, say):
+            return
         if self._is_capture_text(text):
             capture = Capture(text=self._strip_capture_prefix(text), source=source)
             self._do_ingest(capture, say)
         elif self._looks_like_url(text):
             capture = Capture(url=text, source=source)
             self._do_ingest(capture, say)
+        elif self.research is not None:
+            self._do_ask(text, channel, say)
         else:
             self._do_query(text, say)
 
@@ -376,7 +495,7 @@ class Handlers:
         say(render_ingest_report(report))
 
     def _do_query(self, text: str, say: Callable[[str], None]) -> None:
-        """Run a query and reply; render an error fail-loud, never crash."""
+        """Run a vault-only query and reply; render an error fail-loud, never crash."""
         try:
             result = self.query_engine.answer(text)
         except QueryError as exc:
@@ -384,9 +503,73 @@ class Handlers:
             return
         say(render_query_result(result))
 
+    def _do_ask(self, text: str, channel: str, say: Callable[[str], None]) -> None:
+        """Run the blended web+vault ask, reply with the offer-to-save, and remember it.
+
+        The (model-decided) web gate lives in :meth:`thoth.research.ResearchEngine.ask`;
+        a leading ``research:`` marker / ``force_web`` forces the web on. On success the
+        rendered answer carries the "save this answer?" offer and the
+        ``(question, result)`` is stashed in :attr:`pending_saves` so a follow-up "y"
+        files it. A :class:`~thoth.research.ResearchError` is rendered fail-loud.
+        """
+        assert self.research is not None  # routing guard guarantees this
+        try:
+            result = self.research.ask(text)
+        except ResearchError as exc:
+            say(f":x: Could not answer that: {exc}")
+            return
+        offer = bool(result.answer.strip())
+        self.pending_saves.remember(channel, text, result)
+        say(render_ask_result(result, offer_save=offer))
+
+    def _try_confirm_save(self, channel: str, say: Callable[[str], None]) -> bool:
+        """File the channel's pending answer as a ``queries/`` page on a "y" reply.
+
+        Returns ``True`` once it has handled the confirmation (whether the save
+        succeeded, was rejected, or there was nothing pending so the "y" should fall
+        through to normal routing -- in which case it returns ``False``). A vault
+        rejection is rendered fail-loud. ``research`` is required to save; if it is not
+        wired the reply falls through.
+        """
+        if self.research is None:
+            return False
+        pending = self.pending_saves.take(channel)
+        if pending is None:
+            return False
+        question, result = pending
+        try:
+            rel = self.research.save_answer(question, result)
+        except ResearchError as exc:
+            say(f":x: Could not save that: {exc}")
+            return True
+        uri = self._vault_uri(rel)
+        if uri:
+            say(f"Saved <{uri}|{rel}> - `{rel}`")
+        else:
+            say(f"Saved `{rel}`")
+        return True
+
+    def _vault_uri(self, rel: str) -> str | None:
+        """Build the ``obsidian://`` link for a saved page, or ``None`` on rejection."""
+        try:
+            return self.config.obsidian_uri(rel)
+        except ValueError:
+            return None
+
     def _source_label(self) -> str:
         """The vault ``source`` value for Slack-originated captures."""
         return "slack"
+
+    @staticmethod
+    def _channel(event: dict[str, Any]) -> str:
+        """Return the event's channel id (the per-conversation pending-save key)."""
+        value = event.get("channel")
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _is_confirm_save(text: str) -> bool:
+        """Return ``True`` iff the whole message is a save-confirmation word."""
+        return text.strip().lower() in _CONFIRM_WORDS
 
     @staticmethod
     def _should_handle(event: dict[str, Any]) -> bool:
@@ -495,18 +678,27 @@ def _response_value(response: Any) -> Any:
     return response
 
 
-def build_app(config: Config, ingestor: Ingestor, query_engine: QueryEngine) -> Any:
+def build_app(
+    config: Config,
+    ingestor: Ingestor,
+    query_engine: QueryEngine,
+    *,
+    research: ResearchEngine | None = None,
+) -> Any:
     """Lazily import ``slack_bolt``, build the App, and register the handlers.
 
     ``slack_bolt`` is imported **inside** this function so module import stays CI-safe.
     The returned app is fully wired (``message`` and ``file_shared`` listeners delegate
     to a :class:`Handlers` built from the injected collaborators and the allow-list read
-    from ``SLACK_ALLOWED_USERS``) but is **not** started -- :func:`run` does that.
+    from ``SLACK_ALLOWED_USERS``) but is **not** started -- :func:`run` does that. When
+    ``research`` is provided, free-text questions take the blended web+vault path with
+    the offer-to-save (SPEC section 7.1); otherwise they take the vault-only path.
 
     Args:
         config: The frozen runtime config (provides the Slack bot token).
         ingestor: The constructed ingest pipeline.
         query_engine: The constructed retrieval engine.
+        research: The optional blended-ask engine for the free-text path.
 
     Returns:
         The configured ``slack_bolt.App`` instance (typed ``Any`` to avoid a top-level
@@ -520,6 +712,7 @@ def build_app(config: Config, ingestor: Ingestor, query_engine: QueryEngine) -> 
         ingestor=ingestor,
         query_engine=query_engine,
         allowed_users=parse_allowed_users(os.environ.get("SLACK_ALLOWED_USERS")),
+        research=research,
     )
     app = App(token=bot_token)
 
@@ -536,21 +729,29 @@ def build_app(config: Config, ingestor: Ingestor, query_engine: QueryEngine) -> 
     return app
 
 
-def run(config: Config, ingestor: Ingestor, query_engine: QueryEngine) -> None:
+def run(
+    config: Config,
+    ingestor: Ingestor,
+    query_engine: QueryEngine,
+    *,
+    research: ResearchEngine | None = None,
+) -> None:
     """Build the app and block serving over Socket Mode (the daemon entry point).
 
     Lazily imports ``SocketModeHandler``, builds the app via :func:`build_app`, and
     calls ``handler.start()`` which blocks forever. This is the production entry point
-    and is never unit-tested live (CI has no Slack socket); the testable logic all lives
-    on :class:`Handlers`.
+    (``thoth slack``) and is never unit-tested live (CI has no Slack socket); the
+    testable logic all lives on :class:`Handlers`. ``research`` enables the blended
+    free-text path (SPEC section 7.1).
 
     Args:
         config: The frozen runtime config (provides both Slack tokens).
         ingestor: The constructed ingest pipeline.
         query_engine: The constructed retrieval engine.
+        research: The optional blended-ask engine for the free-text path.
     """
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
     _, app_token = config.require_slack()
-    app = build_app(config, ingestor, query_engine)
+    app = build_app(config, ingestor, query_engine, research=research)
     SocketModeHandler(app, app_token).start()

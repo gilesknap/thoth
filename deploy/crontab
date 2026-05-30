@@ -1,0 +1,30 @@
+# thoth — system crontab for the unattended appliance (SPEC section 2 diagram, section
+# 13 Phase 3, Appendix -> Reindex job / Backup/recovery).
+#
+# Install for the unprivileged `pkm` user, e.g.:  crontab -u pkm deploy/crontab
+# Times are Europe/London (set CRON_TZ so summaries fire at the local 07:00 regardless of
+# the box's system zone — the SPEC schedules are Europe/London).
+#
+# All four jobs are one-shot `thoth ...` invocations (the only long-running process is
+# thoth-slack.service). The `thoth` console script lives in the venv; adjust the path if
+# you installed elsewhere. Each job appends to its own log under /var/log.
+CRON_TZ=Europe/London
+PATH=/opt/thoth/.venv/bin:/usr/local/bin:/usr/bin:/bin
+
+# 06:30 — nightly Hindsight catch-up reindex for out-of-band Obsidian edits (runs after
+# the vault has been pulled, before the 07:00 summary). Incremental: unchanged pages are
+# skipped, so this is near-zero on quiet days.
+30 6 * * *   thoth reindex >> /var/log/thoth-reindex.log 2>&1
+
+# 07:00 daily — the daily PKM digest to the Slack summary channel (SLACK_SUMMARY_CHANNEL).
+0 7 * * *    thoth summary daily >> /var/log/thoth-summary.log 2>&1
+
+# Mon 07:00 — the weekly week-in-review digest (day-of-week 1 = Monday).
+0 7 * * 1    thoth summary weekly >> /var/log/thoth-summary.log 2>&1
+
+# Every 6h — push-only backup of the thoth app-config repo (.env stays gitignored).
+0 */6 * * *  /opt/thoth/bin/config-backup.sh >> /var/log/thoth-config-backup.log 2>&1
+
+# Mon 08:00 — vault lint (SPEC section 11). Deferred to Phase 4; uncomment once lint.py
+# ships a `thoth lint` subcommand:
+# 0 8 * * 1    thoth lint >> /var/log/thoth-lint.log 2>&1
