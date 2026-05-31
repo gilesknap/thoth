@@ -111,16 +111,27 @@ class TranscriptionError(ExtractError):
 class ExaLike(Protocol):
     """Structural type for the slice of ``exa_py`` :meth:`Extractor.web_search` uses."""
 
-    def search_and_contents(self, query: str, *, num_results: int = ...) -> Any:
-        """Run a semantic search and return results (shape duck-typed downstream)."""
+    def search(self, query: str, *, num_results: int = ...) -> Any:
+        """Run a semantic search and return results (shape duck-typed downstream).
+
+        ``exa_py`` 2.x deprecated ``search_and_contents`` in favour of ``search``.
+        Plain ``search`` returns each result's ``url``/``title`` (and leaves the
+        contents fields empty) — :meth:`Extractor.web_search` only needs the URL
+        for discovery and treats any snippet as best-effort.
+        """
         ...
 
 
 class FirecrawlLike(Protocol):
     """Structural type for the Firecrawl client :meth:`Extractor.web_extract` uses."""
 
-    def scrape_url(self, url: str, *, params: dict[str, Any] | None = ...) -> Any:
-        """Scrape ``url`` and return a result carrying markdown (duck-typed)."""
+    def scrape(self, url: str, *, formats: list[str] | None = ...) -> Any:
+        """Scrape ``url`` and return a result carrying markdown (duck-typed).
+
+        ``firecrawl-py`` 4.x replaced ``scrape_url(url, params={...})`` with
+        ``scrape(url, formats=[...])`` returning a ``Document`` (``.markdown`` /
+        ``.metadata``).
+        """
         ...
 
 
@@ -393,9 +404,9 @@ class Extractor:
                 raise ExtractError(
                     "FIRECRAWL_API_KEY is required for web extraction but is not set"
                 )
-            from firecrawl import FirecrawlApp
+            from firecrawl import Firecrawl
 
-            self._firecrawl = FirecrawlApp(api_key=self._config.firecrawl_api_key)
+            self._firecrawl = Firecrawl(api_key=self._config.firecrawl_api_key)
         return self._firecrawl
 
     def web_search(self, query: str, *, num_results: int = 5) -> list[WebHit]:
@@ -416,7 +427,7 @@ class Extractor:
             ExtractError: if the Exa client is unavailable or the call fails.
         """
         try:
-            response = self.exa.search_and_contents(query, num_results=num_results)
+            response = self.exa.search(query, num_results=num_results)
         except ExtractError:
             raise
         except Exception as exc:
@@ -456,7 +467,7 @@ class Extractor:
         """
         assert_url_allowed(url, allow_private_urls=self._allow_private_urls)
         try:
-            result = self.firecrawl.scrape_url(url, params={"formats": ["markdown"]})
+            result = self.firecrawl.scrape(url, formats=["markdown"])
         except ExtractError:
             raise
         except Exception as exc:
@@ -480,14 +491,24 @@ class Extractor:
 
     @staticmethod
     def _extract_title(result: Any) -> str:
-        """Pull a title from a Firecrawl result's ``metadata.title`` or ``title``."""
+        """Pull a title from a Firecrawl result's ``metadata.title`` or ``title``.
+
+        ``firecrawl-py`` 4.x returns a ``Document`` whose ``metadata`` is a
+        ``DocumentMetadata`` *object* (``.title``), not a dict, so both shapes are
+        accepted here.
+        """
         metadata: Any = (
             result.get("metadata")
             if isinstance(result, dict)
             else getattr(result, "metadata", None)
         )
-        if isinstance(metadata, dict) and isinstance(metadata.get("title"), str):
-            return metadata["title"]
+        meta_title = (
+            metadata.get("title")
+            if isinstance(metadata, dict)
+            else getattr(metadata, "title", None)
+        )
+        if isinstance(meta_title, str):
+            return meta_title
         title = (
             result.get("title")
             if isinstance(result, dict)
