@@ -30,6 +30,7 @@ from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.hindsight import HindsightError, RecallHit
 from thoth.ingest import (
     _CURATE_ATTEMPTS,
+    _TEXT_EXTS,
     Capture,
     CaptureKind,
     Classification,
@@ -37,6 +38,7 @@ from thoth.ingest import (
     Ingestor,
     IngestReport,
     RawCaptureResult,
+    _ext_kind,
 )
 from thoth.llm import LLM
 from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
@@ -1076,6 +1078,103 @@ def test_image_capture_from_local_path(harness: IngestHarness, tmp_path: Path) -
     )
     # The caller's original tmp file is preserved (we stage a copy before the move).
     assert src.is_file()
+
+
+def test_ext_kind_routes_text_extensions_before_image_default() -> None:
+    """A known text extension is TEXT, never the IMAGE default (issue #57).
+
+    A ``path`` upload defaults to IMAGE, so before this fix a ``notes.md`` upload was
+    misclassified as an image and its text dropped. Every text extension must resolve to
+    TEXT even with the IMAGE default in play.
+    """
+    for ext in _TEXT_EXTS:
+        kind = _ext_kind(f"upload.{ext}", default=CaptureKind.IMAGE)
+        assert kind is CaptureKind.TEXT, ext
+        assert kind is not CaptureKind.IMAGE, ext
+    # The documented set is exactly the issue's list.
+    assert _TEXT_EXTS == frozenset(
+        {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
+    )
+
+
+def test_ext_kind_extensionless_still_defaults_to_image() -> None:
+    """An extensionless upload (the phone-photo case) still falls back to IMAGE."""
+    assert _ext_kind("noext", default=CaptureKind.IMAGE) is CaptureKind.IMAGE
+    assert _ext_kind("", default=CaptureKind.IMAGE) is CaptureKind.IMAGE
+    # A known image/audio/pdf extension is unchanged by the text addition.
+    assert _ext_kind("photo.png", default=CaptureKind.IMAGE) is CaptureKind.IMAGE
+    assert _ext_kind("clip.mp3", default=CaptureKind.IMAGE) is CaptureKind.AUDIO
+    assert _ext_kind("paper.pdf", default=CaptureKind.IMAGE) is CaptureKind.PDF
+
+
+def test_upload_md_file_is_read_and_curated_not_held_as_binary(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An uploaded .md file is read + classified + curated, not held as a binary stub.
+
+    Regression for issue #57: a server-resolvable ``path`` ending in ``.md`` is a TEXT
+    capture whose bytes ARE the body, so the text reaches classify/curate and a real
+    page is written -- it must NOT land in ``inbox/`` as an unsupported-binary hold.
+    """
+    src = tmp_path / "transformer-models.md"
+    src.write_text("# Transformers\n\nTransformers use attention.", encoding="utf-8")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(),  # no web/fetch call for a local text file
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="transformer-models.md"))
+
+    # Curated as a real note, with its raw article filed (the file content was read).
+    assert report.deferred is False
+    assert report.page_paths == ["notes/transformer-models.md"]
+    assert report.raw_paths == ["raw/articles/transformer-models.md"]
+    raw = harness.vault.read_page("raw/articles/transformer-models.md")
+    assert "Transformers use attention." in raw.body
+    # Nothing held as an unsupported-binary stub in inbox/.
+    assert _inbox_holds(harness) == []
+
+
+def test_upload_txt_file_is_read_not_held_as_binary(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An uploaded .txt file's content is read into the raw capture (issue #57)."""
+    src = tmp_path / "transformer-models.txt"
+    src.write_text("plain text body about transformers", encoding="utf-8")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="transformer-models.txt"))
+
+    assert report.deferred is False
+    assert report.page_paths == ["notes/transformer-models.md"]
+    raw = harness.vault.read_page("raw/articles/transformer-models.md")
+    assert "plain text body about transformers" in raw.body
+    assert _inbox_holds(harness) == []
+
+
+def test_capture_kind_classifies_text_upload_as_text(harness: IngestHarness) -> None:
+    """A path upload with a text extension resolves to TEXT, an image to IMAGE."""
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    text_cap = Capture(path=Path("/tmp/notes.csv"), filename="notes.csv")
+    assert ingestor._capture_kind(text_cap) is CaptureKind.TEXT
+    # A .png upload is unchanged: still an image binary.
+    image_cap = Capture(path=Path("/tmp/pic.png"), filename="pic.png")
+    assert ingestor._capture_kind(image_cap) is CaptureKind.IMAGE
+    # An extensionless upload is unchanged: still the image default.
+    blob_cap = Capture(path=Path("/tmp/blob"), filename="blob")
+    assert ingestor._capture_kind(blob_cap) is CaptureKind.IMAGE
 
 
 # --------------------------------------------------------------------------- #

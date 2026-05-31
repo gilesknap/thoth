@@ -99,9 +99,15 @@ __all__ = [
 # Folders scanned by the read-only create-vs-update candidate search (reference layer).
 _CANDIDATE_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
 
-# File extensions (no dot) that select a binary/audio capture kind.
+# File extensions (no dot) that select a binary/audio/text capture kind.
 _IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 _AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
+# Plain-text uploads (markdown/notes/data dumps) whose bytes ARE the text body: read
+# the file rather than misclassifying it as an image binary and dropping its text
+# (issue #57). Checked before the image default in :func:`_ext_kind`.
+_TEXT_EXTS: frozenset[str] = frozenset(
+    {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
+)
 
 # Reference ``type`` -> the index.md catalog section append_index targets (ADR 0005).
 # Only the lifecycle-free reference types earn a catalog entry; ``action`` pages are
@@ -734,9 +740,9 @@ class Ingestor:
                 transcript = self._extractor.transcribe(_require(capture.path, "path"))
                 return self._write_raw_doc("transcripts", cls, transcript, None)
             # TEXT
-            text = prefetched.body if prefetched is not None else None
-            if text is None:
-                text = _require(capture.text, "text")
+            text = (
+                prefetched.body if prefetched is not None else self._text_body(capture)
+            )
             return self._write_raw_doc("articles", cls, text, None)
         except ExtractError as exc:
             raise IngestError(f"capture failed during extraction: {exc}") from exc
@@ -905,12 +911,15 @@ class Ingestor:
         """Extract the text body for a text-bearing capture (no LLM), else ``None``.
 
         Runs the single network/IO step per kind -- web-extract a URL, transcribe audio,
-        or take inline text verbatim -- and returns the body plus any provenance URL.
-        Binary kinds (image/PDF) have no text body yet, so ``None`` is returned and the
-        caller holds a provenance stub instead.
+        read an uploaded text file (issue #57), or take inline text verbatim -- and
+        returns the body plus any provenance URL. Binary kinds (image/PDF) have no text
+        body yet, so ``None`` is returned and the caller holds a provenance stub
+        instead.
 
         Raises:
             ExtractError: on a web-extract / transcribe failure (raised to the caller).
+            IngestError: when a text capture supplies neither inline text nor a readable
+                file path.
         """
         if kind is CaptureKind.URL:
             doc = self._extractor.web_extract(_require(capture.url, "url"))
@@ -919,23 +928,47 @@ class Ingestor:
             transcript = self._extractor.transcribe(_require(capture.path, "path"))
             return _Prefetched(body=transcript, source_url=None)
         if kind is CaptureKind.TEXT:
-            return _Prefetched(body=_require(capture.text, "text"), source_url=None)
+            return _Prefetched(body=self._text_body(capture), source_url=None)
         return None
 
     @staticmethod
-    def _binary_stub_body(capture: Capture) -> str:
-        """Build the holding-page body for a binary capture awaiting curation.
+    def _text_body(capture: Capture) -> str:
+        """Return the body for a TEXT capture: inline text, else the uploaded file.
 
-        Records the source URL / filename so a later reindex/sweep can re-fetch and
-        curate the binary; carries no base64 (the bytes are fetched server-side when the
-        item is curated).
+        An uploaded ``.md``/``.txt``/... file (issue #57) carries its body as the file
+        itself, so when no inline ``text`` is supplied the server-resolvable ``path`` is
+        read. Decoding uses ``errors="replace"`` so a stray non-UTF-8 byte in a log/CSV
+        dump never aborts the capture (the text is still filed, with the offending byte
+        shown as the replacement char).
+
+        Raises:
+            IngestError: if the capture has neither inline text nor a readable path.
+        """
+        if capture.text is not None:
+            return capture.text
+        path = _require(capture.path, "text")
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise IngestError(f"capture failed reading text file: {exc}") from exc
+
+    @staticmethod
+    def _binary_stub_body(capture: Capture) -> str:
+        """Build the holding-page body for a binary capture with no extracted text yet.
+
+        Reached only for a binary upload (image/PDF) whose bytes have not yet been
+        analysed/extracted, so the held page records the source URL / filename for a
+        later reindex/sweep to re-fetch and curate; it carries no base64 (the bytes are
+        fetched server-side when the item is curated). The deferral reason is the
+        *unsupported binary content*, not LLM availability (issue #57): a text upload is
+        read directly and never lands here.
         """
         ref = capture.url or capture.filename or "(binary upload)"
         return (
             f"# Held capture\n\n"
             f"Binary source: `{ref}`\n\n"
-            "_LLM unavailable at capture time; held for a later reindex/sweep to "
-            "fetch and curate._"
+            "_Unsupported binary content held at capture time; queued for a later "
+            "reindex/sweep to fetch and curate._"
         )
 
     def _write_inbox_holding(self, body: str, source: str) -> RawCaptureResult:
@@ -981,11 +1014,13 @@ class Ingestor:
     def _capture_kind(self, capture: Capture) -> CaptureKind:
         """Decide the capture kind from the populated fields and any extension hint.
 
-        A server-resolvable ``path`` is always a binary/audio capture (a path with no
-        recognised extension is treated as an image, the common phone-upload case). A
-        ``url`` is web-extracted unless its own extension or the ``filename`` hint marks
-        it as a PDF or image (a direct binary the server downloads). Plain ``text`` is
-        the fallback.
+        A server-resolvable ``path`` is read by its extension: a text upload
+        (``.md``/``.txt``/... per :data:`_TEXT_EXTS`, issue #57) is a TEXT capture whose
+        bytes are read as the body, audio is transcribed, and anything else -- including
+        a path with no recognised extension -- is treated as an image binary (the common
+        phone-upload case). A ``url`` is web-extracted unless its own extension or the
+        ``filename`` hint marks it as a PDF or image (a direct binary the server
+        downloads). Plain ``text`` is the fallback.
         """
         hint = (capture.filename or "").lower()
         if capture.path is not None:
@@ -1684,12 +1719,14 @@ def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
         default: The kind to return when the extension is unrecognised.
 
     Returns:
-        :attr:`CaptureKind.PDF`/``IMAGE``/``AUDIO`` for a known extension, else
-        ``default``.
+        :attr:`CaptureKind.PDF`/``IMAGE``/``AUDIO``/``TEXT`` for a known extension,
+        else ``default``.
     """
     if name.endswith(".pdf"):
         return CaptureKind.PDF
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    if ext in _TEXT_EXTS:
+        return CaptureKind.TEXT
     if ext in _IMAGE_EXTS:
         return CaptureKind.IMAGE
     if ext in _AUDIO_EXTS:
