@@ -354,6 +354,56 @@ def test_systemd_unit_documents_how_flapping_surfaces() -> None:
     assert "onfailure" in lowered
 
 
+# --- deploy/thoth-hindsight.service -----------------------------------------------
+
+
+def test_hindsight_unit_is_oneshot_remain_after_exit_and_unprivileged() -> None:
+    """The hindsight daemon ships as a oneshot+RemainAfterExit unit run as pkm.
+
+    The `hindsight-embed daemon` CLI has no foreground mode and double-forks, so the
+    unit starts/stops the self-detaching daemon rather than supervising it (Type=oneshot
+    + RemainAfterExit=yes). It must run unprivileged (embedded Postgres initdb refuses
+    to run as root).
+    """
+    import configparser
+
+    unit = _deploy_dir() / "thoth-hindsight.service"
+    assert unit.is_file()
+    text = unit.read_text(encoding="utf-8")
+    parser = configparser.ConfigParser(strict=False)
+    parser.read_string(text)
+    assert parser.get("Service", "Type") == "oneshot"
+    assert parser.getboolean("Service", "RemainAfterExit") is True
+    assert parser.get("Service", "User") == "pkm"
+    assert "daemon start" in parser.get("Service", "ExecStart")
+    assert "daemon stop" in parser.get("Service", "ExecStop")
+    # No secret is inlined: the Gemini key lives in the per-profile ~/.hindsight env.
+    assert "API_KEY" not in text
+
+
+def test_slack_unit_orders_after_and_wants_hindsight() -> None:
+    """The Slack daemon depends on the hindsight unit (talks to it, never spawns it)."""
+    text = (_deploy_dir() / "thoth-slack.service").read_text(encoding="utf-8")
+    assert "After=thoth-hindsight.service" in text
+    assert "Wants=thoth-hindsight.service" in text
+
+
+def test_slack_unit_grants_rw_to_hindsight_state_dirs() -> None:
+    """ProtectHome=read-only punches through ~/.hindsight + ~/.pg0 for the CLI calls."""
+    text = (_deploy_dir() / "thoth-slack.service").read_text(encoding="utf-8")
+    assert "ProtectHome=read-only" in text
+    rw_line = next(
+        line for line in text.splitlines() if line.startswith("ReadWritePaths=")
+    )
+    for path in (
+        "/opt/pkm-vault",
+        "/home/pkm/.thoth",
+        "/home/pkm/.hindsight",
+        "/home/pkm/.pg0",
+    ):
+        assert path in rw_line
+
+
 # --- deploy/crontab ---------------------------------------------------------------
 
 

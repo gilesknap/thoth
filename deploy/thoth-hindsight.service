@@ -1,0 +1,47 @@
+# thoth-hindsight.service — the always-on hindsight-embed semantic-index daemon.
+#
+# Hindsight is a REBUILDABLE derived index over the canonical vault (SPEC sections 8/15),
+# never the store of record. thoth talks to it via the `hindsight-embed` CLI, which in
+# turn drives an embedded Postgres (initdb refuses to run as root, so this unit — like
+# every thoth unit — runs as the unprivileged `pkm` user).
+#
+# Why a DEDICATED daemon unit (not let the Slack unit spawn it): hindsight-embed's CLI
+# auto-starts the daemon on first use, which writes ~/.hindsight and ~/.pg0. The Slack
+# daemon runs under ProtectHome=read-only (thoth-slack.service), so it must NOT be the one
+# to spawn Hindsight. This unit owns the daemon's lifecycle; the Slack unit only TALKS to
+# it over http://127.0.0.1:9277 (After=/Wants= ordering in thoth-slack.service).
+#
+# Unit type: the `hindsight-embed daemon` CLI has only start/stop/status/logs — no
+# foreground mode, and it double-forks (via `uv tool uvx hindsight-api ... --daemon`) so
+# its process tree is not a systemd child. Hence Type=oneshot + RemainAfterExit=yes:
+# ExecStart starts the self-detaching daemon, the unit stays `active` afterwards, and
+# ExecStop stops it cleanly. (systemd does not supervise the forked PG/daemon directly;
+# a wedged daemon surfaces via thoth's own Hindsight call failures + the daily heartbeat.)
+#
+# The profile (Gemini LLM key, port 9277, idle-timeout 0) lives in
+# ~/.hindsight/profiles/thoth.env (chmod 600), read by the CLI per `-p thoth` — so no
+# EnvironmentFile/secret is needed here. `uv` must be on PATH (the CLI shells out to it).
+
+[Unit]
+Description=thoth hindsight-embed semantic-index daemon (profile thoth, 127.0.0.1:9277)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=pkm
+Group=pkm
+# HOME and a pkm-readable CWD are load-bearing: the CLI stats ./.env via dotenv, so a
+# root-owned CWD (e.g. /) raises PermissionError. PATH must expose both the CLI and `uv`.
+Environment=HOME=/home/pkm
+Environment=PATH=/home/pkm/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/pkm
+ExecStart=/home/pkm/.local/bin/hindsight-embed -p thoth daemon start
+ExecStop=/home/pkm/.local/bin/hindsight-embed -p thoth daemon stop
+# initdb + first daemon boot (embedded Postgres) can take a while on a cold start.
+TimeoutStartSec=180
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

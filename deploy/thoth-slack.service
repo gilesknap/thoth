@@ -20,6 +20,11 @@
 Description=thoth PKM Slack daemon (capture/retrieve, Socket Mode)
 After=network-online.target
 Wants=network-online.target
+# Hindsight runs as its own always-on unit (thoth-hindsight.service); this daemon only
+# TALKS to it over 127.0.0.1:9277 and must never spawn it (ProtectHome=read-only below).
+# Order after it and pull it in so a boot brings the index up first.
+After=thoth-hindsight.service
+Wants=thoth-hindsight.service
 
 # Bound restart flapping (SPEC section 10 supervision, issue #15). With
 # Restart=on-failure (below), systemd restarts the daemon on a crash; StartLimitBurst
@@ -65,11 +70,16 @@ Restart=on-failure
 RestartSec=5
 
 # Hardening: the daemon only needs to read its config and write the vault working tree.
+# It also shells out to `hindsight-embed -p thoth memory recall/retain`, which connects to
+# the separate thoth-hindsight.service over 127.0.0.1:9277 but may still touch client-side
+# state under ~/.hindsight (and the embedded PG dir ~/.pg0). Under ProtectHome=read-only
+# those writes would be denied, so both are punched through here as ReadWritePaths. They
+# are pkm's own dirs; the daemon never spawns Hindsight (that is thoth-hindsight.service).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/pkm-vault /home/pkm/.thoth
+ReadWritePaths=/opt/pkm-vault /home/pkm/.thoth /home/pkm/.hindsight /home/pkm/.pg0
 
 [Install]
 WantedBy=multi-user.target
