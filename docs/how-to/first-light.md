@@ -61,6 +61,10 @@ $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k hindsight
 
 ## 3. Slack -- Socket Mode connects and a DM round-trips capture+reply
 
+This step assumes the Slack app already exists and the tokens are in `~/.thoth/.env`. If
+you have not created it yet, do {doc}`slack-setup` first (it creates the app from an
+embedded manifest, turns on Socket Mode, and lists the env vars thoth reads).
+
 Start the daemon and send a DM from an allow-listed account.
 
 ```console

@@ -29,6 +29,7 @@ from thoth.slack_app import (
     EventDedupe,
     Handlers,
     PendingSaves,
+    Responder,
     build_app,
     parse_allowed_users,
     render_ask_result,
@@ -212,23 +213,44 @@ class Recorder:
 
 
 class FakeSlackClient:
-    """A fake Slack web client exposing files_info + download (no network)."""
+    """A fake Slack web client: files_info + download + post/update (no network).
+
+    Records every ``chat.postMessage`` and ``chat.update`` so a test can assert the
+    placeholder-then-edit processing-feedback flow (issue #34). ``chat_postMessage``
+    returns a canned ``ts`` so the :class:`~thoth.slack_app.Responder` captures it and
+    later edits that message via ``chat_update`` instead of posting a second reply.
+    """
 
     def __init__(
         self,
         *,
         file_info: dict[str, Any] | None = None,
         payload: bytes = b"binary-bytes",
+        post_ts: str | None = "1700000000.000100",
     ) -> None:
         self.files_info_calls: list[str] = []
         self.downloaded: list[str] = []
+        self.posts: list[dict[str, str]] = []
+        self.updates: list[dict[str, str]] = []
         self._file_info = file_info
         self._payload = payload
+        self._post_ts = post_ts
 
     def chat_postMessage(  # noqa: N802 - Slack SDK method name
         self, *, channel: str, text: str, **kwargs: Any
     ) -> dict[str, Any]:
-        """Record nothing useful here; present to satisfy the protocol."""
+        """Record the placeholder post and return a canned ``ts`` (or none)."""
+        self.posts.append({"channel": channel, "text": text})
+        response: dict[str, Any] = {"ok": True}
+        if self._post_ts is not None:
+            response["ts"] = self._post_ts
+        return response
+
+    def chat_update(  # noqa: N802 - Slack SDK method name
+        self, *, channel: str, ts: str, text: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Record the in-place edit of a previously-posted placeholder."""
+        self.updates.append({"channel": channel, "ts": ts, "text": text})
         return {"ok": True}
 
     def files_info(self, *, file: str) -> dict[str, Any]:  # noqa: N802 - SDK name
@@ -1357,6 +1379,146 @@ def test_render_ingest_report_multi_page_one_ref_each() -> None:
     assert lines[0] == "Filed 2 page(s):"
     assert "|Page A>: concepts/a.md" in lines[1]
     assert "|Page B>: concepts/b.md" in lines[2]
+    assert "[[" not in rendered
+
+
+# --------------------------------------------------------------------------------------
+# processing feedback: placeholder post + chat.update (issue #34, Slice B)
+# --------------------------------------------------------------------------------------
+
+
+def test_query_posts_placeholder_then_updates_it(config: Config) -> None:
+    """A query posts an immediate placeholder, then edits THAT message with the answer.
+
+    Acceptance (issue #34, Slice B): a fake Slack client records the placeholder
+    ``chat.postMessage`` and the final ``chat.update`` (no second post); the placeholder
+    is a "Looking…" line and the edit carries the rendered answer.
+    """
+    client = FakeSlackClient()
+    handlers, _, qry = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "channel": "D1", "ts": "2.2"},
+        say,
+        client,
+    )
+    assert qry.queries == ["what is exa?"]
+    # An immediate placeholder was posted to the channel...
+    assert len(client.posts) == 1
+    assert client.posts[0]["channel"] == "D1"
+    assert "Looking" in client.posts[0]["text"]
+    # ...and the SAME message was edited in place with the final render (no 2nd post).
+    assert len(client.updates) == 1
+    assert client.updates[0]["ts"] == "1700000000.000100"
+    assert "Exa is a semantic search engine." in client.updates[0]["text"]
+    # The single-say fallback was NOT used (the edit carried the reply).
+    assert say.messages == []
+
+
+def test_ingest_posts_filing_placeholder_then_updates(config: Config) -> None:
+    """A capture posts a "Filing…" placeholder, then edits it with the confirmation."""
+    client = FakeSlackClient()
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "note: buy milk", "channel": "D1", "ts": "3.3"},
+        say,
+        client,
+    )
+    assert len(ing.captures) == 1
+    assert len(client.posts) == 1
+    assert "Filing" in client.posts[0]["text"]
+    assert len(client.updates) == 1
+    assert "Filed 1 page(s):" in client.updates[0]["text"]
+    assert say.messages == []
+
+
+def test_feedback_falls_back_to_single_say_without_client(config: Config) -> None:
+    """With no web client (the text-only path) the reply is one say, no placeholder.
+
+    The placeholder+update is best-effort UX layered over the existing single-say
+    contract; a client-less call (or non-DM path) must still deliver exactly one reply.
+    """
+    handlers, _, qry = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "channel": "D1", "ts": "2.2"}, say
+    )
+    assert qry.queries == ["what is exa?"]
+    assert len(say.messages) == 1
+    assert "Exa is a semantic search engine." in say.messages[0]
+
+
+def test_feedback_falls_back_when_post_returns_no_ts(config: Config) -> None:
+    """When the placeholder post yields no ts, the final reply falls back to a say."""
+    client = FakeSlackClient(post_ts=None)
+    handlers, _, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "channel": "D1", "ts": "2.2"},
+        say,
+        client,
+    )
+    # The placeholder still posted, but with no ts there is nothing to edit...
+    assert len(client.posts) == 1
+    assert client.updates == []
+    # ...so the answer came through the single-say fallback instead.
+    assert len(say.messages) == 1
+    assert "Exa is a semantic search engine." in say.messages[0]
+
+
+def test_responder_finish_falls_back_when_update_raises() -> None:
+    """A failed chat.update degrades to a fresh say so the reply is never lost."""
+
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.updates = 0
+
+        def chat_postMessage(  # noqa: N802 - SDK name
+            self, *, channel: str, text: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            return {"ok": True, "ts": "9.9"}
+
+        def chat_update(  # noqa: N802 - SDK name
+            self, *, channel: str, ts: str, text: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            self.updates += 1
+            raise RuntimeError("edit window expired")
+
+    say = Recorder()
+    responder = Responder(say, client=cast(Any, FlakyClient()), channel="D1")
+    responder.progress(":mag: Looking…")
+    responder.finish("the answer")
+    assert say.messages == ["the answer"]
+
+
+# --------------------------------------------------------------------------------------
+# concise rendering: the answer Sources block carries no dead [[wikilink]] (#53, #34)
+# --------------------------------------------------------------------------------------
+
+
+def test_query_renders_concise_sources_no_wikilink(config: Config) -> None:
+    """A query renders the concise #53 Sources block -- no dead wikilink in Slack."""
+    handlers, _, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "ts": "31.1"}, say
+    )
+    assert "*Sources:*" in say.messages[0]
+    assert "[[" not in say.messages[0]
+
+
+def test_render_query_result_has_no_wikilink() -> None:
+    """render_query_result keeps #53's concise, no-wikilink Sources block."""
+    rendered = render_query_result(_result())
+    assert "*Sources:*" in rendered
+    assert "[[" not in rendered
+
+
+def test_render_ask_result_has_no_wikilink() -> None:
+    """render_ask_result keeps #53's concise Sources block -- no dead wikilink."""
+    rendered = render_ask_result(_ask_result())
+    assert "*Sources:*" in rendered
     assert "[[" not in rendered
 
 

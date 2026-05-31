@@ -29,6 +29,7 @@ needed at import time (the injected collaborators carry those lazily).
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -44,10 +45,21 @@ __all__ = [
     "QueryEngine",
     "QueryError",
     "QueryResult",
+    "strip_embeds",
 ]
 
 _WIKILINK_RE: re.Pattern[str] = re.compile(r"\[\[([^\]|#]+)")
 """Capture an Obsidian ``[[wikilink]]`` target (ignoring ``|alias`` / ``#anchor``)."""
+
+_EMBED_RE: re.Pattern[str] = re.compile(r"!\[\[[^\]]*\]\]")
+"""Match an Obsidian image/file embed ``![[...]]`` (stripped from LLM context only)."""
+
+_USED_LINE_RE: re.Pattern[str] = re.compile(
+    r"^USED:\s*(.*)$", re.IGNORECASE | re.MULTILINE
+)
+"""Match the model's trailing ``USED: 1, 3`` (or ``USED: none``) selection line."""
+
+logger = logging.getLogger(__name__)
 
 # Catalog line in index.md: "- [[program-motion-controller]] - central coordinator..."
 # The separator may be a hyphen or an em dash (the SPEC seed template uses both forms).
@@ -96,17 +108,29 @@ class Citation:
 class QueryResult:
     """A composed answer plus its harness-attached citations.
 
-    ``used_recall`` records whether the (more expensive) Hindsight semantic pass was
-    needed: it is ``False`` when the cheap structural passes (index/grep/wikilinks)
-    already produced the citations, and ``True`` when recall contributed.
+    ``citations`` is the **used** subset: when an LLM composes the prose it ends its
+    reply with a ``USED: 1, 3`` line naming the candidate pages that directly supported
+    the answer, and only those are kept (issue #34) so the Slack ``Sources:`` list
+    reflects what the answer actually drew on, not the whole retrieval candidate set. A
+    missing/garbled ``USED:`` line falls back to keeping every consulted page (the
+    pre-#34 behaviour), and the deterministic (no-LLM) path keeps its single top page.
+
+    ``consulted_count`` records how many candidate pages were retrieved and offered to
+    the model *before* the ``USED:`` filter, so an operator log (issue #52) can compare
+    consulted-vs-used recall. ``used_recall`` records whether the (more expensive)
+    Hindsight semantic pass was needed: it is ``False`` when the cheap structural passes
+    (index/grep/wikilinks) already produced the citations, and ``True`` when recall
+    contributed.
     """
 
     answer: str
     """The composed prose answer (LLM-written when an LLM is injected, else excerpt)."""
     citations: list[Citation] = field(default_factory=list)
-    """The harness-built citations, in retrieval order, deduplicated by path."""
+    """The citations the answer used, in retrieval order, deduplicated by path."""
     used_recall: bool = False
     """Whether the semantic Hindsight recall pass contributed to the result."""
+    consulted_count: int = 0
+    """How many candidate pages were offered to the model before the ``USED`` filter."""
 
 
 class QueryEngine:
@@ -153,11 +177,13 @@ class QueryEngine:
         found nothing (so a query the index/grep/wikilinks already answered never burns
         a recall call). The prose is written by the injected LLM if present, else taken
         as a deterministic excerpt of the top page; either way the citation block is
-        harness-built from confined, real paths.
+        harness-built from confined, real paths. With an LLM the result's citations are
+        the **used** subset the model named on its ``USED:`` line (issue #34), and
+        ``consulted_count`` records how many candidates were offered before that filter.
 
         Args:
             query: The natural-language query.
-            max_pages: The maximum number of pages to cite.
+            max_pages: The maximum number of candidate pages to consult and cite.
             use_recall: When false, the semantic Hindsight pass is skipped entirely
                 (the cheap, structural-only path).
 
@@ -203,11 +229,20 @@ class QueryEngine:
             raise QueryError(f"no vault page found for query: {query!r}")
 
         cited_paths = ordered[:max_pages]
-        citations = [self.build_citation(path) for path in cited_paths]
-        # Recall "contributed" only if a recall-only page made it into the cited window.
-        used_recall = any(path in recall_only for path in cited_paths)
-        answer = self._compose(query, citations)
-        return QueryResult(answer=answer, citations=citations, used_recall=used_recall)
+        consulted = [self.build_citation(path) for path in cited_paths]
+        answer, used = self._compose(query, consulted)
+        # Recall "contributed" only if a recall-only page is in the *used* subset (so a
+        # consulted-but-unused recall page no longer counts as recall having helped).
+        used_recall = any(c.path in recall_only for c in used)
+        logger.info(
+            "query consulted %d pages, model used %d", len(consulted), len(used)
+        )
+        return QueryResult(
+            answer=answer,
+            citations=used,
+            used_recall=used_recall,
+            consulted_count=len(consulted),
+        )
 
     # ---- pass 1: the authoritative catalog --------------------------------------
 
@@ -428,32 +463,66 @@ class QueryEngine:
 
     # ---- internals --------------------------------------------------------------
 
-    def _compose(self, query: str, citations: list[Citation]) -> str:
-        """Compose the prose answer (LLM when injected, else a deterministic excerpt).
+    def _compose(
+        self, query: str, consulted: list[Citation]
+    ) -> tuple[str, list[Citation]]:
+        """Compose the prose answer and the *used* citation subset (issue #34).
 
-        With an injected LLM, the cited page bodies are handed to the model as context
-        and its text reply is returned (the citation block is still harness-built by the
-        caller). Without an LLM, a deterministic excerpt of the top cited page is
-        returned so the structural path needs no model at all.
+        With an injected LLM the consulted page bodies are handed to the model as
+        indexed context; the model writes natural prose and ends with a ``USED: 1, 3``
+        line naming the candidates that directly supported the answer. That line is
+        parsed, mapped back to the consulted citations, and stripped from the displayed
+        prose; the matching subset is returned. A missing/garbled ``USED:`` line falls
+        back to keeping **all** consulted citations (the pre-#34 behaviour). Without an
+        LLM a deterministic excerpt of the top consulted page is returned with that
+        single page as its citation.
+
+        Args:
+            query: The natural-language query.
+            consulted: The harness-built citations for every retrieved candidate page.
+
+        Returns:
+            A ``(answer, used_citations)`` pair: the displayed prose (``USED:`` line
+            stripped) and the subset of ``consulted`` the answer actually used.
         """
         llm = self._llm
         if llm is not None:
-            return self._compose_with_llm(llm, query, citations)
-        return self._excerpt(citations[0].path)
+            return self._compose_with_llm(llm, query, consulted)
+        return self._excerpt(consulted[0].path), consulted[:1]
 
-    def _compose_with_llm(self, llm: LLM, query: str, citations: list[Citation]) -> str:
-        """Hand the cited pages to the injected LLM and return its text reply."""
+    def _compose_with_llm(
+        self, llm: LLM, query: str, consulted: list[Citation]
+    ) -> tuple[str, list[Citation]]:
+        """Hand the indexed candidate pages to the LLM; return prose + the used subset.
+
+        Each candidate is labelled with a 1-based index and its body is sanitised of
+        Obsidian ``![[embed]]`` lines (so the model cannot echo a dead image embed into
+        the prose) -- this only shapes the *LLM context*, never the vault page itself.
+        The model writes natural, concise prose referring to pages by title only, and
+        ends with a ``USED: <indices>`` line; that line is parsed back to the consulted
+        citations, stripped from the displayed answer, and the used subset returned. A
+        missing/garbled line falls back to all consulted citations.
+        """
         context_parts: list[str] = []
-        for citation in citations:
-            body = self._excerpt(citation.path, limit=2000)
-            context_parts.append(f"## {citation.title} ({citation.path})\n{body}")
+        for index, citation in enumerate(consulted, start=1):
+            body = strip_embeds(self._excerpt(citation.path, limit=2000))
+            context_parts.append(
+                f"[{index}] ## {citation.title} ({citation.path})\n{body}"
+            )
         context = "\n\n".join(context_parts)
         prompt = (
-            "Answer the question using only the vault pages below. Be concise.\n\n"
+            "Answer the question using only the numbered vault pages below.\n\n"
+            "Write a natural, concise answer in your own words. Refer to pages by "
+            "their title only -- never write a file path, a [[wikilink]], or an "
+            "![[embed]]. Do not paste image embeds.\n\n"
+            "On the final line, list the page numbers that directly support your "
+            "answer as `USED: 1, 3` (comma-separated), or `USED: none` if no page "
+            "applies. Put nothing after that line.\n\n"
             f"Question: {query}\n\nVault pages:\n{context}"
         )
         response = llm.complete([Message(role="user", content=prompt)])
-        return extract_text(response).strip()
+        raw = extract_text(response).strip()
+        return _split_used(raw, consulted)
 
     def _excerpt(self, path: str, *, limit: int = _EXCERPT_CHARS) -> str:
         """Return a stripped, length-capped excerpt of a page body (deterministic)."""
@@ -510,3 +579,64 @@ class QueryEngine:
 def _tokenize(text: str) -> list[str]:
     """Split a query into lowercase, non-empty whitespace-separated tokens."""
     return [token for token in text.lower().split() if token]
+
+
+def strip_embeds(text: str) -> str:
+    """Remove Obsidian ``![[embed]]`` markup from text fed to the LLM (issue #34).
+
+    Strips every ``![[...]]`` image/file embed (and collapses any line left blank by the
+    removal) so the model cannot echo a dead image embed into its prose, while keeping
+    all surrounding prose intact. This shapes only the *LLM context*; the vault page on
+    disk is never modified.
+
+    Args:
+        text: A page excerpt destined for the LLM context.
+
+    Returns:
+        The excerpt with embed markup removed and embed-only lines dropped.
+    """
+    stripped = _EMBED_RE.sub("", text)
+    kept = [line for line in stripped.splitlines() if line.strip()]
+    return "\n".join(kept)
+
+
+def _split_used(raw: str, consulted: list[Citation]) -> tuple[str, list[Citation]]:
+    """Split the model reply into displayed prose + the used citations (issue #34).
+
+    Finds the trailing ``USED: 1, 3`` (or ``USED: none``) line, maps its 1-based
+    indices back to ``consulted`` citations, and returns the prose with that line
+    removed plus the matching subset. Robust fallback: a missing/garbled/empty
+    selection keeps **all** consulted citations (the pre-#34 behaviour) so a malformed
+    model reply never crashes and never silently drops every source. ``USED: none``
+    yields an empty subset (the answer cited nothing), so the renderer shows prose
+    alone.
+
+    Args:
+        raw: The model's full text reply (may end with a ``USED:`` line).
+        consulted: The candidate citations, in the 1-based order shown to the model.
+
+    Returns:
+        A ``(prose, used)`` pair: the answer with the ``USED:`` line stripped, and the
+        used citation subset.
+    """
+    match = _USED_LINE_RE.search(raw)
+    if match is None:
+        return raw.strip(), list(consulted)
+    prose = (raw[: match.start()] + raw[match.end() :]).strip()
+    selection = match.group(1).strip()
+    if selection.lower() == "none":
+        return prose, []
+    indices = [int(tok) for tok in re.findall(r"\d+", selection)]
+    if not indices:
+        # A garbled selection (no parseable index, not the explicit "none"): keep all.
+        return prose, list(consulted)
+    used: list[Citation] = []
+    seen: set[int] = set()
+    for index in indices:
+        if 1 <= index <= len(consulted) and index not in seen:
+            seen.add(index)
+            used.append(consulted[index - 1])
+    # Every index out of range -> nothing matched; fall back to all (never drop all).
+    if not used:
+        return prose, list(consulted)
+    return prose, used
