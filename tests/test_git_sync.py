@@ -214,6 +214,24 @@ def test_scripts_contain_spec_verbatim_invariants(script: str) -> None:
     assert "--force-with-lease" not in text
 
 
+@pytest.mark.parametrize("script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT])
+def test_scripts_use_env_token_helper_with_gh_fallback(script: str) -> None:
+    """Vault auth prefers an env-token x-access-token helper, falling back to gh.
+
+    When GITHUB_PKM_VAULT_TOKEN is set the scripts feed it to git as an
+    ``x-access-token`` HTTPS credential via an inline credential helper; when unset they
+    fall back to gh's credential helper (back-compatible with dev/test/local remotes).
+    The token must never be embedded in a URL (no PAT-in-URL); it stays in env only.
+    """
+    text = (bin_dir() / script).read_text()
+    assert "GITHUB_PKM_VAULT_TOKEN" in text
+    assert "x-access-token" in text
+    assert "!gh auth git-credential" in text  # fallback preserved
+    # Never a PAT-in-URL: the token is never glued to an https remote with '@'.
+    assert "$GITHUB_PKM_VAULT_TOKEN@" not in text
+    assert "${GITHUB_PKM_VAULT_TOKEN}@" not in text
+
+
 def test_commit_script_defaults_push_to_origin_not_a_hardcoded_owner() -> None:
     """vault-commit pushes to the vault's own remote, with no hardcoded owner URL.
 

@@ -436,7 +436,7 @@ class Hindsight:
         """Retain a curated page's facts, with the vault path carried as a tag.
 
         Builds ``base_args + RETAIN_SUBCOMMAND + [bank, retain_text(...)]`` plus a
-        ``--tags`` value and runs it as a checked call. The vault-relative path is added
+        ``--document-tags`` value and runs it as a checked call. The vault path is added
         to ``tags`` as the **primary** provenance channel (recovered by
         :func:`parse_recall` from each recall hit's ``rel`` tag), because the LLM
         fact-extraction can split a page into atomic facts and strand the in-band
@@ -450,7 +450,7 @@ class Hindsight:
             tags: Tags to attach (joined with commas); typically ``[page_type]`` or
                 ``[page_type, rel_path]``. The ``rel_path`` is always included exactly
                 once even if absent from ``tags``. Empty tags are dropped and no
-                ``--tags`` flag is sent when none remain.
+                ``--document-tags`` flag is sent when none remain.
 
         Raises:
             HindsightError: if the CLI exits non-zero (permanent failures fail fast;
@@ -464,23 +464,35 @@ class Hindsight:
         ]
         tag_value = _join_tags(tags, rel_path)
         if tag_value:
-            argv += ["--tags", tag_value]
+            # VPS-confirmed: the installed ``hindsight-embed`` CLI spells the document
+            # tag flag ``--document-tags`` (``memory retain`` has no ``--tags``); the
+            # rel-path still surfaces in each recall hit's ``tags`` so provenance is
+            # intact (see :func:`parse_recall`).
+            argv += ["--document-tags", tag_value]
         self._run_checked("retain", rel_path, argv)
 
     def recall(self, query: str, *, limit: int = 10) -> list[RecallHit]:
         """Semantic recall; return vault paths recovered from each hit's ``rel`` tag.
 
-        Builds ``base_args + RECALL_SUBCOMMAND + [bank, query, '-o', 'json', '--limit',
-        str(limit)]`` and parses the JSON stdout with :func:`parse_recall` (tag-first,
-        ``SOURCE:`` fallback). An empty result set is a normal outcome and returns
-        ``[]``; only a non-zero exit raises.
+        Builds ``base_args + RECALL_SUBCOMMAND + [bank, query, '-o', 'json']`` and
+        parses the JSON stdout with :func:`parse_recall` (tag-first, ``SOURCE:``
+        fallback). An
+        empty result set is a normal outcome and returns ``[]``; only a non-zero exit
+        raises.
+
+        VPS-confirmed: the installed ``hindsight-embed`` ``memory recall`` has **no**
+        ``--limit`` flag (it bounds output by ``--max-tokens``, default 4096), so the
+        ``limit`` is applied **client-side** -- the parsed, de-duped hits are truncated
+        to the first ``limit`` entries (first-seen order preserved by
+        :func:`parse_recall`).
 
         Args:
             query: The natural-language recall query.
-            limit: Maximum number of results to request from the CLI.
+            limit: Maximum number of hits to return (applied client-side after parsing).
 
         Returns:
-            The de-duplicated :class:`RecallHit` list (``[]`` when nothing matched).
+            The de-duplicated :class:`RecallHit` list, capped at ``limit`` (``[]`` when
+            nothing matched).
 
         Raises:
             HindsightError: if the CLI exits non-zero (permanent failures fail fast;
@@ -493,11 +505,9 @@ class Hindsight:
             query,
             "-o",
             "json",
-            "--limit",
-            str(limit),
         ]
         result = self._run_checked("recall", query, argv)
-        return parse_recall(result.stdout)
+        return parse_recall(result.stdout)[:limit]
 
     def forget(self, rel_path: str) -> None:
         """Best-effort drop of stale facts for a path; never raises on CLI failure.
