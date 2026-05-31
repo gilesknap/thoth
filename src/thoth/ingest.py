@@ -59,6 +59,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any, overload
 
+from thoth.analyse import AnalyseError, Analyser, Analysis
 from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.extract import ExtractError, Extractor, FetchedBinary
@@ -146,13 +147,25 @@ class CaptureKind(StrEnum):
     TEXT = "text"
 
 
+# The binary kinds whose bytes the analyse pass OCRs / extracts to enrich the body and
+# route by content (issue #42). Text/URL/audio already carry extracted text, so they are
+# never analysed -- their existing paths are unchanged.
+_ANALYSE_KINDS: frozenset[CaptureKind] = frozenset({CaptureKind.IMAGE, CaptureKind.PDF})
+
+
 @dataclass(frozen=True, slots=True)
 class Capture:
     """One inbound item to ingest: raw text, a URL, or a server-resolvable path.
 
-    Binary bytes never travel as base64 (SPEC section 6): an image/PDF/audio capture
-    carries a ``path`` the *server* can read (downloaded by the Slack/MCP layer to a tmp
-    file) or a ``url`` the server fetches itself.
+    Binary bytes never travel as base64 **as their stored/canonical form** (SPEC section
+    6): an image/PDF/audio capture carries a ``path`` the *server* can read (downloaded
+    by the Slack/MCP layer to a tmp file) or a ``url`` the server fetches itself, and
+    the bytes are saved as a real binary under ``raw/assets/`` (never as base64 into
+    the vault). The analyse pass (:mod:`thoth.analyse`, issue #42) may **transiently**
+    base64-encode those same bytes to send them to the vision/document API *for
+    analysis* -- a deliberate amendment to the storage rule recorded in ADR 0006: the
+    base64 lives only inside one request and is never persisted or treated as the source
+    of truth.
 
     Attributes:
         text: Inline text/markdown to capture, if any.
@@ -279,6 +292,7 @@ class Ingestor:
         *,
         schema_md: str | None = None,
         markers: MarkerStore | None = None,
+        analyser: Analyser | None = None,
     ) -> None:
         """Store the injected collaborators.
 
@@ -296,6 +310,11 @@ class Ingestor:
                 records a ``push`` marker so the daily heartbeat can report them
                 (issue #15). ``None`` (the default) disables marker recording, so
                 existing callers and tests are unaffected.
+            analyser: Optional :class:`~thoth.analyse.Analyser` for the vision/PDF
+                content-analysis pass (issue #42). When ``None`` (the default) one is
+                built lazily from the injected ``llm`` -- so it shares the same daily
+                budget guard -- and a test can inject a fake to drive analysis with no
+                real model call.
         """
         self._config = config
         self._vault = vault
@@ -305,6 +324,7 @@ class Ingestor:
         self._git = git
         self._schema_md = schema_md
         self._markers = markers
+        self._analyser = analyser if analyser is not None else Analyser(llm)
 
     def _record_marker(self, name: str) -> None:
         """Record a liveness marker (best-effort; never lets bookkeeping break ingest).
@@ -353,12 +373,15 @@ class Ingestor:
         self._orient()
         holding = self.persist_inbound(capture)
         try:
-            classification = self.classify(capture)
+            analysis = self.analyse(capture)
+            classification = self.classify(capture, analysis=analysis)
             raw = self.capture_raw(
                 capture, classification, prefetched=holding.prefetched
             )
             candidates = self.fetch_candidates(classification)
-            plan = self.curate(capture, classification, raw, candidates)
+            plan = self.curate(
+                capture, classification, raw, candidates, analysis=analysis
+            )
         except LLMUnavailableError as exc:
             return self._commit_deferred(holding, exc)
 
@@ -434,9 +457,80 @@ class Ingestor:
         except GitSyncError as exc:
             raise IngestError(f"vault pull failed before ingest: {exc}") from exc
 
+    # ---- pass 0c: analyse (vision/PDF content extraction, issue #42) -------------
+
+    def analyse(self, capture: Capture) -> Analysis | None:
+        """OCR/vision/PDF-analyse a binary capture so it is routed + curated by content.
+
+        For an image or PDF capture the bytes are sent to a multimodal model (a vision
+        ``image`` block or a ``document`` block) and the returned OCR/extracted text,
+        description, and routing hints feed :meth:`classify` (so a whiteboard photo is
+        routed to ``notes/`` by its content, not the ``memories/`` default) and
+        :meth:`curate` (so the page body holds the real meaning). The asset is still
+        saved as a real binary and embedded with ``![[...]]`` -- analysis only enriches
+        and routes (ADR 0006). Non-binary kinds (text/URL/audio already carry extracted
+        text) return ``None`` and their paths are unchanged.
+
+        The call goes through the injected :class:`~thoth.llm.LLM`, so it is charged
+        against the **same daily budget guard** as classify/curate (issue #16). Reusing
+        the decoupled-durability pattern, a *transport/availability* failure or a
+        budget-cap trip raises :class:`LLMUnavailableError` so the already-durable raw
+        asset is **deferred** (re-analysed on a later sweep) rather than lost -- exactly
+        like the classify/curate deferral. An *unparseable* analysis (a
+        :class:`~thoth.analyse.AnalyseError`) is non-fatal: the binary is filed without
+        enrichment (``None``) rather than aborting the capture.
+
+        Args:
+            capture: The inbound item.
+
+        Returns:
+            The :class:`~thoth.analyse.Analysis` for a binary capture, or ``None`` for a
+            non-binary kind (or when the analysis was unparseable).
+
+        Raises:
+            LLMUnavailableError: if the analyse model call is unavailable or the daily
+                budget cap is reached (treated as a deferral by :meth:`ingest`).
+            IngestError: on a failure to read the binary bytes.
+        """
+        kind = self._capture_kind(capture)
+        if kind not in _ANALYSE_KINDS:
+            return None
+        try:
+            image_bytes, ext = self._analyse_bytes(capture, kind)
+        except (ExtractError, OSError) as exc:
+            raise IngestError(f"analyse failed reading binary: {exc}") from exc
+        try:
+            if kind is CaptureKind.PDF:
+                return self._analyser.analyse_pdf(image_bytes)
+            return self._analyser.analyse_image(image_bytes, ext=ext)
+        except AnalyseError:
+            # An unparseable analysis must not lose the capture: file the binary blind
+            # (the prior behaviour) rather than abort. A later sweep can re-analyse.
+            return None
+        except BudgetExceededError as exc:
+            raise LLMUnavailableError(f"analyse deferred (budget cap): {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - any client failure defers (raw durable)
+            raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
+
+    def _analyse_bytes(self, capture: Capture, kind: CaptureKind) -> tuple[bytes, str]:
+        """Return the inbound binary's bytes and bare extension for the analyse pass.
+
+        Reads a server-resolvable ``path`` directly (the common Slack/MCP upload case)
+        or fetches a ``url`` binary server-side; the bytes are only *read* here, never
+        consumed, so the later :meth:`capture_raw` still stages the asset normally.
+        """
+        if capture.path is not None:
+            name = capture.filename or capture.path.name
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            return capture.path.read_bytes(), ext
+        fetched = self._extractor.fetch_binary(_require(capture.url, "url"))
+        return fetched.tmp_path.read_bytes(), fetched.suggested_ext
+
     # ---- pass 1: classify --------------------------------------------------------
 
-    def classify(self, capture: Capture) -> Classification:
+    def classify(
+        self, capture: Capture, *, analysis: Analysis | None = None
+    ) -> Classification:
         """Run the cheap classify call and validate its routing output.
 
         One LLM call returns a JSON object with ``type``/``slug``/``title`` plus any
@@ -444,8 +538,15 @@ class Ingestor:
         :class:`~thoth.vault.Vault` here, so a bad routing decision is rejected before
         any disk is touched.
 
+        When ``analysis`` is supplied (a binary capture the analyse pass enriched, issue
+        #42), the OCR'd/extracted content is folded into the prompt **and** the model's
+        named entities/concepts are unioned with the analysis hints, so the item is
+        routed *by its content* -- a whiteboard photo lands in ``notes/``, not the
+        ``memories/`` default -- and the candidate fetch sees the analysed terms.
+
         Args:
             capture: The inbound item to classify.
+            analysis: Optional content analysis of a binary capture (image/PDF).
 
         Returns:
             The validated :class:`Classification`.
@@ -454,7 +555,7 @@ class Ingestor:
             IngestError: if the model output is unparseable or names an
                 out-of-vocabulary type or an invalid slug.
         """
-        prompt = self._classify_prompt(capture)
+        prompt = self._classify_prompt(capture, analysis=analysis)
         try:
             response = self._llm.complete([Message(role="user", content=prompt)])
         except Exception as exc:  # noqa: BLE001 - any client failure aborts classify
@@ -481,13 +582,44 @@ class Ingestor:
         title = obj.get("title")
         if not isinstance(title, str) or not title.strip():
             title = slug.replace("-", " ").title()
+
+        page_type = self._route_by_analysis(page_type, analysis)
+        entities = _str_list(obj.get("entities"))
+        concepts = _str_list(obj.get("concepts"))
+        if analysis is not None:
+            entities = _merge_terms(entities, analysis.entities)
+            concepts = _merge_terms(concepts, analysis.concepts)
         return Classification(
             page_type=page_type,
             slug=slug,
             title=title,
-            entities=_str_list(obj.get("entities")),
-            concepts=_str_list(obj.get("concepts")),
+            entities=entities,
+            concepts=concepts,
         )
+
+    @staticmethod
+    def _route_by_analysis(page_type: str, analysis: Analysis | None) -> str:
+        """Promote a generic ``memory`` routing to the analysed content type.
+
+        The blind classifier defaults a binary capture to ``memory`` (the only thing it
+        can guess from a filename). When the analyse pass extracted real content and
+        suggested a knowledge type (``entity``/``note``/``action``), honour that hint so
+        the capture is routed by its content rather than landing in ``memories/`` by
+        default (issue #42). A model that already chose a non-``memory`` type is
+        trusted; an analysis suggesting ``memory`` (a personal snapshot) never overrides
+        a more specific model choice.
+        """
+        if analysis is None:
+            return page_type
+        suggested = analysis.suggested_type
+        if (
+            page_type == "memory"
+            and suggested is not None
+            and suggested in VALID_TYPES
+            and suggested != "memory"
+        ):
+            return suggested
+        return page_type
 
     # ---- pass 2: capture raw -----------------------------------------------------
 
@@ -588,6 +720,8 @@ class Ingestor:
         cls: Classification,
         raw: RawCaptureResult,
         candidates: list[str],
+        *,
+        analysis: Analysis | None = None,
     ) -> dict[str, Any]:
         """Run the curate call, validate the file-plan, and write every page.
 
@@ -598,11 +732,17 @@ class Ingestor:
         tries to escape the vault root or violates the contract is rejected and nothing
         is written for the offending page.
 
+        When ``analysis`` is supplied (a binary capture, issue #42), the OCR'd/extracted
+        text + description are given to the model so the curated page **body holds the
+        real meaning** of the asset (and cross-links it), instead of a blind stub around
+        the ``![[asset]]`` embed.
+
         Args:
             capture: The inbound item (for context).
             cls: The validated classification.
             raw: The raw-capture result (its path/embeds are offered to the model).
             candidates: Existing candidate page paths.
+            analysis: Optional content analysis of a binary capture (image/PDF).
 
         Returns:
             The validated file-plan object (with a private list of written page paths
@@ -612,7 +752,7 @@ class Ingestor:
             IngestError: if the model output is unparseable, the plan fails validation,
                 or a vault write rejects a page.
         """
-        prompt = self._curate_prompt(capture, cls, raw, candidates)
+        prompt = self._curate_prompt(capture, cls, raw, candidates, analysis=analysis)
         messages: list[Message] = [Message(role="user", content=prompt)]
         problems = ""
         for attempt in range(_CURATE_ATTEMPTS):
@@ -641,7 +781,11 @@ class Ingestor:
             pages = plan.get("pages")
             assert isinstance(pages, list)  # guaranteed by validate_file_plan
             for page in pages:
-                written.append(self._write_planned_page(page, capture.source, raw))
+                written.append(
+                    self._write_planned_page(
+                        page, capture.source, raw, analysis=analysis
+                    )
+                )
             plan["_written"] = written
             return plan
         # Unreachable: the loop either returns a written plan or re-raises on the last
@@ -988,13 +1132,20 @@ class Ingestor:
     # ---- internals: curate -------------------------------------------------------
 
     def _write_planned_page(
-        self, page: dict[str, Any], source: str, raw: RawCaptureResult
+        self,
+        page: dict[str, Any],
+        source: str,
+        raw: RawCaptureResult,
+        *,
+        analysis: Analysis | None = None,
     ) -> str:
         """Write one validated file-plan page through the confined vault helper.
 
         ``write_page`` re-validates the folder/type/slug contract and confines the path,
         so a plan that slipped a bad folder or an escaping slug past the schema check is
-        still rejected here.
+        still rejected here. For a binary capture the asset's analysed OCR/extracted
+        text is ensured present in the body (issue #42) so the page is searchable on the
+        real content even if the model's body did not transcribe it.
         """
         folder = page["folder"]
         slug = page["slug"]
@@ -1002,12 +1153,31 @@ class Ingestor:
         frontmatter.setdefault("source", source)
         body = page["body"]
         body = self._append_embeds(body, page, raw)
+        body = self._ensure_analysis_text(body, raw, analysis)
         try:
             return self._vault.write_page(folder, slug, frontmatter, body)
         except (SchemaError, SlugError, VaultError) as exc:
             raise IngestError(
                 f"vault rejected planned page {folder}/{slug}: {exc}"
             ) from exc
+
+    @staticmethod
+    def _ensure_analysis_text(
+        body: str, raw: RawCaptureResult, analysis: Analysis | None
+    ) -> str:
+        """Append the analysed OCR/extracted text to an asset-bearing page if absent.
+
+        Only the page(s) carrying the saved asset get the extracted text, so a
+        multi-page plan does not duplicate the transcript onto unrelated pages. The text
+        is appended only when the model's body does not already contain it (the model
+        may have transcribed it itself), so there is no double-paste.
+        """
+        if analysis is None or not raw.asset_paths or not analysis.text.strip():
+            return body
+        ocr = analysis.text.strip()
+        if ocr in body:
+            return body
+        return body.rstrip("\n") + "\n\n## Extracted text\n\n" + ocr
 
     @staticmethod
     def _append_embeds(body: str, page: dict[str, Any], raw: RawCaptureResult) -> str:
@@ -1289,15 +1459,18 @@ class Ingestor:
 
     # ---- prompt builders ---------------------------------------------------------
 
-    def _classify_prompt(self, capture: Capture) -> str:
+    def _classify_prompt(
+        self, capture: Capture, *, analysis: Analysis | None = None
+    ) -> str:
         """Build the cheap classify-call prompt from the capture.
 
         The legal ``type`` enumeration is derived from
         :data:`thoth.vault.TYPE_ENUMERATION` (the canonical vocabulary, issue #19),
         not restated here, so a type added to the vault contract is offered to the
-        classifier automatically and the two cannot diverge.
+        classifier automatically and the two cannot diverge. A binary capture's analysis
+        (issue #42) is folded in so the model classifies by the asset's real content.
         """
-        what = self._capture_summary(capture)
+        what = self._capture_summary(capture, analysis=analysis)
         type_list = ", ".join(TYPE_ENUMERATION)
         return (
             "Classify this captured item for a personal knowledge vault. Return ONLY a "
@@ -1315,6 +1488,8 @@ class Ingestor:
         cls: Classification,
         raw: RawCaptureResult,
         candidates: list[str],
+        *,
+        analysis: Analysis | None = None,
     ) -> str:
         """Build the curate-call prompt (the file-plan contract + classification + raw).
 
@@ -1322,7 +1497,9 @@ class Ingestor:
         :func:`thoth.llm.file_plan_contract_text` (rendered from the same constants the
         validator enforces). Spelling out the JSON shape and enums here is what makes
         the model return a *valid* plan: with only a vague "return a file plan"
-        instruction the model guessed the envelope and every capture was rejected.
+        instruction the model guessed the envelope and every capture was rejected. A
+        binary capture's analysis (issue #42) is included so the curated body holds the
+        asset's real OCR'd/extracted content.
         """
         candidate_block = "\n".join(f"- {path}" for path in candidates) or "(none)"
         raw_block = raw.raw_path or "(no raw page)"
@@ -1335,12 +1512,18 @@ class Ingestor:
             f"Raw source page: {raw_block}\n"
             f"Saved assets (embed with ![[name]]): {asset_block}\n"
             f"Existing candidate pages to maybe update:\n{candidate_block}\n\n"
-            f"Captured item:\n{self._capture_summary(capture)}"
+            f"Captured item:\n{self._capture_summary(capture, analysis=analysis)}"
         )
 
     @staticmethod
-    def _capture_summary(capture: Capture) -> str:
-        """Render a compact textual summary of the capture for a prompt."""
+    def _capture_summary(capture: Capture, *, analysis: Analysis | None = None) -> str:
+        """Render a compact textual summary of the capture for a prompt.
+
+        For a binary capture the analysis (issue #42) is appended so the model sees the
+        asset's OCR'd/extracted content, description, and routing hints -- the load-
+        bearing fix: previously a binary reached the model as a bare ``File: name`` line
+        and was filed blind.
+        """
         parts: list[str] = []
         if capture.url is not None:
             parts.append(f"URL: {capture.url}")
@@ -1348,7 +1531,10 @@ class Ingestor:
             parts.append(f"File: {capture.filename or capture.path.name}")
         if capture.text is not None:
             parts.append(f"Text: {capture.text}")
-        return "\n".join(parts) or "(empty capture)"
+        summary = "\n".join(parts) or "(empty capture)"
+        if analysis is not None and not analysis.is_empty():
+            summary += "\n\n" + _analysis_summary(analysis)
+        return summary
 
     # ---- shared parse helper -----------------------------------------------------
 
@@ -1407,6 +1593,39 @@ def _str_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _merge_terms(primary: list[str], extra: list[str]) -> list[str]:
+    """Union two term lists, order-preserving and case-insensitively de-duplicated.
+
+    The model's own classify terms come first (so they drive the candidate fetch order),
+    then any analysed entities/concepts not already present (issue #42).
+    """
+    seen = {term.lower() for term in primary}
+    merged = list(primary)
+    for term in extra:
+        if term.lower() not in seen:
+            merged.append(term)
+            seen.add(term.lower())
+    return merged
+
+
+def _analysis_summary(analysis: Analysis) -> str:
+    """Render a binary's analysis as a prompt block (content + routing hints)."""
+    lines: list[str] = ["Content analysis of the attached binary:"]
+    if analysis.summary.strip():
+        lines.append(f"Summary: {analysis.summary.strip()}")
+    if analysis.description.strip():
+        lines.append(f"Description: {analysis.description.strip()}")
+    if analysis.text.strip():
+        lines.append(f"Extracted text:\n{analysis.text.strip()}")
+    if analysis.suggested_type:
+        lines.append(f"Suggested type: {analysis.suggested_type}")
+    if analysis.entities:
+        lines.append(f"Entities: {', '.join(analysis.entities)}")
+    if analysis.concepts:
+        lines.append(f"Concepts: {', '.join(analysis.concepts)}")
+    return "\n".join(lines)
 
 
 def _require(value: Any, field_name: str) -> Any:
