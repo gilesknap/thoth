@@ -48,6 +48,7 @@ module is always import-safe under pytest collection.
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import time
@@ -72,6 +73,8 @@ from thoth.research import (
     force_web_requested,
 )
 from thoth.state import EventStore
+
+logger = logging.getLogger(__name__)
 
 DEDUPE_TTL_SECONDS: float = 3600.0
 """Prune processed-event ids older than one hour (SPEC section 10)."""
@@ -733,6 +736,9 @@ class Handlers:
         otherwise.
         """
         route = self._free_text_route(text)
+        # Concise operator-readable line (issue #52): the engine bare free text was
+        # routed to (capture / query / ask), so a misroute is visible in the log.
+        logger.info("slack routed free text to %s", route)
         if route == "capture":
             capture = Capture(text=text, source=source)
             self._do_ingest(capture, responder, hint=_GATE_CAPTURE_HINT)

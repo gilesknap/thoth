@@ -102,6 +102,23 @@ def test_classify_parses_each_intent(config: Config, intent: str) -> None:
     assert decision.confidence == "high"
 
 
+def test_classify_logs_routing_decision(
+    config: Config, caplog: pytest.LogCaptureFixture
+) -> None:
+    """classify emits one concise INFO line: intent, confidence + route (issue #52)."""
+    classifier, _ = _classifier(
+        config, text='{"intent": "capture", "confidence": "high"}'
+    )
+    with caplog.at_level("INFO", logger="thoth.intent"):
+        classifier.classify("remind me to call the dentist")
+    records = [r for r in caplog.records if "intent routed:" in r.getMessage()]
+    assert len(records) == 1
+    msg = records[0].getMessage()
+    assert "capture" in msg
+    assert "high" in msg
+    assert "-> capture" in msg
+
+
 def test_classify_parses_a_fenced_json_block(config: Config) -> None:
     """A ```json fenced verdict is parsed too (parse_json_block strips the fence)."""
     classifier, _ = _classifier(

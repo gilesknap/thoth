@@ -616,6 +616,25 @@ def test_intent_gate_routes_ask_to_blended(config: Config) -> None:
     assert "Save this answer" in say.messages[0]
 
 
+def test_handle_message_logs_free_text_route(
+    config: Config, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A bare free-text message logs the engine it was routed to (issue #52)."""
+    research = FakeResearch()
+    gate = FakeIntentClassifier(intent="query", confidence="high")
+    handlers, _, _ = _handlers(config, research=research, intent_classifier=gate)
+    say = Recorder()
+    with caplog.at_level("INFO", logger="thoth.slack_app"):
+        handlers.handle_message(
+            {"user": ALLOWED, "text": "what did I save about exa?", "ts": "5.2b"}, say
+        )
+    records = [
+        r for r in caplog.records if "slack routed free text to" in r.getMessage()
+    ]
+    assert len(records) == 1
+    assert "query" in records[0].getMessage()
+
+
 def test_intent_gate_capture_with_no_research_still_files(config: Config) -> None:
     """A 'capture' verdict files even when no research engine is wired."""
     gate = FakeIntentClassifier(intent="capture", confidence="high")

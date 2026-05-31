@@ -22,6 +22,9 @@ Documented defaults (the single source of truth):
 * ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME` (``~/.thoth``).
 * ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
   (``claude-sonnet-4-6``).
+* ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``); the daemon
+  entrypoint passes it to :func:`logging.basicConfig` so the appliance is no longer
+  silent on the happy path (issue #52).
 * ``SLACK_ALERT_CHANNEL`` is the unattended error/heartbeat alert target (issue #15);
   when unset, :meth:`Config.alert_target` falls back to the first
   ``SLACK_ALLOWED_USERS`` id as a DM target.
@@ -42,6 +45,14 @@ DEFAULT_OBSIDIAN_VAULT_NAME: str = "pkm-vault"
 
 DEFAULT_ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
 """Default Anthropic model id (the dated fallback id belongs to ``llm.py``)."""
+
+DEFAULT_LOG_LEVEL: str = "INFO"
+"""Default logging level (issue #52); ``THOTH_LOG_LEVEL`` overrides it at the daemon.
+
+Honoured once at process start by :func:`logging.basicConfig` in the daemon entrypoint,
+so the concise per-operation success lines (ingest/query/research/intent) are visible
+without code changes; set ``THOTH_LOG_LEVEL=DEBUG`` for more, ``WARNING`` for less.
+"""
 
 DEFAULT_THOTH_HOME: Path = Path.home() / ".thoth"
 """Default ``~/.thoth`` home, computed at import time (tests monkeypatch ``HOME``)."""
@@ -69,6 +80,7 @@ class Config:
     vault_path: Path
     vault_name: str
     thoth_home: Path
+    log_level: str
     anthropic_api_key: str | None
     anthropic_model: str
     slack_bot_token: str | None
@@ -255,6 +267,7 @@ def load_config(
         vault_path=_resolve_path(vault_raw),
         vault_name=lookup("OBSIDIAN_VAULT_NAME") or DEFAULT_OBSIDIAN_VAULT_NAME,
         thoth_home=thoth_home,
+        log_level=lookup("THOTH_LOG_LEVEL") or DEFAULT_LOG_LEVEL,
         anthropic_api_key=lookup("ANTHROPIC_API_KEY"),
         anthropic_model=lookup("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL,
         slack_bot_token=lookup("SLACK_BOT_TOKEN"),

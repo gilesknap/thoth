@@ -11,6 +11,7 @@ import pytest
 from thoth.config import (
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_DAILY_LLM_BUDGET,
+    DEFAULT_LOG_LEVEL,
     DEFAULT_OBSIDIAN_VAULT_NAME,
     Config,
     ConfigError,
@@ -53,6 +54,7 @@ def test_happy_path_minimal() -> None:
     assert cfg.firecrawl_api_key is None
     assert cfg.gemini_api_key is None
     assert cfg.daily_llm_budget == DEFAULT_DAILY_LLM_BUDGET == 200
+    assert cfg.log_level == DEFAULT_LOG_LEVEL == "INFO"
 
 
 def test_all_fields_populated() -> None:
@@ -72,6 +74,7 @@ def test_all_fields_populated() -> None:
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
         "THOTH_DAILY_LLM_BUDGET": "50",
+        "THOTH_LOG_LEVEL": "DEBUG",
     }
     cfg = load_config(env)
     assert cfg.vault_path == Path("/opt/pkm-vault")
@@ -88,6 +91,7 @@ def test_all_fields_populated() -> None:
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
     assert cfg.daily_llm_budget == 50
+    assert cfg.log_level == "DEBUG"
 
 
 def test_daily_llm_budget_rejects_non_integer() -> None:
@@ -100,6 +104,19 @@ def test_daily_llm_budget_zero_disables(tmp_path: Path) -> None:
     """A zero/negative budget is honoured verbatim (it disables the guard)."""
     cfg = load_config({"PKM_VAULT": "/x", "THOTH_DAILY_LLM_BUDGET": "0"})
     assert cfg.daily_llm_budget == 0
+
+
+def test_log_level_defaults_and_override() -> None:
+    """THOTH_LOG_LEVEL defaults to INFO and an explicit value wins (issue #52)."""
+    assert load_config({"PKM_VAULT": "/x"}).log_level == "INFO"
+    override = load_config({"PKM_VAULT": "/x", "THOTH_LOG_LEVEL": "DEBUG"})
+    assert override.log_level == "DEBUG"
+
+
+def test_log_level_empty_falls_back_to_default() -> None:
+    """An empty THOTH_LOG_LEVEL falls back to the documented default (issue #52)."""
+    cfg = load_config({"PKM_VAULT": "/x", "THOTH_LOG_LEVEL": ""})
+    assert cfg.log_level == DEFAULT_LOG_LEVEL == "INFO"
 
 
 def test_require_slack_summary_channel() -> None:

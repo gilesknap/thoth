@@ -375,6 +375,27 @@ def test_ask_vault_only_no_tool_use_never_touches_web(
     assert result.answer == "Your PMC is the motor-control coordinator."
 
 
+def test_ask_logs_success_line(
+    config: Config,
+    vault: Vault,
+    query_engine: QueryEngine,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ask() emits one concise INFO line with vault/web counts + ms (issue #52)."""
+    extractor = _FakeExtractor()
+    responses = [_text_response("Your PMC is the motor-control coordinator.")]
+    engine = _engine(config, vault, query_engine, extractor, responses)
+    with caplog.at_level("INFO", logger="thoth.research"):
+        engine.ask("what is the program motion controller")
+    records = [r for r in caplog.records if "ask answered:" in r.getMessage()]
+    assert len(records) == 1
+    msg = records[0].getMessage()
+    assert "vault=" in msg
+    assert "web=" in msg
+    assert "used_web=" in msg
+    assert "ms" in msg
+
+
 def test_ask_vault_only_offers_only_vault_read_tool(
     config: Config, vault: Vault, query_engine: QueryEngine
 ) -> None:

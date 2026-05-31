@@ -30,6 +30,8 @@ lazily), so importing this module at pytest collection is always CI-safe.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -60,6 +62,8 @@ __all__ = [
     "force_web_requested",
     "strip_research_prefix",
 ]
+
+logger = logging.getLogger(__name__)
 
 RESEARCH_PREFIX: str = "research:"
 """Leading marker (case-insensitive) on a question that forces the web tools on."""
@@ -293,6 +297,7 @@ class ResearchEngine:
         Raises:
             ResearchError: only when the model produces an empty/blank final answer.
         """
+        started = time.monotonic()
         allow_web = force_web_requested(question, force_web=force_web)
         clean_question = strip_research_prefix(question)
         candidates = self._vault_candidates(clean_question, max_pages=max_pages)
@@ -307,6 +312,16 @@ class ResearchEngine:
         web_citations = [
             WebCitation(url=url, title=title) for url, title in loop.read_web_urls
         ]
+        # Concise operator-readable success line (issue #52): grep-friendly "ask
+        # answered:" with the vault/web citation counts, whether the web tools were
+        # used, and the wall-clock duration so the blended-ask happy path is not silent.
+        logger.info(
+            "ask answered: vault=%d web=%d used_web=%s in %.0fms",
+            len(vault_citations),
+            len(web_citations),
+            loop.used_web,
+            (time.monotonic() - started) * 1000,
+        )
         return AskResult(
             answer=answer.strip(),
             vault_citations=vault_citations,

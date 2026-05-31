@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -204,6 +205,7 @@ class QueryEngine:
         if max_pages < 1:
             raise QueryError("max_pages must be at least 1")
 
+        started = time.monotonic()
         ordered: list[str] = []
         seen: set[str] = set()
         recall_only: set[str] = set()
@@ -242,8 +244,15 @@ class QueryEngine:
         # Recall "contributed" only if a recall-only page is in the *used* subset (so a
         # consulted-but-unused recall page no longer counts as recall having helped).
         used_recall = any(c.path in recall_only for c in used)
+        # Concise operator-readable success line (issue #52): grep-friendly "query
+        # answered:" with the consulted/cited counts, whether the recall pass helped,
+        # and the wall-clock duration so the happy path is no longer silent.
         logger.info(
-            "query consulted %d pages, model used %d", len(consulted), len(used)
+            "query answered: consulted=%d cited=%d recall=%s in %.0fms",
+            len(consulted),
+            len(used),
+            used_recall,
+            (time.monotonic() - started) * 1000,
         )
         return QueryResult(
             answer=answer,

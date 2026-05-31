@@ -514,6 +514,20 @@ def test_answer_acronym_hits_grep_and_cites_real_page(engine: QueryEngine) -> No
         assert engine.build_citation(citation.path).path == citation.path
 
 
+def test_answer_logs_success_line(
+    engine: QueryEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """answer() emits one concise INFO line with consulted/cited counts + ms (#52)."""
+    with caplog.at_level("INFO", logger="thoth.query"):
+        engine.answer("program-motion-controller", max_pages=2)
+    records = [r for r in caplog.records if "query answered:" in r.getMessage()]
+    assert len(records) == 1
+    msg = records[0].getMessage()
+    assert "consulted=" in msg
+    assert "cited=" in msg
+    assert "ms" in msg
+
+
 def test_answer_structural_path_does_not_use_recall(
     engine: QueryEngine, hindsight: _FakeHindsight
 ) -> None:

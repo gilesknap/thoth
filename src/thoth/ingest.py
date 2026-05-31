@@ -53,7 +53,9 @@ collection is always safe (the heavy clients live behind the injected seams).
 from __future__ import annotations
 
 import hashlib
+import logging
 import tempfile
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -95,6 +97,8 @@ __all__ = [
     "LLMUnavailableError",
     "RawCaptureResult",
 ]
+
+logger = logging.getLogger(__name__)
 
 # Folders scanned by the read-only create-vs-update candidate search (reference layer).
 _CANDIDATE_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
@@ -398,6 +402,7 @@ class Ingestor:
             IngestError: on an extraction, validation, or non-conflict git failure (an
                 LLM-availability failure is reported as deferred, not raised).
         """
+        started = time.monotonic()
         self._orient()
         holding = self.persist_inbound(capture)
         analysed = _Analysed(analysis=None)
@@ -420,6 +425,16 @@ class Ingestor:
             # consumed the analyse-pass binary, so clean up its temp file here rather
             # than leak it (the inbound item is already durable in inbox/).
             _cleanup_fetched(analysed.fetched)
+            # Concise operator-readable line (issue #52): a deferral is a partial
+            # success (the raw item is durable in inbox/), so say so clearly rather than
+            # leaving the degraded path silent. Grep-friendly prefix.
+            held = holding.result.raw_path or "inbox"
+            logger.info(
+                "ingest deferred: held %s (LLM unavailable: %s) in %.0fms",
+                held,
+                exc,
+                (time.monotonic() - started) * 1000,
+            )
             return self._commit_deferred(holding, exc)
 
         # Curation succeeded: the holding page is superseded by the curated/raw pages.
@@ -438,6 +453,18 @@ class Ingestor:
         # _commit on an actual push.
         if not committed.conflict:
             self._record_marker(MARKER_CAPTURE)
+        # Concise operator-readable success line (issue #52): one terse, grep-friendly
+        # "ingest filed:" naming the curated path(s), the routed page_type, the page
+        # tags, and the wall-clock duration, so a successful capture is no longer silent
+        # on the happy path. A conflict is already surfaced via the report.
+        logger.info(
+            "ingest filed: %s type=%s tags=%s in %.0fms%s",
+            ", ".join(page_paths) or "(no curated page)",
+            classification.page_type,
+            self._page_tags(page_paths),
+            (time.monotonic() - started) * 1000,
+            " [CONFLICT: unpushed]" if committed.conflict else "",
+        )
         return committed
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
@@ -1312,6 +1339,27 @@ class Ingestor:
         """Return the page paths written by :meth:`curate` (the ``_written`` key)."""
         written = plan.get("_written")
         return list(written) if isinstance(written, list) else []
+
+    def _page_tags(self, page_paths: list[str]) -> list[str]:
+        """Collect the curated pages' frontmatter tags for the success log (issue #52).
+
+        Reads each curated page's ``tags`` and returns the de-duplicated, order-preserving
+        union; an unreadable page or a missing/ill-typed ``tags`` value is skipped so the
+        observability line never raises or blocks an otherwise-successful ingest.
+        """
+        seen: list[str] = []
+        for path in page_paths:
+            try:
+                page = self._vault.read_page(path)
+            except VaultError:
+                continue
+            tags = page.frontmatter.get("tags")
+            if not isinstance(tags, list):
+                continue
+            for tag in tags:
+                if isinstance(tag, str) and tag and tag not in seen:
+                    seen.append(tag)
+        return seen
 
     # ---- pass 5: navigation ------------------------------------------------------
 

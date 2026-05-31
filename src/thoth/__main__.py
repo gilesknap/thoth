@@ -24,6 +24,7 @@ functions so a test can substitute a fake for the entrypoint that would otherwis
 
 from __future__ import annotations
 
+import logging
 from argparse import ArgumentParser, Namespace
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -33,6 +34,8 @@ from . import __version__
 from .config import Config, load_config
 
 __all__ = ["main", "build_parser"]
+
+logger = logging.getLogger("thoth")
 
 
 def build_parser() -> ArgumentParser:
@@ -114,7 +117,28 @@ def main(args: Sequence[str] | None = None) -> None:
         parser.print_help()
         return
     config = load_config()
+    _configure_logging(config)
     _dispatch(command, namespace, config)
+
+
+def _configure_logging(config: Config) -> None:
+    """Configure root logging once at daemon start, honouring ``THOTH_LOG_LEVEL``.
+
+    The appliance was silent on the happy path (issue #52): the per-operation success
+    lines emitted by ingest/query/research/intent only surface once the root logger has
+    a handler. This calls :func:`logging.basicConfig` with the configured level (default
+    ``INFO``) so a long-running daemon (``thoth slack``/``mcp``) and the cron entrypoints
+    print concise operator-readable progress. An unknown level name falls back to
+    ``INFO`` rather than raising, so a typo in ``THOTH_LOG_LEVEL`` never blocks boot.
+    """
+    level = logging.getLevelName(config.log_level.upper())
+    if not isinstance(level, int):
+        level = logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logger.info("thoth %s starting (log level %s)", __version__, config.log_level)
 
 
 def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
