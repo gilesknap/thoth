@@ -67,7 +67,8 @@ class AnalyseError(Exception):
 
     A *transport/availability* failure (the client raising, or the budget guard
     tripping) is deliberately **not** wrapped here: those propagate unchanged so the
-    ingest pass can treat them as a deferral (raw already durable), like classify/curate.
+    ingest pass can treat them as a deferral (raw already durable), like the
+    classify/curate calls.
     """
 
 
@@ -242,7 +243,7 @@ def analyse_pdf_path(analyser: Analyser, path: Path) -> Analysis:
 
 
 _RESULT_SHAPE = (
-    'Return ONLY a single JSON object (no prose) of this exact shape:\n'
+    "Return ONLY a single JSON object (no prose) of this exact shape:\n"
     "{\n"
     '  "text": "the legible/extracted text, verbatim (empty string if none)",\n'
     '  "description": "a structured description of the content",\n'

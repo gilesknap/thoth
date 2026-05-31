@@ -248,6 +248,24 @@ class _Holding:
 
 
 @dataclass(frozen=True, slots=True)
+class _Analysed:
+    """The analyse pass's output plus any URL binary it fetched, for one-fetch reuse.
+
+    Attributes:
+        analysis: The :class:`~thoth.analyse.Analysis` (or ``None`` for a non-binary
+            kind, or an unparseable analysis filed blind).
+        fetched: The :class:`~thoth.extract.FetchedBinary` the analyse pass downloaded
+            for a URL image/PDF, threaded into :meth:`Ingestor.capture_raw` so the same
+            bytes are reused for the asset write -- no second network download and no
+            leaked temp file. ``None`` for a local-``path`` capture (no fetch happened)
+            or a non-binary kind.
+    """
+
+    analysis: Analysis | None
+    fetched: FetchedBinary | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IngestReport:
     """Structured outcome the Slack/MCP layer renders (SPEC step 8).
 
@@ -372,17 +390,26 @@ class Ingestor:
         """
         self._orient()
         holding = self.persist_inbound(capture)
+        analysed = _Analysed(analysis=None)
         try:
-            analysis = self.analyse(capture)
+            analysed = self.analyse(capture)
+            analysis = analysed.analysis
             classification = self.classify(capture, analysis=analysis)
             raw = self.capture_raw(
-                capture, classification, prefetched=holding.prefetched
+                capture,
+                classification,
+                prefetched=holding.prefetched,
+                fetched=analysed.fetched,
             )
             candidates = self.fetch_candidates(classification)
             plan = self.curate(
                 capture, classification, raw, candidates, analysis=analysis
             )
         except LLMUnavailableError as exc:
+            # classify/curate (or the analyse call itself) deferred: capture_raw never
+            # consumed the analyse-pass binary, so clean up its temp file here rather
+            # than leak it (the inbound item is already durable in inbox/).
+            _cleanup_fetched(analysed.fetched)
             return self._commit_deferred(holding, exc)
 
         # Curation succeeded: the holding page is superseded by the curated/raw pages.
@@ -459,7 +486,7 @@ class Ingestor:
 
     # ---- pass 0c: analyse (vision/PDF content extraction, issue #42) -------------
 
-    def analyse(self, capture: Capture) -> Analysis | None:
+    def analyse(self, capture: Capture) -> _Analysed:
         """OCR/vision/PDF-analyse a binary capture so it is routed + curated by content.
 
         For an image or PDF capture the bytes are sent to a multimodal model (a vision
@@ -484,8 +511,11 @@ class Ingestor:
             capture: The inbound item.
 
         Returns:
-            The :class:`~thoth.analyse.Analysis` for a binary capture, or ``None`` for a
-            non-binary kind (or when the analysis was unparseable).
+            An :class:`_Analysed` carrying the :class:`~thoth.analyse.Analysis` for a
+            binary capture (``None`` for a non-binary kind, or when the analysis was
+            unparseable) plus -- for a URL binary -- the single
+            :class:`~thoth.extract.FetchedBinary` it downloaded, so :meth:`capture_raw`
+            reuses the same bytes for the asset write instead of fetching a second time.
 
         Raises:
             LLMUnavailableError: if the analyse model call is unavailable or the daily
@@ -494,37 +524,49 @@ class Ingestor:
         """
         kind = self._capture_kind(capture)
         if kind not in _ANALYSE_KINDS:
-            return None
+            return _Analysed(analysis=None)
         try:
-            image_bytes, ext = self._analyse_bytes(capture, kind)
+            image_bytes, ext, fetched = self._analyse_bytes(capture, kind)
         except (ExtractError, OSError) as exc:
             raise IngestError(f"analyse failed reading binary: {exc}") from exc
         try:
             if kind is CaptureKind.PDF:
-                return self._analyser.analyse_pdf(image_bytes)
-            return self._analyser.analyse_image(image_bytes, ext=ext)
+                analysis: Analysis | None = self._analyser.analyse_pdf(image_bytes)
+            else:
+                analysis = self._analyser.analyse_image(image_bytes, ext=ext)
         except AnalyseError:
             # An unparseable analysis must not lose the capture: file the binary blind
-            # (the prior behaviour) rather than abort. A later sweep can re-analyse.
-            return None
+            # (the prior behaviour) rather than abort. The fetched binary is still
+            # threaded forward so capture_raw reuses (and cleans up) it.
+            analysis = None
         except BudgetExceededError as exc:
+            # The capture defers, so capture_raw will not consume the fetched binary --
+            # clean it up here rather than leak it.
+            _cleanup_fetched(fetched)
             raise LLMUnavailableError(f"analyse deferred (budget cap): {exc}") from exc
         except Exception as exc:  # noqa: BLE001 - any client failure defers (raw durable)
+            _cleanup_fetched(fetched)
             raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
+        return _Analysed(analysis=analysis, fetched=fetched)
 
-    def _analyse_bytes(self, capture: Capture, kind: CaptureKind) -> tuple[bytes, str]:
-        """Return the inbound binary's bytes and bare extension for the analyse pass.
+    def _analyse_bytes(
+        self, capture: Capture, kind: CaptureKind
+    ) -> tuple[bytes, str, FetchedBinary | None]:
+        """Return the inbound binary's bytes, bare extension, and any fetched binary.
 
-        Reads a server-resolvable ``path`` directly (the common Slack/MCP upload case)
-        or fetches a ``url`` binary server-side; the bytes are only *read* here, never
-        consumed, so the later :meth:`capture_raw` still stages the asset normally.
+        Reads a server-resolvable ``path`` directly (the common Slack/MCP upload case,
+        which returns ``fetched=None``) or fetches a ``url`` binary server-side
+        **once**; the returned :class:`~thoth.extract.FetchedBinary` is threaded forward
+        so :meth:`capture_raw` reuses the same staged bytes for the asset write -- no
+        second network download and no leaked temp file (the staged tmp is consumed and
+        cleaned by the asset store).
         """
         if capture.path is not None:
             name = capture.filename or capture.path.name
             ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-            return capture.path.read_bytes(), ext
+            return capture.path.read_bytes(), ext, None
         fetched = self._extractor.fetch_binary(_require(capture.url, "url"))
-        return fetched.tmp_path.read_bytes(), fetched.suggested_ext
+        return fetched.tmp_path.read_bytes(), fetched.suggested_ext, fetched
 
     # ---- pass 1: classify --------------------------------------------------------
 
@@ -629,6 +671,7 @@ class Ingestor:
         cls: Classification,
         *,
         prefetched: _Prefetched | None = None,
+        fetched: FetchedBinary | None = None,
     ) -> RawCaptureResult:
         """Extract the immutable source and write it under ``raw/`` (idempotent).
 
@@ -642,15 +685,20 @@ class Ingestor:
 
         When ``prefetched`` is supplied (the text extracted by :meth:`persist_inbound`
         before classify), the text-bearing kinds reuse it instead of re-fetching, so a
-        URL/audio source is fetched/transcribed exactly once per ingest; binary kinds
-        ignore it (they save the binary fresh under the classified slug). Calling this
-        directly with no ``prefetched`` re-extracts, the standalone behaviour.
+        URL/audio source is fetched/transcribed exactly once per ingest. When
+        ``fetched`` is supplied (a URL image/PDF the analyse pass already downloaded),
+        the binary kinds reuse those staged bytes instead of fetching a second time, so
+        a URL binary is downloaded exactly once per ingest and its temp file is never
+        leaked. Calling this directly with neither re-extracts/re-fetches, the
+        standalone behaviour.
 
         Args:
             capture: The inbound item.
             cls: Its validated classification (supplies the raw slug).
             prefetched: Text already extracted before classify, reused to avoid a second
                 fetch; ``None`` re-extracts.
+            fetched: A URL binary the analyse pass already downloaded, reused to avoid a
+                second download (and the temp-file leak); ``None`` re-fetches.
 
         Returns:
             A :class:`RawCaptureResult` recording the path and disposition.
@@ -662,7 +710,7 @@ class Ingestor:
         kind = self._capture_kind(capture)
         try:
             if kind is CaptureKind.IMAGE:
-                return self._capture_image(capture, cls)
+                return self._capture_image(capture, cls, fetched=fetched)
             if kind is CaptureKind.URL:
                 if prefetched is not None:
                     return self._write_raw_doc(
@@ -673,7 +721,7 @@ class Ingestor:
                     "articles", cls, doc.markdown, doc.source_url
                 )
             if kind is CaptureKind.PDF:
-                return self._capture_pdf(capture, cls)
+                return self._capture_pdf(capture, cls, fetched=fetched)
             if kind is CaptureKind.AUDIO:
                 if prefetched is not None:
                     return self._write_raw_doc(
@@ -985,7 +1033,13 @@ class Ingestor:
         self._vault.write_raw(subdir, cls.slug, meta, body)
         return RawCaptureResult(raw_path=rel, disposition=disposition)
 
-    def _capture_pdf(self, capture: Capture, cls: Classification) -> RawCaptureResult:
+    def _capture_pdf(
+        self,
+        capture: Capture,
+        cls: Classification,
+        *,
+        fetched: FetchedBinary | None = None,
+    ) -> RawCaptureResult:
         """Keep a PDF binary and write a searchable ``raw/papers/<slug>.md`` page.
 
         The binary is staged into ``raw/assets/`` (idempotent on its bytes SHA-256,
@@ -1001,9 +1055,15 @@ class Ingestor:
             IngestError: if the binary is genuinely different at an existing asset slug.
         """
         if capture.url is not None:
-            fetched = self._extractor.fetch_binary(capture.url)
-            asset_result = self._save_fetched_asset(cls, fetched)
-            source_url: str | None = fetched.source_url
+            # Reuse the analyse pass's single download when present (no second fetch,
+            # no leaked temp); fall back to fetching for a standalone capture_raw call.
+            binary = (
+                fetched
+                if fetched is not None
+                else self._extractor.fetch_binary(capture.url)
+            )
+            asset_result = self._save_fetched_asset(cls, binary)
+            source_url: str | None = binary.source_url
         else:
             path = _require(capture.path, "path")
             asset_result = self._save_local_asset_result(cls, path, "pdf")
@@ -1040,11 +1100,23 @@ class Ingestor:
             asset_paths=list(asset_result.asset_paths),
         )
 
-    def _capture_image(self, capture: Capture, cls: Classification) -> RawCaptureResult:
+    def _capture_image(
+        self,
+        capture: Capture,
+        cls: Classification,
+        *,
+        fetched: FetchedBinary | None = None,
+    ) -> RawCaptureResult:
         """Download/stage an image binary into ``raw/assets`` (never base64)."""
         if capture.url is not None:
-            fetched = self._extractor.fetch_binary(capture.url)
-            return self._save_fetched_asset(cls, fetched)
+            # Reuse the analyse pass's single download when present (no second fetch,
+            # no leaked temp); fall back to fetching for a standalone capture_raw call.
+            binary = (
+                fetched
+                if fetched is not None
+                else self._extractor.fetch_binary(capture.url)
+            )
+            return self._save_fetched_asset(cls, binary)
         path = _require(capture.path, "path")
         ext = (capture.filename or path.name).rsplit(".", 1)[-1].lower()
         return self._save_local_asset_result(cls, path, ext)
@@ -1633,6 +1705,19 @@ def _require(value: Any, field_name: str) -> Any:
     if value is None:
         raise IngestError(f"capture is missing required field {field_name!r}")
     return value
+
+
+def _cleanup_fetched(fetched: FetchedBinary | None) -> None:
+    """Unlink an analyse-pass URL binary's staged temp file when not consumed.
+
+    On the happy path :meth:`Ingestor.capture_raw` reuses and cleans up the staged tmp
+    (via the asset store's move/unlink). This guards the paths where ``capture_raw``
+    never runs -- a classify/curate/analyse deferral -- so the ``thoth-fetch-*`` temp
+    file is removed rather than leaked. A best-effort unlink: a missing file is fine.
+    """
+    if fetched is None:
+        return
+    fetched.tmp_path.unlink(missing_ok=True)
 
 
 def _curate_repair_prompt(problems: str) -> str:
