@@ -21,6 +21,7 @@ from thoth.llm import (
     build_create_kwargs,
     build_system_blocks,
     extract_text,
+    file_plan_contract_text,
     make_client,
     parse_json_block,
     response_content_blocks,
@@ -28,6 +29,11 @@ from thoth.llm import (
     user_blocks_message,
     validate_answer,
     validate_file_plan,
+)
+from thoth.vault import (
+    FOLDER_TYPE_CONTRACT,
+    REQUIRED_COMMON_FIELDS,
+    VALID_SOURCES,
 )
 
 # anthropic is absent in CI; gate the one test that would touch the real SDK import.
@@ -611,3 +617,33 @@ def test_make_client_builds_real_client_when_available() -> None:
     cfg = load_config({"PKM_VAULT": "/x", "ANTHROPIC_API_KEY": FAKE_TOKEN})
     client = make_client(cfg)
     assert hasattr(client, "messages")
+
+
+# --------------------------------------------------------------------------- #
+# The curate file-plan contract is rendered from the validator's own constants.
+# --------------------------------------------------------------------------- #
+
+
+def test_file_plan_contract_text_covers_validator_contract() -> None:
+    """The rendered contract names every folder/source/required field the validator
+    enforces, so the curate model is told exactly what validate_file_plan checks."""
+    text = file_plan_contract_text()
+    # Every offered folder appears; the internal-only inbox hold is deliberately not.
+    for folder in FOLDER_TYPE_CONTRACT:
+        if folder == "inbox":
+            assert folder not in text
+        else:
+            assert folder in text, f"folder {folder!r} missing from contract"
+    for source in VALID_SOURCES:
+        assert source in text, f"source {source!r} missing from contract"
+    for field in REQUIRED_COMMON_FIELDS:
+        assert field in text, f"required field {field!r} missing from contract"
+    assert "create" in text and "update" in text
+    assert "wikilinks" in text
+
+
+def test_file_plan_contract_text_describes_a_pages_envelope() -> None:
+    """The contract leads with the required ``pages`` array shape (not just prose)."""
+    text = file_plan_contract_text()
+    assert '"pages"' in text
+    assert "source" in text and "file path" in text  # the source-is-not-a-path warning

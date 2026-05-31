@@ -825,3 +825,22 @@ def test_written_file_is_loadable_by_frontmatter(vault: Vault) -> None:
     assert post.metadata["title"] == "Raft"
     assert post.content.strip() == "# Raft\n\nConsensus algorithm."
     assert raw.endswith("\n")  # always newline-terminated
+
+
+# --------------------------------------------------------------------------- #
+# SCHEMA.md reader (curate system_extra source).
+# --------------------------------------------------------------------------- #
+
+
+def test_schema_md_reads_file(vault: Vault) -> None:
+    """schema_md() returns the SCHEMA.md text when the file is present."""
+    (vault.root / "SCHEMA.md").write_text("# Vault Schema\nrules\n", encoding="utf-8")
+    assert vault.schema_md() == "# Vault Schema\nrules\n"
+
+
+def test_schema_md_absent_returns_none(vault: Vault) -> None:
+    """A vault with no SCHEMA.md yields None rather than raising (bare-vault case)."""
+    schema = vault.root / "SCHEMA.md"
+    if schema.exists():
+        schema.unlink()
+    assert vault.schema_md() is None

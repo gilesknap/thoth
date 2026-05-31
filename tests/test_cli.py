@@ -154,6 +154,25 @@ def test_run_slack_builds_graph_and_calls_slack_run(
     assert kw["research"] is sentinel
 
 
+def test_build_graph_wires_schema_md_into_ingestor(tmp_path: Path) -> None:
+    """``_build_graph`` must hand the vault's SCHEMA.md to the ingestor's curate call.
+
+    The wiring used to drop ``schema_md`` (it stayed ``None``), so the curate model was
+    never shown the schema; this asserts the regression cannot return. Collaborators
+    construct lazily, so building the real graph needs no API keys or network.
+    """
+    vault_root = tmp_path / "pkm-vault"
+    vault_root.mkdir()
+    (vault_root / "SCHEMA.md").write_text(
+        "# Vault Schema\nlive rules\n", encoding="utf-8"
+    )
+    config = load_config({"PKM_VAULT": str(vault_root)})
+
+    graph = __main__._build_graph(config)
+
+    assert graph.ingestor._schema_md == "# Vault Schema\nlive rules\n"
+
+
 def test_run_mcp_calls_mcp_server_run(
     monkeypatch: pytest.MonkeyPatch, stub_config: Config
 ) -> None:

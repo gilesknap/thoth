@@ -27,6 +27,7 @@ from thoth.extract import ExtractedDoc, FetchedBinary, FetchError, SsrfError
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.hindsight import HindsightError, RecallHit
 from thoth.ingest import (
+    _CURATE_ATTEMPTS,
     Capture,
     CaptureKind,
     Classification,
@@ -1738,6 +1739,121 @@ def test_curate_unparseable_plan(harness: IngestHarness) -> None:
     raw = RawCaptureResult(raw_path=None, disposition="none")
     with pytest.raises(IngestError, match="file plan"):
         ingestor.curate(Capture(text="x"), cls, raw, [])
+
+
+def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None:
+    """The curate prompt spells out the file-plan contract (folders/fields/sources).
+
+    Without this the model only saw "return a file plan" and guessed the envelope, so
+    validate_file_plan rejected every capture and the vault stayed empty.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="concept", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    prompt = ingestor._curate_prompt(Capture(text="hello"), cls, raw, [])
+    for token in (
+        "concepts",
+        "entities",
+        "actions",
+        "wikilinks",
+        "created",
+        "updated",
+        "slack",
+    ):
+        assert token in prompt, f"curate prompt missing {token!r}"
+
+
+def test_curate_retries_then_succeeds_on_corrective_plan(
+    harness: IngestHarness,
+) -> None:
+    """A first invalid plan is recovered: the validation errors are fed back and the
+    corrected plan is written (the exact failure that left the live vault empty)."""
+    bad_plan = _file_plan_json(
+        folder="actions", page_type="concept"
+    )  # folder/type clash
+    good_plan = _file_plan_json()
+    client = _ScriptedClient(bad_plan, good_plan)
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="concept", slug="transformer-models", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+
+    plan = ingestor.curate(Capture(text="x"), cls, raw, [])
+
+    assert plan["_written"] == ["concepts/transformer-models.md"]
+    assert harness.vault.page_exists("concepts/transformer-models.md")
+    # Two curate attempts were made and the retry fed the validation errors back.
+    assert len(client.messages.calls) == 2
+    retry_msgs = client.messages.calls[1]["messages"]
+    retry_text = " ".join(
+        m["content"] for m in retry_msgs if isinstance(m["content"], str)
+    )
+    assert "REJECTED" in retry_text
+
+
+def test_curate_reraises_after_exhausting_corrective_retry(
+    harness: IngestHarness,
+) -> None:
+    """A persistently invalid plan still aborts after one retry, writing nothing."""
+    bad_plan = _file_plan_json(folder="actions", page_type="concept")
+    client = _ScriptedClient(bad_plan)  # the last response repeats -> both invalid
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="concept", slug="transformer-models", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+
+    with pytest.raises(IngestError, match="file plan"):
+        ingestor.curate(Capture(text="x"), cls, raw, [])
+    assert len(client.messages.calls) == _CURATE_ATTEMPTS  # one corrective retry tried
+    assert not harness.vault.page_exists("actions/transformer-models.md")
+    assert not harness.vault.page_exists("concepts/transformer-models.md")
+
+
+def test_apply_navigation_skips_unknown_index_section(harness: IngestHarness) -> None:
+    """A model-supplied index section that isn't a catalog section is skipped, the
+    already-written page is kept, and a correct default catalog entry is derived.
+
+    Regression: navigation used to abort the whole capture (IngestError) on an unknown
+    index section even though the curated page was already on disk.
+    """
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
+    plan = _file_plan_json(
+        index_entries=[
+            {
+                "section": "Bogus / Scratch",
+                "wikilink": "transformer-models",
+                "summary": "s",
+            }
+        ],
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), plan),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(Capture(url="https://e.com/a"))
+
+    assert report.page_paths == ["concepts/transformer-models.md"]
+    assert harness.vault.page_exists("concepts/transformer-models.md")
+    index_text = (harness.work / "index.md").read_text(encoding="utf-8")
+    # The derived default catalog entry landed; the bogus section never did.
+    assert "[[transformer-models]]" in index_text
+    assert "Bogus" not in index_text
 
 
 def test_curate_passes_schema_md_as_system_extra(harness: IngestHarness) -> None:
