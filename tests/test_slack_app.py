@@ -1588,3 +1588,102 @@ def test_build_app_raises_clearly_without_slack_bolt(config: Config) -> None:
     )
     with pytest.raises(ImportError):
         build_app(cfg_with_tokens, ing, qry)
+
+
+# --------------------------------------------------------------------------- #
+# Standing-directive commands: remember / forget / list (issue #43).
+# --------------------------------------------------------------------------- #
+
+
+def test_remember_prefix_adds_directive_and_confirms() -> None:
+    """``remember: <rule>`` stores the rule on the vault and confirms it."""
+    stub = _StubIngestor(_make_report())
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(
+        _event(text="remember: tag work notes with #work"), sent.append
+    )
+    assert stub._vault.get_directives() == ["tag work notes with #work"]
+    assert "tag work notes with #work" in sent[0]
+    # A directive command never reaches the capture/ingest path.
+    assert not stub.captures
+
+
+def test_remember_duplicate_is_reported_not_duplicated() -> None:
+    """A repeated ``remember:`` is idempotent and says so."""
+    stub = _StubIngestor(_make_report())
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="remember: be concise"), sent.append)
+    handlers.handle_message(_event(text="remember: be concise"), sent.append)
+    assert stub._vault.get_directives() == ["be concise"]
+    assert "Already remembered" in sent[1]
+
+
+def test_forget_prefix_removes_directive_by_text() -> None:
+    """``forget: <rule>`` removes a matching directive."""
+    vault = _FakeVault()
+    vault.add_directive("rule one")
+    vault.add_directive("rule two")
+    stub = _StubIngestor(_make_report(), vault=vault)
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="forget: rule one"), sent.append)
+    assert vault.get_directives() == ["rule two"]
+    assert "Forgotten" in sent[0]
+
+
+def test_forget_prefix_removes_directive_by_index() -> None:
+    """``forget: <index>`` removes the directive at that 1-based position."""
+    vault = _FakeVault()
+    vault.add_directive("rule one")
+    vault.add_directive("rule two")
+    stub = _StubIngestor(_make_report(), vault=vault)
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="forget: 1"), sent.append)
+    assert vault.get_directives() == ["rule two"]
+    assert "Forgotten" in sent[0]
+
+
+def test_forget_unknown_directive_reports_no_match() -> None:
+    """``forget:`` with no match tells the user nothing was removed."""
+    stub = _StubIngestor(_make_report())
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="forget: never set"), sent.append)
+    assert "No matching directive" in sent[0]
+
+
+def test_list_shows_current_directives() -> None:
+    """A bare ``list`` shows the numbered directives."""
+    vault = _FakeVault()
+    vault.add_directive("first rule")
+    vault.add_directive("second rule")
+    stub = _StubIngestor(_make_report(), vault=vault)
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="list"), sent.append)
+    assert "first rule" in sent[0]
+    assert "second rule" in sent[0]
+    assert not stub.captures
+
+
+def test_directives_word_shows_current_directives() -> None:
+    """A bare ``directives`` is an alias for ``list``."""
+    vault = _FakeVault()
+    vault.add_directive("only rule")
+    stub = _StubIngestor(_make_report(), vault=vault)
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="directives"), sent.append)
+    assert "only rule" in sent[0]
+
+
+def test_list_with_no_directives_shows_empty_state() -> None:
+    """``list`` with no directives shows the empty-state hint."""
+    stub = _StubIngestor(_make_report())
+    handlers = _handlers(ingestor=stub)
+    sent: list[str] = []
+    handlers.handle_message(_event(text="list"), sent.append)
+    assert "No standing directives" in sent[0]

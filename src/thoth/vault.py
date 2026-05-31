@@ -184,6 +184,16 @@ _LOG_ACTIONS: frozenset[str] = frozenset(
     {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
 )
 
+# The vault-relative file holding standing, user-authored filing/behaviour rules (issue
+# #43). It lives under ``_meta/`` -- one of the underscore directories already excluded
+# from the reindex walk (:data:`thoth.reindex_from_vault.INDEXED_DIRS`) and every lint
+# scan (:data:`thoth.lint.EXCLUDED_DIRS`) -- so the directives file is never indexed,
+# linted, or mistaken for a content page. Each non-empty line is one directive; a
+# leading ``- `` bullet is tolerated on read so the file is also pleasant to hand-edit
+# in Obsidian.
+DIRECTIVES_PATH: str = "_meta/directives.md"
+"""Vault-relative path to the standing user-directives file (issue #43)."""
+
 
 def slugify(text: str, *, fallback: str = "untitled") -> str:
     """Build a vault slug from free text via ``python-slugify``, capped and validated.
@@ -810,6 +820,102 @@ class Vault:
         self.validate_asset_filename(asset_filename)
         return f"![[{asset_filename}]]"
 
+    # ---- standing user directives (issue #43) ------------------------------------
+
+    def get_directives(self) -> list[str]:
+        """Return the current standing user directives, one per non-empty line.
+
+        Reads :data:`DIRECTIVES_PATH` (``_meta/directives.md``) and returns its
+        directives in file order. A missing file is a valid empty state (a vault with no
+        rules yet), so this returns ``[]`` rather than raising. Each returned directive
+        is stripped, blank lines are dropped, and a leading ``- `` bullet (so the file
+        is pleasant to hand-edit in Obsidian) is removed. The file sits under
+        ``_meta/`` --
+        excluded from every reindex/lint scan -- so directives never become content
+        pages.
+
+        Returns:
+            The directive lines in file order (possibly empty).
+        """
+        absolute = self.resolve(DIRECTIVES_PATH)
+        if not absolute.is_file():
+            return []
+        directives: list[str] = []
+        for line in absolute.read_text(encoding="utf-8").splitlines():
+            directive = _strip_directive_bullet(line.strip())
+            if directive:
+                directives.append(directive)
+        return directives
+
+    def add_directive(self, text: str) -> bool:
+        """Append a standing user directive, creating the file/dir if absent.
+
+        The text is stripped and appended as a new directive line; the ``_meta/``
+        directory and :data:`DIRECTIVES_PATH` file are created on first use. The add is
+        idempotent: a directive already present (case-insensitively) is not duplicated.
+        The write goes through the same atomic, path-confined writer the rest of the
+        vault uses (sibling ``.tmp`` then ``replace``).
+
+        Args:
+            text: The directive to add (leading/trailing whitespace and an optional
+                ``- `` bullet are stripped).
+
+        Returns:
+            ``True`` if the directive was added, ``False`` if it was empty or already
+            present (a no-op).
+        """
+        directive = _strip_directive_bullet(text.strip())
+        if not directive:
+            return False
+        directives = self.get_directives()
+        if any(existing.lower() == directive.lower() for existing in directives):
+            return False
+        directives.append(directive)
+        self._write_directives(directives)
+        return True
+
+    def remove_directive(self, target: str) -> bool:
+        """Remove a standing user directive by exact text or 1-based index.
+
+        ``target`` may be the directive's exact text (matched case-insensitively after
+        stripping) or a 1-based index into the current list (as shown by a ``list``
+        command). A target that matches neither is a no-op. The file is rewritten
+        atomically; removing the last directive leaves an empty file (not absent), which
+        :meth:`get_directives` reads back as ``[]``.
+
+        Args:
+            target: The directive text, or its 1-based position as a string.
+
+        Returns:
+            ``True`` if a directive was removed, ``False`` if nothing matched.
+        """
+        directives = self.get_directives()
+        if not directives:
+            return False
+        wanted = target.strip()
+        index = _directive_index(wanted, len(directives))
+        if index is None:
+            lowered = _strip_directive_bullet(wanted).lower()
+            index = next(
+                (i for i, d in enumerate(directives) if d.lower() == lowered),
+                None,
+            )
+        if index is None:
+            return False
+        del directives[index]
+        self._write_directives(directives)
+        return True
+
+    def _write_directives(self, directives: list[str]) -> None:
+        """Atomically write the directives file (one ``- `` bullet per directive)."""
+        absolute = self.resolve(DIRECTIVES_PATH)
+        absolute.parent.mkdir(parents=True, exist_ok=True)
+        body = "".join(f"- {directive}\n" for directive in directives)
+        text = f"# Directives\n\n{body}"
+        tmp = absolute.with_name(absolute.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(absolute)
+
     # ---- internals ---------------------------------------------------------------
 
     def _validate_common_fields(self, meta: dict[str, object]) -> None:
@@ -886,6 +992,40 @@ class Vault:
         tmp = absolute.with_name(absolute.name + ".tmp")
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(absolute)
+
+
+# ---- standing-directive helpers (issue #43) ---------------------------------------
+
+
+def _strip_directive_bullet(line: str) -> str:
+    """Drop a leading ``- `` / ``* `` markdown bullet and the ``# Directives`` header.
+
+    The directives file is hand-editable markdown, so a stored line may carry a list
+    bullet and the file may open with a ``# Directives`` heading; neither is part of the
+    directive text. A blank result (e.g. the header line) is returned as ``""`` so the
+    caller drops it.
+    """
+    if line.startswith(("- ", "* ")):
+        line = line[2:].strip()
+    if line.startswith("#"):
+        return ""
+    return line
+
+
+def _directive_index(target: str, count: int) -> int | None:
+    """Return a 0-based directive index for a 1-based ``target`` string, else ``None``.
+
+    ``target`` is treated as a 1-based position only when it parses as an integer in
+    ``1..count``; anything else (non-numeric, or out of range) returns ``None`` so the
+    caller falls back to exact-text matching.
+    """
+    try:
+        one_based = int(target)
+    except ValueError:
+        return None
+    if 1 <= one_based <= count:
+        return one_based - 1
+    return None
 
 
 # ---- module-level secret redaction (also importable standalone) -------------------

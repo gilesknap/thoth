@@ -636,7 +636,10 @@ class Ingestor:
         """
         prompt = self._classify_prompt(capture, analysis=analysis)
         try:
-            response = self._llm.complete([Message(role="user", content=prompt)])
+            response = self._llm.complete(
+                [Message(role="user", content=prompt)],
+                system_extra=self._system_extra(),
+            )
         except Exception as exc:  # noqa: BLE001 - any client failure aborts classify
             # A transport/availability failure -> deferrable (raw is already durable);
             # validation failures below stay a plain IngestError (abort, gate kept).
@@ -840,9 +843,10 @@ class Ingestor:
         prompt = self._curate_prompt(capture, cls, raw, candidates, analysis=analysis)
         messages: list[Message] = [Message(role="user", content=prompt)]
         problems = ""
+        system_extra = self._system_extra()
         for attempt in range(_CURATE_ATTEMPTS):
             try:
-                response = self._llm.complete(messages, system_extra=self._schema_md)
+                response = self._llm.complete(messages, system_extra=system_extra)
             except Exception as exc:  # noqa: BLE001 - any client failure aborts curate
                 # Transport/availability failure -> deferrable (raw is already durable).
                 raise LLMUnavailableError(f"curate LLM call failed: {exc}") from exc
@@ -1650,6 +1654,41 @@ class Ingestor:
         return titles
 
     # ---- prompt builders ---------------------------------------------------------
+
+    def _system_extra(self) -> str | None:
+        """Build the ``system_extra`` text injected into the classify + curate calls.
+
+        Combines the live ``SCHEMA.md`` (so curated pages file to the current per-type
+        schema) with the vault's standing **user directives** (issue #43): a
+        user-authored ``_meta/directives.md`` of filing/behaviour rules
+        (:meth:`thoth.vault.Vault.get_directives`). The directives are read **live on
+        every call** so a rule added via Slack ``remember:`` takes effect on the very
+        next capture with no restart. A directive read failure never breaks ingest -- the
+        rules are best-effort guidance, so a vault error degrades to schema-only. When
+        neither schema nor directives are present this returns ``None`` (unchanged
+        behaviour, no system prompt addendum).
+
+        Returns:
+            The combined system-prompt addendum, or ``None`` when there is nothing to
+            add.
+        """
+        parts: list[str] = []
+        if self._schema_md:
+            parts.append(self._schema_md)
+        try:
+            directives = self._vault.get_directives()
+        except VaultError:
+            directives = []
+        if directives:
+            rules = "\n".join(f"- {directive}" for directive in directives)
+            parts.append(
+                "Standing user directives (the user's own persistent filing/behaviour "
+                "rules; follow them unless they conflict with the schema or contract):\n"
+                f"{rules}"
+            )
+        if not parts:
+            return None
+        return "\n\n".join(parts)
 
     def _classify_prompt(
         self, capture: Capture, *, analysis: Analysis | None = None

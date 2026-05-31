@@ -86,6 +86,15 @@ PENDING_SAVE_TTL_SECONDS: float = 1800.0
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
 _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
 
+# Standing-directive commands (issue #43): deterministic, never sent to an LLM, and
+# short-circuited BEFORE the intent gate. ``remember:`` adds a rule, ``forget:`` removes
+# one (by exact text or 1-based index), and a bare ``list`` / ``directives`` shows the
+# current rules. Stored in ``_meta/directives.md`` and injected into the autonomous
+# classify/curate prompts.
+_REMEMBER_PREFIX: str = "remember:"
+_FORGET_PREFIX: str = "forget:"
+_LIST_DIRECTIVES_WORDS: frozenset[str] = frozenset({"list", "directives"})
+
 # Affirmative replies that confirm a pending "save this answer to the vault?" offer.
 _CONFIRM_WORDS: frozenset[str] = frozenset(
     {"y", "yes", "save", "save it", "ok", "okay"}
@@ -647,6 +656,8 @@ class Handlers:
         responder = Responder(say, client=client, channel=channel)
         if self._is_confirm_save(text) and self._try_confirm_save(channel, say):
             return
+        if self._try_directive_command(text, say):
+            return
         if self._is_capture_text(text):
             capture = Capture(text=self._strip_capture_prefix(text), source=source)
             self._do_ingest(capture, responder)
@@ -992,6 +1003,73 @@ class Handlers:
             if lowered.startswith(prefix):
                 return text[len(prefix) :].strip()
         return text
+
+    def _try_directive_command(self, text: str, say: Callable[[str], None]) -> bool:
+        """Handle a standing-directive command deterministically (issue #43).
+
+        Mirrors the ``capture:``/``note:``/``save:`` prefix handling but short-circuits
+        BEFORE the intent gate so a directive command is never sent to an LLM nor
+        mistaken for a capture/question:
+
+        * ``remember: <rule>`` -- add a standing user directive (idempotent).
+        * ``forget: <rule|index>`` -- remove one by exact text or 1-based index.
+        * a bare ``list`` / ``directives`` -- show the current directives.
+
+        The rules are stored in ``_meta/directives.md`` (excluded from reindex/lint) and
+        injected into the autonomous classify/curate prompts. Returns ``True`` when the
+        message was a directive command (so the caller stops), else ``False``.
+
+        Args:
+            text: The stripped message text.
+            say: The Bolt ``say`` callable for the reply.
+
+        Returns:
+            ``True`` if a directive command was handled, else ``False``.
+        """
+        lowered = text.lower()
+        if lowered in _LIST_DIRECTIVES_WORDS:
+            say(self._render_directives())
+            return True
+        if lowered.startswith(_REMEMBER_PREFIX):
+            rule = text[len(_REMEMBER_PREFIX) :].strip()
+            if not rule:
+                say("Tell me what to remember, e.g. `remember: tag work notes #work`.")
+            elif self._directive_vault().add_directive(rule):
+                say(f"Got it -- I'll remember: {rule}")
+            else:
+                say(f"Already remembered: {rule}")
+            return True
+        if lowered.startswith(_FORGET_PREFIX):
+            target = text[len(_FORGET_PREFIX) :].strip()
+            if not target:
+                say("Tell me which directive to forget (its text or its number).")
+            elif self._directive_vault().remove_directive(target):
+                say(f"Forgotten: {target}")
+            else:
+                say(f"No matching directive to forget: {target}")
+            return True
+        return False
+
+    def _directive_vault(self) -> Any:
+        """Return the path-confined :class:`~thoth.vault.Vault` for directive edits.
+
+        The directives file is part of the vault, so the helpers live on
+        :class:`~thoth.vault.Vault`. ``Handlers`` already holds an
+        :class:`~thoth.ingest.Ingestor` built from a vault, so the same instance is
+        reused via its ``_vault`` attribute -- no extra wiring in :func:`build_app`. The
+        return is duck-typed (``Any``) so a test can inject a tiny fake exposing
+        ``get_directives``/``add_directive``/``remove_directive``.
+        """
+        return self.ingestor._vault
+
+    def _render_directives(self) -> str:
+        """Render the current standing directives as a numbered ``mrkdwn`` list."""
+        directives = self._directive_vault().get_directives()
+        if not directives:
+            return "No standing directives yet. Add one with `remember: <rule>`."
+        lines = ["*Standing directives:*"]
+        lines.extend(f"{i}. {d}" for i, d in enumerate(directives, start=1))
+        return "\n".join(lines)
 
     @staticmethod
     def _download_url(file_info: dict[str, Any]) -> str | None:
