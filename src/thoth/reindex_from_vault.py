@@ -18,16 +18,16 @@ Two facts from the SPEC shape the design:
   (:func:`manifest_path` -> ``<thoth_home>/hindsight/reindex-manifest.json``, which is
   ``.gitignore``d), so a reindex never churns curated pages' ``updated:`` dates.
 
-* **The bank-reset subcommand is UNVERIFIED (VPS-time).** Incremental runs reuse the
-  attested :meth:`~thoth.hindsight.Hindsight.forget` /
+* **The full-rebuild bank wipe is ``bank delete <bank> -y`` (VPS-confirmed).**
+  Incremental runs reuse the :meth:`~thoth.hindsight.Hindsight.forget` /
   :meth:`~thoth.hindsight.Hindsight.retain` surface (forget-then-retain per changed
-  page; forget-and-prune per deleted page). The
-  one operation ``hindsight.py`` does not expose -- the full-rebuild bank wipe -- is
-  isolated in :meth:`Reindexer.reset_bank` behind the same injectable
-  :class:`~thoth.hindsight.SubprocessRunner` seam, driving
-  ``base_args + RESET_SUBCOMMAND + [bank]`` (a best-guess ``db reset`` per SPEC
-  section 8, with the bank id positional like every other subcommand, overridable in
-  one edit), so tests assert the exact argv without spawning anything.
+  page; forget-and-prune per deleted page). The one operation ``hindsight.py`` does not
+  expose -- the full-rebuild wipe -- is isolated in :meth:`Reindexer.reset_bank` behind
+  the same injectable :class:`~thoth.hindsight.SubprocessRunner` seam, driving
+  ``base_args + RESET_SUBCOMMAND + [-y, bank]`` (``bank delete`` deletes the bank and
+  all its data; the next retain auto-recreates it, with the bank id positional like
+  every other subcommand and overridable in one edit), so tests assert the exact argv
+  without spawning anything.
 
 The three reindex triggers (SPEC section 8) are: per-ingest incremental (handled by the
 ingest pass, not here), nightly catch-up for out-of-band Obsidian edits (``thoth
@@ -63,6 +63,7 @@ from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 __all__ = [
     "INDEXED_DIRS",
+    "RESET_CONFIRM_FLAG",
     "RESET_SUBCOMMAND",
     "SKIP_FILES",
     "ReindexError",
@@ -92,12 +93,18 @@ holds conventions and ``log.md`` is the append-only action log. All three are st
 not curated knowledge.
 """
 
-# UNVERIFIED bank-reset subcommand (SPEC section 8 "db reset / equivalent"; section 15
-# open item). Isolated as a module constant so the VPS-time fix is one edit here,
-# mirroring hindsight.py's *_SUBCOMMAND pattern; reset_bank() builds
-# base_args + RESET_SUBCOMMAND + [bank] (the bank id positional, as for every verb).
-RESET_SUBCOMMAND: tuple[str, ...] = ("db", "reset")
-"""UNVERIFIED subcommand words for the full-rebuild bank wipe (overridable VPS-time)."""
+# VPS-confirmed bank-reset subcommand. hindsight-embed's full-rebuild wipe is
+# ``bank delete <bank> -y``: it deletes the bank AND all its data (memory units,
+# entities, observations), and the next ``memory retain`` auto-recreates the bank.
+# ``clear-observations`` was rejected -- it clears only the observation layer, leaving
+# raw memory units and entity nodes behind, so it is not a clean wipe. Isolated as a
+# module constant (mirroring hindsight.py's *_SUBCOMMAND pattern); reset_bank() builds
+# base_args + RESET_SUBCOMMAND + [-y, bank] (the bank id positional, as for every verb).
+RESET_SUBCOMMAND: tuple[str, ...] = ("bank", "delete")
+"""Subcommand words for the full-rebuild bank wipe (``bank delete``, VPS-confirmed)."""
+
+RESET_CONFIRM_FLAG: str = "-y"
+"""Skip the interactive confirmation prompt on the ``bank delete`` reset."""
 
 # Capture a leading "type:" value from frontmatter; multiline so it is found anywhere in
 # the leading block. Used only as a retain tag (page_type), never for confinement.
@@ -307,15 +314,22 @@ class Reindexer:
     def reset_bank(self) -> None:
         """Wipe the Hindsight bank for a full rebuild (the one op ``hindsight`` lacks).
 
-        Runs ``base_args + RESET_SUBCOMMAND + [bank]`` through the injected runner (the
-        bank id positional, like every verb). The subcommand spelling is UNVERIFIED
-        (SPEC section 8); a non-zero exit is a hard failure because a full rebuild that
-        cannot wipe must not proceed to re-retain on top of stale facts.
+        Runs ``base_args + RESET_SUBCOMMAND + [-y, bank]`` through the injected runner
+        (``bank delete -y <bank>``; the bank id positional, like every verb). ``-y``
+        skips the interactive confirmation so the call is non-interactive. The delete
+        removes the bank and all its data; the subsequent re-retain auto-recreates it. A
+        non-zero exit is a hard failure because a full rebuild that cannot wipe must not
+        proceed to re-retain on top of stale facts.
 
         Raises:
             ReindexError: if the reset CLI exits non-zero (stderr surfaced).
         """
-        argv: list[str] = [*self._base_args, *RESET_SUBCOMMAND, self._bank]
+        argv: list[str] = [
+            *self._base_args,
+            *RESET_SUBCOMMAND,
+            RESET_CONFIRM_FLAG,
+            self._bank,
+        ]
         result = self._runner(argv, timeout=self._timeout)
         if result.returncode != 0:
             raise ReindexError(
