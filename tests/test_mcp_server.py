@@ -54,13 +54,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 
@@ -780,8 +776,8 @@ def test_pkm_recent_lists_recent_pages_with_obsidian_links(
     import datetime as _dt
 
     today = _dt.date.today().isoformat()
-    (vault.root / "concepts" / "fresh.md").write_text(
-        _curated_page(title="Fresh", page_type="concept", updated=today),
+    (vault.root / "notes" / "fresh.md").write_text(
+        _curated_page(title="Fresh", page_type="note", updated=today),
         encoding="utf-8",
     )
     ctx = _context(config, vault)
@@ -790,11 +786,11 @@ def test_pkm_recent_lists_recent_pages_with_obsidian_links(
     # pkm_recent renders PageRef.wikilink verbatim (SummaryEngine mints a bare-slug
     # wikilink for curated pages).
     assert "[[fresh]]" in result.text
-    assert "`concepts/fresh.md`" in result.text
-    expected_uri = "obsidian://open?vault=pkm-vault&file=concepts%2Ffresh.md"
+    assert "`notes/fresh.md`" in result.text
+    expected_uri = "obsidian://open?vault=pkm-vault&file=notes%2Ffresh.md"
     assert f"({expected_uri})" in result.text
     paths = [page["path"] for page in result.data["pages"]]
-    assert "concepts/fresh.md" in paths
+    assert "notes/fresh.md" in paths
 
 
 def test_pkm_recent_respects_limit(config: Config, vault: Vault) -> None:
@@ -803,8 +799,8 @@ def test_pkm_recent_respects_limit(config: Config, vault: Vault) -> None:
 
     today = _dt.date.today().isoformat()
     for i in range(5):
-        (vault.root / "concepts" / f"page-{i}.md").write_text(
-            _curated_page(title=f"Page {i}", page_type="concept", updated=today),
+        (vault.root / "notes" / f"page-{i}.md").write_text(
+            _curated_page(title=f"Page {i}", page_type="note", updated=today),
             encoding="utf-8",
         )
     ctx = _context(config, vault)
@@ -854,7 +850,7 @@ def test_pkm_write_page_rejects_bad_folder_type(config: Config, vault: Vault) ->
         slug="wrong",
         frontmatter={
             "title": "Wrong",
-            "type": "concept",  # concept is not allowed in entities/
+            "type": "note",  # note is not allowed in entities/
             "source": "mcp",
             "tags": ["x"],
         },

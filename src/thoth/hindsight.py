@@ -564,7 +564,7 @@ class Hindsight:
             query: The natural-language recall query.
             limit: Maximum number of hits to return (applied client-side after parsing).
             types: When given, keep only hits whose ``page_type`` tag is in this set
-                (the domain scope, e.g. :data:`thoth.vault.KNOWLEDGE_TYPES`); ``None``
+                (the domain scope, e.g. :data:`thoth.vault.REFERENCE_TYPES`); ``None``
                 keeps all.
 
         Returns:

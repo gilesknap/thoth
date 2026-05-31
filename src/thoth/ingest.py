@@ -95,25 +95,20 @@ __all__ = [
     "RawCaptureResult",
 ]
 
-# Folders scanned by the read-only create-vs-update candidate search (curated layer).
-_CANDIDATE_DIRS: tuple[str, ...] = (
-    "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "people",
-)
+# Folders scanned by the read-only create-vs-update candidate search (reference layer).
+_CANDIDATE_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
 
 # File extensions (no dot) that select a binary/audio capture kind.
 _IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 _AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
 
-# Knowledge ``type`` -> the index.md catalog section append_index targets.
+# Reference ``type`` -> the index.md catalog section append_index targets (ADR 0005).
+# Only the lifecycle-free reference types earn a catalog entry; ``action`` pages are
+# surfaced by the Bases dashboards and get no index entry.
 _INDEX_SECTION_BY_TYPE: dict[str, str] = {
     "entity": "Entities",
-    "concept": "Concepts",
-    "comparison": "Comparisons",
-    "query": "Queries",
+    "note": "Notes",
+    "memory": "Memories",
 }
 
 # How many curate LLM attempts before giving up: one initial call plus one corrective
@@ -186,8 +181,6 @@ class Classification:
         title: The human-readable title.
         entities: Named entities mentioned (drive candidate fetch).
         concepts: Named concepts mentioned (drive candidate fetch).
-        life_admin: Parsed life-admin fields (``due``/``priority``/...), empty for
-            knowledge captures.
     """
 
     page_type: str
@@ -195,7 +188,6 @@ class Classification:
     title: str
     entities: list[str] = field(default_factory=list)
     concepts: list[str] = field(default_factory=list)
-    life_admin: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,9 +440,9 @@ class Ingestor:
         """Run the cheap classify call and validate its routing output.
 
         One LLM call returns a JSON object with ``type``/``slug``/``title`` plus any
-        named entities/concepts and life-admin fields. The ``type`` and ``slug`` are
-        validated through :class:`~thoth.vault.Vault` here, so a bad routing decision is
-        rejected before any disk is touched.
+        named entities/concepts. The ``type`` and ``slug`` are validated through
+        :class:`~thoth.vault.Vault` here, so a bad routing decision is rejected before
+        any disk is touched.
 
         Args:
             capture: The inbound item to classify.
@@ -489,14 +481,12 @@ class Ingestor:
         title = obj.get("title")
         if not isinstance(title, str) or not title.strip():
             title = slug.replace("-", " ").title()
-        life_admin = obj.get("life_admin")
         return Classification(
             page_type=page_type,
             slug=slug,
             title=title,
             entities=_str_list(obj.get("entities")),
             concepts=_str_list(obj.get("concepts")),
-            life_admin=life_admin if isinstance(life_admin, dict) else {},
         )
 
     # ---- pass 2: capture raw -----------------------------------------------------
@@ -1045,11 +1035,12 @@ class Ingestor:
     # ---- pass 5: navigation ------------------------------------------------------
 
     def _apply_navigation(self, plan: dict[str, Any], page_paths: list[str]) -> None:
-        """Append index entries for knowledge pages and a log block for all touches.
+        """Append index entries for reference pages and a log block for all touches.
 
         ``index_entries`` from the plan are applied when present; otherwise a default
-        entry is derived for each written knowledge page. Life-admin pages are surfaced
-        by Bases views and get no index entry (SPEC step 5).
+        entry is derived for each written reference page (entity/note/memory).
+        Actionable pages (``action``) are surfaced by the Bases dashboards and get no
+        index entry (ADR 0005, SPEC step 5).
         """
         entries = plan.get("index_entries")
         applied = 0
@@ -1085,18 +1076,15 @@ class Ingestor:
     def _default_index_entries(
         self, plan: dict[str, Any], page_paths: list[str]
     ) -> None:
-        """Derive one catalog entry per written knowledge page from the plan."""
+        """Derive one catalog entry per written reference page from the plan."""
         pages = plan.get("pages")
         if not isinstance(pages, list):
             return
         for page, rel in zip(pages, page_paths, strict=True):
             if not isinstance(page, dict):
                 continue
-            folder = PurePosixPath(rel).parent.name
             page_type = page.get("frontmatter", {}).get("type")
             section = _INDEX_SECTION_BY_TYPE.get(str(page_type))
-            if section is None and folder == "people":
-                section = "People"
             if section is None:
                 continue
             slug = PurePosixPath(rel).stem
@@ -1314,8 +1302,10 @@ class Ingestor:
         return (
             "Classify this captured item for a personal knowledge vault. Return ONLY a "
             f"JSON object with keys: type (one of {type_list}), slug "
-            "(lowercase-hyphen), title, entities (list of names), concepts (list of "
-            "names), and life_admin (object with due/priority/etc, or empty).\n\n"
+            "(lowercase-hyphen), title, entities (list of names), and concepts (list "
+            "of names). Use 'note' for anything written (a concept, comparison, or "
+            "query, differentiated by a tag); use 'action' for a todo or a to-consume "
+            "item (a media item is an action tagged 'media').\n\n"
             f"Captured item:\n{what}"
         )
 

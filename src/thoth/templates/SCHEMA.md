@@ -1,21 +1,27 @@
 # Vault Schema
 
 ## Domain
-Personal knowledge management for one user. Two intertwined domains:
-(1) a research/reference knowledge base (Karpathy LLM-Wiki layers), and
-(2) life-admin: tasks, a media-to-consume backlog, and personal memories.
+Personal knowledge management for one user: everything captured — research/reference
+knowledge, todos, a to-consume backlog, and personal memories — lands in one of four
+flat, equal folders. The only behavioural distinction is whether a page is *actionable*
+(carries `status`/`due`), read straight off the frontmatter, not a folder family.
 The vault is the single source of truth. Hindsight indexes it; it is never the store.
 
-## Layers
+## Layers (4 flat content folders + machinery, ADR 0005)
 - raw/      Immutable sources. The agent READS but NEVER edits these.
-- entities/ concepts/ comparisons/ queries/   Curated, cross-linked knowledge pages.
-- actions/ media/ memories/ people/   Life-admin pages (frontmatter `type` is the contract).
+- entities/  Reference. Nouns: people, orgs, products, models, devices. `type: entity`.
+- notes/     Reference. Everything written, differentiated by a `tags:` value
+             (concept / comparison / query). `type: note`.
+- memories/  Reference. Personal memories/milestones. `type: memory`.
+- actions/   Actionable (`status`/`due`). Todos AND the to-consume queue; a media item
+             is an `action` tagged `media`. `type: action`.
+- inbox/     Machinery: durable pre-curate holding pages. `type: inbox`.
 - index.md (Home) / SCHEMA.md / log.md   Navigational + structural backbone.
 
 ## Conventions
 - File names: lowercase, hyphens, no spaces, no dates (dates live in frontmatter).
 - Every page starts with YAML frontmatter (see Frontmatter).
-- Link with [[wikilinks]]; every knowledge page needs >= 2 outbound links.
+- Link with [[wikilinks]]; every reference page needs >= 2 outbound links.
 - Bump `updated` on every edit. Add every new page to index.md. Append every action to log.md.
 - Images: embed inline with ![[asset.ext]] on the owning page AND describe them there.
   Binaries live in raw/assets/. No per-image sidecar files. Never base64.
@@ -23,7 +29,10 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
   paragraphs whose claims trace to one source.
 
 ## Frontmatter
-[the common + knowledge + life-admin contract above]
+Common (every page): title, type, created, updated, source, tags.
+type is one of: entity, note, memory, action (plus the inbox machinery type).
+Actionable pages (`type: action`) additionally carry `status` (and usually `due_date`);
+a media-queue item is an `action` tagged `media` with status to_consume/consuming/consumed.
 
 ## raw/ Frontmatter
 ---
@@ -36,10 +45,11 @@ skip if identical, flag drift + update if changed.
 
 ## Tag Taxonomy
 Add a tag HERE before using it (prevents sprawl). Seed set:
-- Knowledge meta: entity, concept, comparison, query, summary, reference, how-to
+- Type: entity, note, memory, action
+- Note kind: concept, comparison, query, reference, how-to
 - Domain (user-specific): embedded-systems, controls, accelerator, software, ai-ml, home
 - People/Orgs: person, org, product, model
-- Life-admin: task, media, memory, recurring, errand
+- Actionable: task, media, recurring, errand
 - Quality: contested, prediction, controversy
 
 ## Page Thresholds
@@ -48,7 +58,7 @@ Add a tag HERE before using it (prevents sprawl). Seed set:
 - DON'T create pages for passing mentions or out-of-scope detail.
 - SPLIT a page over ~200 lines into sub-topics with cross-links.
 - ARCHIVE fully-superseded pages to _archive/ and drop them from index.md.
-- Life-admin pages are created on demand (one capture = one action/media/memory page)
+- Actions and memories are created on demand (one capture = one action/memory page)
   and do NOT need the 2-source threshold.
 
 ## Update Policy

@@ -46,13 +46,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 
@@ -136,10 +132,10 @@ def _media(
     created: str | None = "2026-05-20",
     media_type: str | None = "book",
 ) -> None:
-    """Author a media/<slug>.md page."""
+    """Author a media item as an actions/<slug>.md action tagged 'media' (ADR 0005)."""
     meta: dict[str, Any] = {
         "title": title,
-        "type": "media",
+        "type": "action",
         "updated": "2026-05-20",
         "source": "slack",
         "tags": ["media"],
@@ -149,7 +145,7 @@ def _media(
         meta["created"] = created
     if media_type is not None:
         meta["media_type"] = media_type
-    _write(vault, f"media/{slug}.md", meta)
+    _write(vault, f"actions/{slug}.md", meta)
 
 
 def _curated(
@@ -312,10 +308,10 @@ def test_recent_pages_days_one_is_yesterday_or_today(
     """recent_pages(days=1) returns only curated pages updated yesterday or today."""
     _curated(
         vault,
-        "concepts",
+        "notes",
         "fresh",
         title="Fresh",
-        page_type="concept",
+        page_type="note",
         updated="2026-05-31",
     )  # yesterday
     _curated(
@@ -327,32 +323,32 @@ def test_recent_pages_days_one_is_yesterday_or_today(
         updated="2026-06-01",
     )  # today
     _curated(
-        vault, "concepts", "old", title="Old", page_type="concept", updated="2026-05-20"
+        vault, "notes", "old", title="Old", page_type="note", updated="2026-05-20"
     )  # too old
 
     engine = _engine(vault, config)
     refs = engine.recent_pages(days=1)
     paths = {r.path for r in refs}
-    assert paths == {"concepts/fresh.md", "entities/today.md"}
-    assert "concepts/old.md" not in paths
+    assert paths == {"notes/fresh.md", "entities/today.md"}
+    assert "notes/old.md" not in paths
 
 
-def test_recent_pages_excludes_life_admin_folders(vault: Vault, config: Config) -> None:
-    """Only curated folders are scanned as ingests; actions/media churn is excluded."""
+def test_recent_pages_excludes_actionable_folder(vault: Vault, config: Config) -> None:
+    """Only reference folders are ingests; the actions/ churn is excluded (ADR 0005)."""
     _action(vault, "recent-task", title="Recent task", due_date="2026-06-02")
     _media(vault, "recent-media", title="Recent media", created="2026-05-31")
     _curated(
         vault,
-        "concepts",
+        "notes",
         "fresh",
         title="Fresh",
-        page_type="concept",
+        page_type="note",
         updated="2026-05-31",
     )
 
     engine = _engine(vault, config)
     paths = {r.path for r in engine.recent_pages(days=7)}
-    assert paths == {"concepts/fresh.md"}
+    assert paths == {"notes/fresh.md"}
 
 
 def test_recent_pages_grouped_and_counted_by_type_in_daily(
@@ -361,18 +357,18 @@ def test_recent_pages_grouped_and_counted_by_type_in_daily(
     """The daily text shows yesterday's ingest count and groups lines by type."""
     _curated(
         vault,
-        "concepts",
+        "notes",
         "a",
         title="Concept A",
-        page_type="concept",
+        page_type="note",
         updated="2026-05-31",
     )
     _curated(
         vault,
-        "concepts",
+        "notes",
         "b",
         title="Concept B",
-        page_type="concept",
+        page_type="note",
         updated="2026-05-31",
     )
     _curated(
@@ -387,20 +383,20 @@ def test_recent_pages_grouped_and_counted_by_type_in_daily(
     engine = _engine(vault, config)
     daily = engine.daily_digest()
     assert "INGESTED YESTERDAY (3)" in daily.text
-    assert "concept: Concept A" in daily.text
+    assert "note: Concept A" in daily.text
     assert "entity: Entity C" in daily.text
-    # type grouping: both concepts precede the entity line in the rendered block.
-    assert daily.text.index("Concept A") < daily.text.index("Entity C")
+    # type grouping: the two notes are adjacent (grouped under one type) in the block.
+    assert daily.text.index("Concept A") < daily.text.index("Concept B")
 
 
 def test_page_with_no_date_excluded_from_recent(vault: Vault, config: Config) -> None:
     """A curated page with no parseable date cannot be placed in the window."""
     _curated(
         vault,
-        "concepts",
+        "notes",
         "no-dates",
         title="No dates",
-        page_type="concept",
+        page_type="note",
         updated=None,
         created=None,
     )
@@ -423,12 +419,12 @@ def test_media_backlog_only_to_consume_oldest_first(
 
     engine = _engine(vault, config)
     backlog = engine.media_backlog()
-    assert [m.path for m in backlog] == ["media/oldest.md", "media/newest.md"]
-    assert "media/consumed.md" not in {m.path for m in backlog}
+    assert [m.path for m in backlog] == ["actions/oldest.md", "actions/newest.md"]
+    assert "actions/consumed.md" not in {m.path for m in backlog}
 
 
 def test_daily_surfaces_media_nudge_with_wikilink(vault: Vault, config: Config) -> None:
-    """The daily MEDIA BACKLOG section carries a [[media/...]] wikilink, capped at 2."""
+    """The daily MEDIA BACKLOG carries an [[actions/...]] wikilink, capped at 2."""
     _media(
         vault,
         "ddia",
@@ -441,15 +437,15 @@ def test_daily_surfaces_media_nudge_with_wikilink(vault: Vault, config: Config) 
     engine = _engine(vault, config)
     daily = engine.daily_digest()
     assert "MEDIA BACKLOG" in daily.text
-    assert "[[media/ddia]]" in daily.text
+    assert "[[actions/ddia]]" in daily.text
     # capped at two nudges
-    assert "[[media/third]]" not in daily.text
+    assert "[[actions/third]]" not in daily.text
 
 
 def test_media_item_dataclass_has_no_status_field() -> None:
     """MediaItem stays frontmatter-faithful (no status field on the contract)."""
     item = MediaItem(
-        path="media/x.md",
+        path="actions/x.md",
         title="X",
         media_type="book",
         added=None,
@@ -469,35 +465,35 @@ def test_review_flagged_picks_up_review_true_and_status_review(
     """review: true OR status: review flags a curated page; plain pages do not."""
     _curated(
         vault,
-        "concepts",
+        "notes",
         "by-bool",
         title="By bool",
-        page_type="concept",
+        page_type="note",
         review="true",
     )
     _curated(
         vault,
-        "concepts",
+        "notes",
         "by-status",
         title="By status",
-        page_type="concept",
+        page_type="note",
         status="review",
     )
-    _curated(vault, "concepts", "plain", title="Plain", page_type="concept")
+    _curated(vault, "notes", "plain", title="Plain", page_type="note")
 
     engine = _engine(vault, config)
     flagged = {r.path for r in engine.review_flagged()}
-    assert flagged == {"concepts/by-bool.md", "concepts/by-status.md"}
+    assert flagged == {"notes/by-bool.md", "notes/by-status.md"}
 
 
 def test_review_flagged_appears_in_daily(vault: Vault, config: Config) -> None:
     """A flagged page is listed under the FLAGGED FOR REVIEW section."""
     _curated(
         vault,
-        "concepts",
+        "notes",
         "distributed",
         title="Distributed Systems",
-        page_type="concept",
+        page_type="note",
         review="true",
     )
     engine = _engine(vault, config)
@@ -515,9 +511,7 @@ def test_weekly_counts_status_deadlines_and_review(
     vault: Vault, config: Config
 ) -> None:
     """Weekly: ingest counts by type, actions status, next-week deadlines, review."""
-    _curated(
-        vault, "concepts", "c1", title="C1", page_type="concept", updated="2026-05-29"
-    )
+    _curated(vault, "notes", "c1", title="C1", page_type="note", updated="2026-05-29")
     _curated(
         vault, "entities", "e1", title="E1", page_type="entity", updated="2026-05-28"
     )
@@ -526,10 +520,10 @@ def test_weekly_counts_status_deadlines_and_review(
     _action(vault, "far", title="Far", due_date="2026-06-20")  # outside 7 days
     _curated(
         vault,
-        "concepts",
+        "notes",
         "flag",
         title="Flag",
-        page_type="concept",
+        page_type="note",
         updated="2026-05-29",
         review="true",
     )
@@ -538,7 +532,7 @@ def test_weekly_counts_status_deadlines_and_review(
     weekly = engine.weekly_digest()
     assert weekly.kind == "weekly"
     assert "WEEK IN REVIEW" in weekly.text
-    assert "2 concept" in weekly.text  # c1 + flag both updated within 7d
+    assert "2 note" in weekly.text  # c1 + flag both updated within 7d
     assert "1 entity" in weekly.text
     assert "ACTIONS STATUS" in weekly.text
     assert "Open actions: 3" in weekly.text
@@ -841,9 +835,9 @@ def test_dataclasses_are_frozen() -> None:
         wikilink="[[actions/x]]",
     )
     ref = PageRef(
-        path="concepts/x.md",
+        path="notes/x.md",
         title="X",
-        page_type="concept",
+        page_type="note",
         updated=None,
         wikilink="[[x]]",
     )

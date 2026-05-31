@@ -7,5 +7,5 @@
 
 ## [2026-05-30] create | Vault initialized
 - Migrated from documents/ proto-vault
-- Structure: raw/{articles,papers,transcripts,assets}, entities/, concepts/, comparisons/,
-  queries/, actions/, media/, memories/, people/, _bases/, _archive/, inbox/
+- Structure: raw/{articles,papers,transcripts,assets}, entities/, notes/, memories/,
+  actions/, _bases/, _archive/, inbox/

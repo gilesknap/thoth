@@ -21,9 +21,9 @@ import pytest
 
 from thoth.config import Config, load_config
 from thoth.lint import (
+    ACTIONABLE_DIRS,
+    CURATED_DIRS,
     EXCLUDED_DIRS,
-    KNOWLEDGE_DIRS,
-    LIFE_ADMIN_DIRS,
     LOG_ROTATE_LIMIT,
     MEDIA_STALE_DAYS,
     PAGE_SIZE_LIMIT,
@@ -49,13 +49,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
     "_archive",
     "_bases",
@@ -71,10 +67,11 @@ _SCHEMA = """\
 
 ## Tag Taxonomy
 Add a tag HERE before using it. Seed set:
-- Knowledge meta: entity, concept, comparison, query, summary, reference, how-to
+- Type: entity, note, memory, action
+- Note kind: concept, comparison, query, reference, how-to
 - Domain: embedded-systems, controls, accelerator, software, ai-ml, home
 - People/Orgs: person, org, product, model
-- Life-admin: task, media, memory, recurring, errand
+- Actionable: task, media, recurring, errand
 - Quality: contested, prediction, controversy
 
 ## Page Thresholds
@@ -96,13 +93,9 @@ updated: 2026-05-30
 
 ### Entities
 
-### Concepts
+### Notes
 
-### Comparisons
-
-### Queries
-
-### People
+### Memories
 """
 
 _LOG = """\
@@ -216,7 +209,7 @@ def _knowledge(
 
 def _index_listing(*entries: tuple[str, str]) -> str:
     """Render an index.md whose catalog lists the given (section, wikilink) entries."""
-    sections = {"Entities": [], "Concepts": [], "Comparisons": [], "Queries": []}
+    sections = ("Entities", "Notes", "Memories")
     by_section: dict[str, list[str]] = {k: [] for k in sections}
     for section, wikilink in entries:
         by_section[section].append(f"- [[{wikilink}]] - x")
@@ -232,7 +225,7 @@ def _index_listing(*entries: tuple[str, str]) -> str:
         "## Knowledge catalog",
         "",
     ]
-    for section in ("Entities", "Concepts", "Comparisons", "Queries"):
+    for section in sections:
         parts.append(f"### {section}")
         parts.extend(by_section[section])
         parts.append("")
@@ -275,9 +268,9 @@ def test_clean_vault_yields_no_findings(vault: Vault, config: Config) -> None:
     )
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "beta",
-        page_type="concept",
+        page_type="note",
         body="see [[alpha]]\n",
         tags=["concept"],
     )
@@ -286,7 +279,7 @@ def test_clean_vault_yields_no_findings(vault: Vault, config: Config) -> None:
     # A fresh raw file written by the real writer (its stored sha256 is authoritative).
     _write_matching_raw(vault, "articles", "src", "raw article text\n")
     # index.md lists both pages and a matching total.
-    index = _index_listing(("Entities", "alpha"), ("Concepts", "beta"))
+    index = _index_listing(("Entities", "alpha"), ("Notes", "beta"))
     index = index.replace("# Home\n", "# Home\n\n> Total pages: 2\n")
     (vault.root / "index.md").write_text(index, encoding="utf-8")
 
@@ -300,12 +293,12 @@ def test_clean_vault_yields_no_findings(vault: Vault, config: Config) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_orphan_knowledge_page_flagged_life_admin_exempt(
+def test_orphan_reference_page_flagged_actionable_exempt(
     vault: Vault, config: Config
 ) -> None:
-    """A knowledge page with no inbound link is an orphan; a life-admin page is not."""
+    """A reference page with no inbound link is an orphan; an action page is not."""
     _knowledge(vault, "entities", "lonely", page_type="entity", body="no links\n")
-    # A life-admin action with no inbound link must NOT be flagged.
+    # An actionable page with no inbound link must NOT be flagged.
     _write(
         vault,
         "actions/task.md",
@@ -337,11 +330,11 @@ def test_orphan_resolved_via_alias_target(vault: Vault, config: Config) -> None:
         body="content\n",
         extra={"aliases": ["PMC"]},
     )
-    _knowledge(vault, "concepts", "pointer", page_type="concept", body="see [[PMC]]\n")
+    _knowledge(vault, "notes", "pointer", page_type="note", body="see [[PMC]]\n")
     orphans = {f.path for f in _engine(vault, config).check_orphans()}
     assert "entities/target.md" not in orphans
     # 'pointer' itself has no inbound link, so it is the orphan here.
-    assert "concepts/pointer.md" in orphans
+    assert "notes/pointer.md" in orphans
 
 
 def test_self_link_does_not_rescue_orphan(vault: Vault, config: Config) -> None:
@@ -374,9 +367,9 @@ def test_label_and_anchor_wikilinks_resolve(vault: Vault, config: Config) -> Non
     _knowledge(vault, "entities", "real", page_type="entity", body="x\n")
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "src",
-        page_type="concept",
+        page_type="note",
         body="[[real|A Label]] and [[real#Heading]]\n",
     )
     broken = _engine(vault, config).check_broken_wikilinks()
@@ -395,20 +388,20 @@ def test_alias_target_is_not_broken(vault: Vault, config: Config) -> None:
     )
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "ref",
-        page_type="concept",
+        page_type="note",
         body="see [[Program Motion Controller]]\n",
     )
     broken = {f.path for f in _engine(vault, config).check_broken_wikilinks()}
-    assert "concepts/ref.md" not in broken
+    assert "notes/ref.md" not in broken
 
 
 def test_wikilink_resolves_by_full_path(vault: Vault, config: Config) -> None:
-    """A wikilink written as a full vault path (people/jane) resolves."""
+    """A wikilink written as a full vault path (entities/jane) resolves."""
     _write(
         vault,
-        "people/jane-doe.md",
+        "entities/jane-doe.md",
         {
             "title": "Jane",
             "type": "entity",
@@ -419,7 +412,11 @@ def test_wikilink_resolves_by_full_path(vault: Vault, config: Config) -> None:
         },
     )
     _knowledge(
-        vault, "entities", "team", page_type="entity", body="with [[people/jane-doe]]\n"
+        vault,
+        "entities",
+        "team",
+        page_type="entity",
+        body="with [[entities/jane-doe]]\n",
     )
     broken = _engine(vault, config).check_broken_wikilinks()
     assert broken == []
@@ -538,18 +535,21 @@ def test_frontmatter_action_missing_status_flagged(
 
 
 def test_frontmatter_bad_vocab_values_flagged(vault: Vault, config: Config) -> None:
-    """status/priority/media_type values outside the vocab are each flagged."""
+    """status/priority/media_type values outside the vocab are each flagged.
+
+    A media item is an ``action`` tagged ``media`` filed under ``actions/`` (ADR 0005).
+    """
     _write(
         vault,
-        "media/bad.md",
+        "actions/bad.md",
         {
             "title": "Bad media",
-            "type": "media",
+            "type": "action",
             "created": "2026-05-30",
             "updated": "2026-05-30",
             "source": "slack",
             "tags": ["media"],
-            "status": "watching",  # not in the media status vocab
+            "status": "watching",  # not in the action status vocab
             "priority": "super-high",  # not in PRIORITY_VOCAB
             "media_type": "scroll",  # not in MEDIA_TYPE_VOCAB
         },
@@ -557,7 +557,7 @@ def test_frontmatter_bad_vocab_values_flagged(vault: Vault, config: Config) -> N
     msgs = [
         f.message
         for f in _engine(vault, config).check_frontmatter()
-        if f.path == "media/bad.md"
+        if f.path == "actions/bad.md"
     ]
     assert any("status 'watching'" in m for m in msgs)
     assert any("priority 'super-high'" in m for m in msgs)
@@ -566,13 +566,13 @@ def test_frontmatter_bad_vocab_values_flagged(vault: Vault, config: Config) -> N
 
 def test_frontmatter_folder_type_mismatch_flagged(vault: Vault, config: Config) -> None:
     """A page whose type is not allowed in its folder is flagged (single-sourced)."""
-    # A `concept`-typed page placed in entities/ violates the folder-by-type contract.
+    # A `note`-typed page placed in entities/ violates the folder-by-type contract.
     _write(
         vault,
         "entities/wrong.md",
         {
             "title": "Wrong",
-            "type": "concept",
+            "type": "note",
             "created": "2026-05-30",
             "updated": "2026-05-30",
             "source": "slack",
@@ -626,15 +626,15 @@ def test_stale_knowledge_page_flagged(vault: Vault, config: Config) -> None:
     )
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "fresh",
-        page_type="concept",
+        page_type="note",
         updated=fresh,
         body="[[old]]\n",
     )
     stale = {f.path for f in _engine(vault, config).check_stale() if f.name == "stale"}
     assert "entities/old.md" in stale
-    assert "concepts/fresh.md" not in stale
+    assert "notes/fresh.md" not in stale
 
 
 def test_overdue_open_action_flagged_closed_exempt(
@@ -667,16 +667,19 @@ def test_overdue_open_action_flagged_closed_exempt(
 
 
 def test_media_to_consume_cold_flagged(vault: Vault, config: Config) -> None:
-    """A to_consume media older than MEDIA_STALE_DAYS is flagged; recent is not."""
+    """A to_consume media action older than MEDIA_STALE_DAYS is flagged; recent is not.
+
+    ADR 0005: a media item is an ``action`` tagged ``media`` under ``actions/``.
+    """
     cold = (TODAY - _dt.timedelta(days=MEDIA_STALE_DAYS + 1)).isoformat()
     warm = (TODAY - _dt.timedelta(days=MEDIA_STALE_DAYS - 1)).isoformat()
     for slug, created in (("cold", cold), ("warm", warm)):
         _write(
             vault,
-            f"media/{slug}.md",
+            f"actions/{slug}.md",
             {
                 "title": slug,
-                "type": "media",
+                "type": "action",
                 "created": created,
                 "updated": created,
                 "source": "slack",
@@ -687,7 +690,7 @@ def test_media_to_consume_cold_flagged(vault: Vault, config: Config) -> None:
     cold_paths = {
         f.path for f in _engine(vault, config).check_stale() if f.name == "media-cold"
     }
-    assert cold_paths == {"media/cold.md"}
+    assert cold_paths == {"actions/cold.md"}
 
 
 # --------------------------------------------------------------------------------------
@@ -707,9 +710,9 @@ def test_contested_and_contradictions_flagged(vault: Vault, config: Config) -> N
     )
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "conflicted",
-        page_type="concept",
+        page_type="note",
         body="[[clean]]\n",
         extra={"contradictions": ["other-slug"]},
     )
@@ -717,7 +720,7 @@ def test_contested_and_contradictions_flagged(vault: Vault, config: Config) -> N
     findings = _engine(vault, config).check_contradictions()
     flagged = {f.path for f in findings}
     assert "entities/disputed.md" in flagged
-    assert "concepts/conflicted.md" in flagged
+    assert "notes/conflicted.md" in flagged
     assert "entities/clean.md" not in flagged
     assert all(f.severity is Severity.CONTESTED for f in findings)
 
@@ -796,9 +799,9 @@ def test_quality_low_confidence_and_single_source(vault: Vault, config: Config) 
     )
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "single",
-        page_type="concept",
+        page_type="note",
         body="[[ok]]\n",
         extra={"sources": ["raw/articles/one.md"]},
     )
@@ -816,7 +819,7 @@ def test_quality_low_confidence_and_single_source(vault: Vault, config: Config) 
     )
     flagged = {f.path for f in _engine(vault, config).check_quality_signals()}
     assert "entities/shaky.md" in flagged
-    assert "concepts/single.md" in flagged
+    assert "notes/single.md" in flagged
     assert "entities/ok.md" not in flagged
 
 
@@ -836,14 +839,14 @@ def test_page_size_over_limit_flagged_at_limit_passes(
     )
     # Re-author 'big' so its body is exactly OVER the limit (link line bumps it anyway).
     _knowledge(vault, "entities", "big", page_type="entity", body=over_body)
-    _knowledge(vault, "concepts", "small", page_type="concept", body=at_body)
+    _knowledge(vault, "notes", "small", page_type="note", body=at_body)
     flagged = {f.path for f in _engine(vault, config).check_page_size()}
     assert "entities/big.md" in flagged
-    assert "concepts/small.md" not in flagged
+    assert "notes/small.md" not in flagged
 
 
-def test_page_size_life_admin_exempt(vault: Vault, config: Config) -> None:
-    """Life-admin pages are exempt from the page-size check."""
+def test_page_size_actionable_exempt(vault: Vault, config: Config) -> None:
+    """Actionable (actions/) pages are exempt from the page-size check."""
     over_body = "\n".join(["line"] * (PAGE_SIZE_LIMIT + 50)) + "\n"
     _write(
         vault,
@@ -879,16 +882,16 @@ def test_tag_audit_flags_unknown_tag(vault: Vault, config: Config) -> None:
     )
     _knowledge(
         vault,
-        "concepts",
+        "notes",
         "clean",
-        page_type="concept",
+        page_type="note",
         body="[[stray]]\n",
         tags=["concept", "controls"],
     )
     findings = _engine(vault, config).check_tag_audit()
     flagged = {(f.path, f.message) for f in findings}
     assert any(p == "entities/stray.md" and "totally-made-up" in m for p, m in flagged)
-    assert not any(p == "concepts/clean.md" for p, _ in flagged)
+    assert not any(p == "notes/clean.md" for p, _ in flagged)
 
 
 def test_tag_audit_missing_schema_raises(vault: Vault, config: Config) -> None:
@@ -921,7 +924,7 @@ def test_image_hygiene_orphan_broken_and_sidecar(vault: Vault, config: Config) -
         page_type="entity",
         body="![[used-img-bb22.png]] and ![[missing-dd44.png]] [[friend]]\n",
     )
-    _knowledge(vault, "concepts", "friend", page_type="concept", body="[[owner]]\n")
+    _knowledge(vault, "notes", "friend", page_type="note", body="[[owner]]\n")
 
     findings = _engine(vault, config).check_image_hygiene()
     by_name: dict[str, set[str]] = {}
@@ -1062,7 +1065,7 @@ def test_record_clean_report_still_logs_zero(vault: Vault, config: Config) -> No
 def test_malformed_yaml_page_skipped_run_survives(vault: Vault, config: Config) -> None:
     """A malformed-YAML page is skipped by the scans without crashing the run."""
     _knowledge(vault, "entities", "good", page_type="entity", body="[[friend]]\n")
-    _knowledge(vault, "concepts", "friend", page_type="concept", body="[[good]]\n")
+    _knowledge(vault, "notes", "friend", page_type="note", body="[[good]]\n")
     (vault.root / "entities/garbage.md").write_text(
         "---\n: : : not yaml : :\n---\nbody\n", encoding="utf-8"
     )
@@ -1164,8 +1167,8 @@ def test_parse_taxonomy_tags_absent_heading_is_empty() -> None:
 
 def test_constants_align_with_contract() -> None:
     """The folder/spine/excluded constants match the SPEC shape."""
-    assert KNOWLEDGE_DIRS == ("entities", "concepts", "comparisons", "queries")
-    assert "actions" in LIFE_ADMIN_DIRS and "inbox" in LIFE_ADMIN_DIRS
+    assert CURATED_DIRS == ("entities", "notes", "memories")
+    assert ACTIONABLE_DIRS == ("actions",)
     assert SPINE_FILES == frozenset({"index.md", "SCHEMA.md", "log.md"})
     assert {"_archive", "_bases", "_meta"} <= EXCLUDED_DIRS
     assert PAGE_SIZE_LIMIT == 200

@@ -60,7 +60,7 @@ from thoth.hindsight import (
 )
 from thoth.hindsight import base_args as default_base_args
 from thoth.state import MARKER_REINDEX, MarkerStore
-from thoth.vault import KNOWLEDGE_DIRS, LIFE_ADMIN_DIRS, Vault
+from thoth.vault import ACTIONABLE_DIRS, CURATED_DIRS, Vault
 
 __all__ = [
     "INDEXED_DIRS",
@@ -74,24 +74,17 @@ __all__ = [
     "page_type",
 ]
 
-# ADR 0004: ``inbox/`` is the transient deferred-capture holding area -- uncurated,
-# churny, and removed once curation succeeds -- so it stays out of the index like
-# ``raw/``; embedding either is a separate chunking-strategy question (issue #40).
-_UNINDEXED_LIFE_ADMIN_DIRS: frozenset[str] = frozenset({"inbox"})
+INDEXED_DIRS: tuple[str, ...] = (*CURATED_DIRS, *ACTIONABLE_DIRS)
+"""The content folders the reindex walks (SPEC section 8; ADR 0004 + ADR 0005).
 
-INDEXED_DIRS: tuple[str, ...] = (
-    *KNOWLEDGE_DIRS,
-    *(d for d in LIFE_ADMIN_DIRS if d not in _UNINDEXED_LIFE_ADMIN_DIRS),
-)
-"""The curated folders the reindex walks (SPEC section 8; ADR 0004).
-
-Per ADR 0004, the index covers **both** the fact-bearing knowledge folders
-(:data:`thoth.vault.KNOWLEDGE_DIRS`) **and** the life-admin folders
-(:data:`thoth.vault.LIFE_ADMIN_DIRS`: ``actions``/``media``/``memories``/``people``), so
-"have I ever noted anything about X?" reaches memories and actions too. Recall precision
-for knowledge Q&A is preserved by **scoping recall on the ``page_type`` tag** at query
-time (see :meth:`thoth.query.QueryEngine.recall_paths`), not by excluding folders here.
-Both lists stay canonical in :mod:`thoth.vault` so the vocabulary lives in one place.
+Per ADR 0004, the index covers **all** content pages, so "have I ever noted anything
+about X?" reaches the reference folders (:data:`thoth.vault.CURATED_DIRS`:
+``entities``/``notes``/``memories``) **and** the actionable folder
+(:data:`thoth.vault.ACTIONABLE_DIRS`: ``actions``, which also holds the media queue).
+Recall precision for knowledge Q&A is preserved by **scoping recall on the ``page_type``
+tag** at query time (see :meth:`thoth.query.QueryEngine.recall_paths`), not by excluding
+folders here. Both lists stay canonical in :mod:`thoth.vault` so the vocabulary lives in
+one place.
 
 ``inbox/`` (transient deferred-capture holding) and ``raw/`` (immutable, often-long
 source bytes needing a chunking strategy Hindsight does not do) remain excluded;

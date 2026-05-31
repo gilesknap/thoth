@@ -3,11 +3,14 @@ filters:
     - file.inFolder("actions")
     - file.ext == "md"
 properties:
-  status:    { displayName: Status }
-  due_date:  { displayName: Due }
-  priority:  { displayName: Priority }
-  project:   { displayName: Project }
+  status:     { displayName: Status }
+  due_date:   { displayName: Due }
+  priority:   { displayName: Priority }
+  project:    { displayName: Project }
   recurrence: { displayName: Repeat }
+  media_type: { displayName: Media Type }
+  creator:    { displayName: Creator }
+  url:        { displayName: URL }
 views:
   - type: table
     name: Open Actions
@@ -16,6 +19,7 @@ views:
         - status != "done"
         - status != "completed"
         - status != "cancelled"
+        - "!tags.contains(\"media\")"
     order: [file.name, due_date, priority, status, project, recurrence]
     sort:
       - { property: priority, direction: ASC }
@@ -28,6 +32,14 @@ views:
         - due_date != ""
         - due_date < now() + "7 days"
     order: [file.name, due_date, priority]
+  - type: table
+    name: Media — To Consume
+    filters:
+      and:
+        - tags.contains("media")
+        - status == "to_consume"
+    order: [file.name, media_type, creator, priority]
+    sort: [{ property: priority, direction: ASC }]
   - type: table
     name: All Actions
     order: [file.name, due_date, priority, status, project]

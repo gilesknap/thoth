@@ -63,14 +63,10 @@ updated: 2026-05-30
 ### Entities
 - [[program-motion-controller]] - central coordinator in the motor-control stack.
 
-### Concepts
+### Notes
 - [[distributed-systems]] - notes on CAP and consensus.
 
-### Comparisons
-
-### Queries
-
-### People
+### Memories
 """
 
 _LOG_SEED = """\
@@ -88,13 +84,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 
@@ -132,10 +124,10 @@ def _seed_vault(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (root / "concepts" / "distributed-systems.md").write_text(
+    (root / "notes" / "distributed-systems.md").write_text(
         _page(
             title="Distributed Systems",
-            page_type="concept",
+            page_type="note",
             body=("# Distributed Systems\n\nNotes on the CAP theorem and consensus.\n"),
             tags="[distributed]",
         ),
@@ -679,7 +671,7 @@ def test_save_answer_unicode_question_slug(
     """save_answer slugifies a unicode question by transliteration, not stripping (#10).
 
     The old hand-rolled slugifier dropped the accented bytes; python-slugify keeps the
-    word, so the saved page lands on a meaningful ``queries/cafe-notes.md`` path.
+    word, so the saved page lands on a meaningful ``notes/cafe-notes.md`` path.
     """
     extractor = _FakeExtractor()
     engine = _engine(config, vault, query_engine, extractor, [_text_response("x")])
@@ -687,7 +679,7 @@ def test_save_answer_unicode_question_slug(
 
     rel = engine.save_answer("café notes", result, today=date(2026, 6, 1))
 
-    assert rel == "queries/cafe-notes.md"
+    assert rel == "notes/cafe-notes.md"
     assert vault.page_exists(rel)
 
 
@@ -697,7 +689,7 @@ def test_save_answer_unicode_question_slug(
 def test_save_answer_writes_query_page_with_sources(
     config: Config, vault: Vault, query_engine: QueryEngine
 ) -> None:
-    """save_answer writes queries/<slug>.md with type=query, source=mcp, and sources."""
+    """save_answer writes notes/<slug>.md with type=note (tagged query), source=mcp."""
     extractor = _FakeExtractor()
     engine = _engine(config, vault, query_engine, extractor, [_text_response("x")])
     url = "https://example.com/raft"
@@ -713,10 +705,11 @@ def test_save_answer_writes_query_page_with_sources(
         "how does raft relate to the PMC", result, today=date(2026, 6, 1)
     )
 
-    assert rel == "queries/how-does-raft-relate-to-the-pmc.md"
+    assert rel == "notes/how-does-raft-relate-to-the-pmc.md"
     # The page round-trips via the vault.
     page = vault.read_page(rel)
-    assert page.frontmatter["type"] == "query"
+    assert page.frontmatter["type"] == "note"
+    assert page.frontmatter["tags"] == ["query"]
     assert page.frontmatter["source"] == "mcp"
     assert page.frontmatter["sources"] == [url]
     assert "## Sources" in page.body
@@ -733,7 +726,7 @@ def test_save_answer_explicit_slug(
     result = AskResult(answer="An answer.")
 
     rel = engine.save_answer("anything", result, slug="raft-notes")
-    assert rel == "queries/raft-notes.md"
+    assert rel == "notes/raft-notes.md"
     assert vault.page_exists(rel)
 
 
@@ -747,8 +740,10 @@ def test_save_answer_rejects_invalid_slug(
 
     with pytest.raises(ResearchError):
         engine.save_answer("anything", result, slug="Not A Slug")
-    # Nothing was written under queries/ beyond the seeded folder.
-    assert list((vault.root / "queries").glob("*.md")) == []
+    # Nothing new was written under notes/ (only the seeded page remains).
+    assert [p.name for p in (vault.root / "notes").glob("*.md")] == [
+        "distributed-systems.md"
+    ]
 
 
 def test_save_answer_cannot_escape_queries_folder(
@@ -830,7 +825,7 @@ def test_ask_surfaces_vault_candidates_in_prompt(
     engine.ask("distributed-systems")
 
     prompt = _scripted(engine).calls[0]["messages"][0]["content"]
-    assert "concepts/distributed-systems.md" in prompt
+    assert "notes/distributed-systems.md" in prompt
 
 
 def test_ask_no_vault_match_still_answers_from_web(

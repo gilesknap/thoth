@@ -38,7 +38,7 @@ from thoth.ingest import (
 )
 from thoth.llm import LLM
 from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
-from thoth.vault import TYPE_ENUMERATION, VALID_TYPES, Vault
+from thoth.vault import TYPE_ENUMERATION, Vault
 
 MAIN = "main"
 
@@ -212,12 +212,11 @@ class FakeHindsight:
 
 def _classify_json(
     *,
-    page_type: str = "concept",
+    page_type: str = "note",
     slug: str = "transformer-models",
     title: str = "Transformer Models",
     entities: list[str] | None = None,
     concepts: list[str] | None = None,
-    life_admin: dict[str, Any] | None = None,
 ) -> str:
     """Build a classify-call JSON string."""
     return json.dumps(
@@ -227,16 +226,15 @@ def _classify_json(
             "title": title,
             "entities": entities or [],
             "concepts": concepts or ["transformer-models"],
-            "life_admin": life_admin or {},
         }
     )
 
 
 def _file_plan_json(
     *,
-    folder: str = "concepts",
+    folder: str = "notes",
     slug: str = "transformer-models",
-    page_type: str = "concept",
+    page_type: str = "note",
     title: str = "Transformer Models",
     body: str = "Transformers use attention.",
     wikilinks: list[str] | None = None,
@@ -288,13 +286,9 @@ updated: 2026-05-30
 
 ### Entities
 
-### Concepts
+### Notes
 
-### Comparisons
-
-### Queries
-
-### People
+### Memories
 """
 
 _LOG_SEED = """\
@@ -312,13 +306,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 
@@ -458,8 +448,8 @@ def test_capture_kind_enum_values() -> None:
 
 def test_dataclasses_construct_with_defaults() -> None:
     """The frozen result dataclasses build with their documented defaults."""
-    cls = Classification(page_type="concept", slug="x", title="X")
-    assert cls.entities == [] and cls.concepts == [] and cls.life_admin == {}
+    cls = Classification(page_type="note", slug="x", title="X")
+    assert cls.entities == [] and cls.concepts == []
     raw = RawCaptureResult(raw_path=None, disposition="none")
     assert raw.asset_paths == []
     report = IngestReport(
@@ -505,34 +495,32 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
     report = ingestor.ingest(Capture(url="https://example.com/transformers"))
 
     # Curated page + raw page written and on disk.
-    assert report.page_paths == ["concepts/transformer-models.md"]
+    assert report.page_paths == ["notes/transformer-models.md"]
     assert report.raw_paths == ["raw/articles/transformer-models.md"]
-    assert harness.vault.page_exists("concepts/transformer-models.md")
+    assert harness.vault.page_exists("notes/transformer-models.md")
     assert harness.vault.page_exists("raw/articles/transformer-models.md")
 
     # Hindsight retained exactly once for the one curated page, with type + path tags.
     assert len(hindsight.retained) == 1
     retained = hindsight.retained[0]
-    assert retained.rel_path == "concepts/transformer-models.md"
-    assert retained.tags == ("concept", "concepts/transformer-models.md")
-    assert hindsight.probed == [
-        ("concepts/transformer-models.md", "Transformer Models")
-    ]
+    assert retained.rel_path == "notes/transformer-models.md"
+    assert retained.tags == ("note", "notes/transformer-models.md")
+    assert hindsight.probed == [("notes/transformer-models.md", "Transformer Models")]
 
     # obsidian link is harness-built (matches Vault.obsidian_uri), not from the model.
     assert report.obsidian_links == [
-        harness.vault.obsidian_uri("concepts/transformer-models.md")
+        harness.vault.obsidian_uri("notes/transformer-models.md")
     ]
     assert report.wikilinks == ["[[transformer-models]]"]
 
     # Committed to the local origin.
     assert report.committed is True
     assert report.conflict is False
-    assert "concepts/transformer-models.md" in harness.origin_files()
+    assert "notes/transformer-models.md" in harness.origin_files()
 
 
 def test_ingest_appends_index_and_log(harness: IngestHarness) -> None:
-    """A knowledge page lands a Concepts catalog line and a log block."""
+    """A note page lands a Notes catalog line and a log block."""
     doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body text")
     client = _ScriptedClient(_classify_json(), _file_plan_json())
     ingestor = _build_ingestor(
@@ -548,7 +536,7 @@ def test_ingest_appends_index_and_log(harness: IngestHarness) -> None:
     assert "[[transformer-models]]" in index_text
     log_text = (harness.work / "log.md").read_text(encoding="utf-8")
     assert "ingest" in log_text
-    assert "concepts/transformer-models.md" in log_text
+    assert "notes/transformer-models.md" in log_text
 
 
 def test_ingest_uses_model_supplied_index_entry(harness: IngestHarness) -> None:
@@ -557,7 +545,7 @@ def test_ingest_uses_model_supplied_index_entry(harness: IngestHarness) -> None:
     plan = _file_plan_json(
         index_entries=[
             {
-                "section": "Concepts",
+                "section": "Notes",
                 "wikilink": "transformer-models",
                 "summary": "attention-based sequence models",
             }
@@ -585,7 +573,7 @@ def test_curate_rejects_folder_type_mismatch(harness: IngestHarness) -> None:
     """A page whose folder/type pair is illegal is rejected and not written."""
     doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
     # type=concept is NOT allowed in actions/ -> validate_file_plan rejects it.
-    bad_plan = _file_plan_json(folder="actions", page_type="concept")
+    bad_plan = _file_plan_json(folder="actions", page_type="note")
     ingestor = _build_ingestor(
         harness,
         client=_ScriptedClient(_classify_json(), bad_plan),
@@ -597,7 +585,7 @@ def test_curate_rejects_folder_type_mismatch(harness: IngestHarness) -> None:
         ingestor.ingest(Capture(url="https://e.com/a"))
 
     assert not (harness.work / "actions" / "transformer-models.md").exists()
-    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    assert not harness.vault.page_exists("notes/transformer-models.md")
 
 
 def test_curate_rejects_escaping_slug(harness: IngestHarness, tmp_path: Path) -> None:
@@ -644,7 +632,7 @@ def test_curate_rejects_absolute_folder(harness: IngestHarness) -> None:
 def test_capture_raw_creates_then_skips_unchanged(harness: IngestHarness) -> None:
     """Re-capturing an identical body recomputes sha256 and skips the rewrite."""
     cls = Classification(
-        page_type="concept", slug="dup-source", title="Dup", concepts=["dup-source"]
+        page_type="note", slug="dup-source", title="Dup", concepts=["dup-source"]
     )
     doc = ExtractedDoc(source_url="https://e.com/x", title="Dup", markdown="same body")
     ingestor = _build_ingestor(
@@ -677,7 +665,7 @@ def test_capture_raw_skips_unchanged_body_ending_in_newline(
     drift on an unchanged page.
     """
     cls = Classification(
-        page_type="concept", slug="nl-source", title="NL", concepts=["nl-source"]
+        page_type="note", slug="nl-source", title="NL", concepts=["nl-source"]
     )
     doc = ExtractedDoc(
         source_url="https://e.com/nl", title="NL", markdown="real article body\n"
@@ -701,7 +689,7 @@ def test_capture_raw_skips_unchanged_body_ending_in_newline(
 
 def test_capture_raw_detects_drift(harness: IngestHarness) -> None:
     """A changed body for the same slug is flagged as drift and rewritten."""
-    cls = Classification(page_type="concept", slug="drift-source", title="Drift")
+    cls = Classification(page_type="note", slug="drift-source", title="Drift")
     first_doc = ExtractedDoc(source_url="https://e.com/d", title="D", markdown="v1")
     ingestor = _build_ingestor(
         harness,
@@ -929,15 +917,15 @@ def test_pdf_capture_writes_paper_page_and_keeps_binary(
         suggested_ext="pdf",
     )
     classify = _classify_json(
-        page_type="concept",
+        page_type="note",
         slug="attention-paper",
         title="Attention Is All You Need",
         concepts=["attention-paper"],
     )
     plan = _file_plan_json(
-        folder="concepts",
+        folder="notes",
         slug="attention-paper",
-        page_type="concept",
+        page_type="note",
         title="Attention Is All You Need",
     )
     ingestor = _build_ingestor(
@@ -982,7 +970,7 @@ def test_pdf_reingest_same_is_skipped(harness: IngestHarness, tmp_path: Path) ->
     """Re-ingesting the same PDF skips both the binary and the paper page
     (idempotent)."""
     cls = Classification(
-        page_type="concept",
+        page_type="note",
         slug="attention-paper",
         title="Attention",
         concepts=["attention-paper"],
@@ -1062,12 +1050,13 @@ def test_classify_rejects_out_of_vocab_type(harness: IngestHarness) -> None:
 def test_classify_prompt_enumerates_exactly_the_vault_types(
     harness: IngestHarness,
 ) -> None:
-    """The classify prompt's type list is derived from the vault vocabulary (#19).
+    """The classify prompt's type list is derived from the vault vocabulary (ADR 0005).
 
-    Every legal type (and no out-of-vocabulary word) appears in the prompt's
-    "type (one of ...)" clause, derived from :data:`thoth.vault.TYPE_ENUMERATION`. A
-    type added to or removed from the vault contract changes this prompt automatically,
-    so the prompt and the enforcement gate cannot diverge.
+    Every content type (and no out-of-vocabulary word) appears in the prompt's
+    "type (one of ...)" clause, derived from :data:`thoth.vault.TYPE_ENUMERATION` (the
+    four content types; the ``inbox`` machinery type is never a classify target). A type
+    added to or removed from the vault contract changes this prompt automatically, so
+    the prompt and the enforcement gate cannot diverge.
     """
     ingestor = _build_ingestor(
         harness,
@@ -1078,7 +1067,7 @@ def test_classify_prompt_enumerates_exactly_the_vault_types(
     prompt = ingestor._classify_prompt(Capture(text="hello"))
     enumerated = ", ".join(TYPE_ENUMERATION)
     assert f"type (one of {enumerated})" in prompt
-    for page_type in VALID_TYPES:
+    for page_type in TYPE_ENUMERATION:
         assert page_type in prompt
     assert "wibble" not in prompt
 
@@ -1119,14 +1108,13 @@ def test_classify_llm_transport_failure(harness: IngestHarness) -> None:
         ingestor.classify(Capture(text="hello"))
 
 
-def test_classify_parses_life_admin_fields(harness: IngestHarness) -> None:
-    """An action classification keeps the parsed life_admin fields."""
+def test_classify_parses_an_action(harness: IngestHarness) -> None:
+    """An action classification round-trips its type (ADR 0005: no life_admin dict)."""
     classify = _classify_json(
         page_type="action",
         slug="fix-fence",
         title="Fix the fence",
         concepts=[],
-        life_admin={"due_date": "2026-06-01", "priority": "2 - High"},
     )
     ingestor = _build_ingestor(
         harness,
@@ -1136,17 +1124,15 @@ def test_classify_parses_life_admin_fields(harness: IngestHarness) -> None:
     )
     cls = ingestor.classify(Capture(text="remind me to fix the fence"))
     assert cls.page_type == "action"
-    assert cls.life_admin == {"due_date": "2026-06-01", "priority": "2 - High"}
 
 
 def test_ingest_action_lands_in_actions_without_index(harness: IngestHarness) -> None:
-    """A life-admin action page lands in actions/ and gets NO index catalog entry."""
+    """An actionable page lands in actions/ and gets NO index catalog entry."""
     classify = _classify_json(
         page_type="action",
         slug="fix-fence",
         title="Fix the fence",
         concepts=[],
-        life_admin={"due_date": "2026-06-01"},
     )
     plan = _file_plan_json(
         folder="actions",
@@ -1195,9 +1181,9 @@ def test_commit_conflict_surfaces_in_report(harness: IngestHarness) -> None:
 
     assert report.conflict is True
     assert report.committed is False
-    assert "concepts/transformer-models.md" in report.message
+    assert "notes/transformer-models.md" in report.message
     # The page is already filed locally (fail-loud, content not lost; no --force).
-    assert harness.vault.page_exists("concepts/transformer-models.md")
+    assert harness.vault.page_exists("notes/transformer-models.md")
 
 
 # --------------------------------------------------------------------------- #
@@ -1307,7 +1293,7 @@ def test_retain_failure_surfaces_after_durable_write(harness: IngestHarness) -> 
         ingestor.ingest(Capture(url="https://e.com/a"))
 
     # The curated page write happened before retain, so it is durable on disk.
-    assert harness.vault.page_exists("concepts/transformer-models.md")
+    assert harness.vault.page_exists("notes/transformer-models.md")
 
 
 def test_probe_failure_does_not_abort(harness: IngestHarness) -> None:
@@ -1336,8 +1322,8 @@ def test_extractor_fetch_error_aborts_before_commit(harness: IngestHarness) -> N
         ingestor.ingest(Capture(url="https://e.com/a"))
 
     # No curated page written, nothing pushed to origin beyond the seed.
-    assert not harness.vault.page_exists("concepts/transformer-models.md")
-    assert "concepts/transformer-models.md" not in harness.origin_files()
+    assert not harness.vault.page_exists("notes/transformer-models.md")
+    assert "notes/transformer-models.md" not in harness.origin_files()
 
 
 def test_extractor_ssrf_error_aborts(harness: IngestHarness) -> None:
@@ -1474,7 +1460,7 @@ def test_ingest_persists_raw_then_defers_when_curate_llm_fails(
     assert report.deferred is True
     assert report.page_paths == []
     # No curated page was written (the validation gate / curate never produced a plan).
-    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    assert not harness.vault.page_exists("notes/transformer-models.md")
     # The durable inbox holding page exists and carries the extracted article body.
     holds = _inbox_holds(harness)
     assert len(holds) == 1
@@ -1588,7 +1574,7 @@ def test_ingest_happy_path_removes_inbox_holding_page(harness: IngestHarness) ->
 
     # The curated + raw pages landed exactly as before this change.
     assert report.deferred is False
-    assert report.page_paths == ["concepts/transformer-models.md"]
+    assert report.page_paths == ["notes/transformer-models.md"]
     assert report.raw_paths == ["raw/articles/transformer-models.md"]
     # No inbox holding page is left behind on the happy path.
     assert _inbox_holds(harness) == []
@@ -1634,7 +1620,7 @@ def test_ingest_validation_failure_still_raises_and_keeps_raw(
     item was already persisted to inbox before classify, so the capture is not lost.
     """
     doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body text")
-    bad_plan = _file_plan_json(folder="actions", page_type="concept")  # illegal pair
+    bad_plan = _file_plan_json(folder="actions", page_type="note")  # illegal pair
     ingestor = _build_ingestor(
         harness,
         client=_ScriptedClient(_classify_json(), bad_plan),
@@ -1646,7 +1632,7 @@ def test_ingest_validation_failure_still_raises_and_keeps_raw(
         ingestor.ingest(Capture(url="https://e.com/a"))
 
     # The validation gate held: no curated page written.
-    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    assert not harness.vault.page_exists("notes/transformer-models.md")
     # But the raw inbound item is safe in the inbox holding area (capture not lost).
     assert len(_inbox_holds(harness)) == 1
 
@@ -1719,11 +1705,11 @@ def test_search_vault_empty_query_returns_empty(harness: IngestHarness) -> None:
 def test_fetch_candidates_dedupes_terms(harness: IngestHarness) -> None:
     """fetch_candidates merges entity/concept hits without duplicates."""
     harness.vault.write_page(
-        "concepts",
+        "notes",
         "attention",
         {
             "title": "Attention",
-            "type": "concept",
+            "type": "note",
             "source": "manual",
             "tags": ["ai-ml"],
         },
@@ -1736,14 +1722,14 @@ def test_fetch_candidates_dedupes_terms(harness: IngestHarness) -> None:
         hindsight=FakeHindsight(),
     )
     cls = Classification(
-        page_type="concept",
+        page_type="note",
         slug="x",
         title="attention",
         entities=["attention"],
         concepts=["attention"],
     )
     candidates = ingestor.fetch_candidates(cls)
-    assert candidates.count("concepts/attention.md") == 1
+    assert candidates.count("notes/attention.md") == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -1760,11 +1746,11 @@ def test_curate_rejects_too_few_wikilinks(harness: IngestHarness) -> None:
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
     )
-    cls = Classification(page_type="concept", slug="transformer-models", title="T")
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
     with pytest.raises(IngestError, match="file plan rejected"):
         ingestor.curate(Capture(text="x"), cls, raw, [])
-    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    assert not harness.vault.page_exists("notes/transformer-models.md")
 
 
 def test_curate_unparseable_plan(harness: IngestHarness) -> None:
@@ -1775,7 +1761,7 @@ def test_curate_unparseable_plan(harness: IngestHarness) -> None:
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
     )
-    cls = Classification(page_type="concept", slug="x", title="T")
+    cls = Classification(page_type="note", slug="x", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
     with pytest.raises(IngestError, match="file plan"):
         ingestor.curate(Capture(text="x"), cls, raw, [])
@@ -1793,11 +1779,11 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
     )
-    cls = Classification(page_type="concept", slug="x", title="T")
+    cls = Classification(page_type="note", slug="x", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
     prompt = ingestor._curate_prompt(Capture(text="hello"), cls, raw, [])
     for token in (
-        "concepts",
+        "notes",
         "entities",
         "actions",
         "wikilinks",
@@ -1813,9 +1799,7 @@ def test_curate_retries_then_succeeds_on_corrective_plan(
 ) -> None:
     """A first invalid plan is recovered: the validation errors are fed back and the
     corrected plan is written (the exact failure that left the live vault empty)."""
-    bad_plan = _file_plan_json(
-        folder="actions", page_type="concept"
-    )  # folder/type clash
+    bad_plan = _file_plan_json(folder="actions", page_type="note")  # folder/type clash
     good_plan = _file_plan_json()
     client = _ScriptedClient(bad_plan, good_plan)
     ingestor = _build_ingestor(
@@ -1824,13 +1808,13 @@ def test_curate_retries_then_succeeds_on_corrective_plan(
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
     )
-    cls = Classification(page_type="concept", slug="transformer-models", title="T")
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
 
     plan = ingestor.curate(Capture(text="x"), cls, raw, [])
 
-    assert plan["_written"] == ["concepts/transformer-models.md"]
-    assert harness.vault.page_exists("concepts/transformer-models.md")
+    assert plan["_written"] == ["notes/transformer-models.md"]
+    assert harness.vault.page_exists("notes/transformer-models.md")
     # Two curate attempts were made and the retry fed the validation errors back.
     assert len(client.messages.calls) == 2
     retry_msgs = client.messages.calls[1]["messages"]
@@ -1844,7 +1828,7 @@ def test_curate_reraises_after_exhausting_corrective_retry(
     harness: IngestHarness,
 ) -> None:
     """A persistently invalid plan still aborts after one retry, writing nothing."""
-    bad_plan = _file_plan_json(folder="actions", page_type="concept")
+    bad_plan = _file_plan_json(folder="actions", page_type="note")
     client = _ScriptedClient(bad_plan)  # the last response repeats -> both invalid
     ingestor = _build_ingestor(
         harness,
@@ -1852,14 +1836,14 @@ def test_curate_reraises_after_exhausting_corrective_retry(
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
     )
-    cls = Classification(page_type="concept", slug="transformer-models", title="T")
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
 
     with pytest.raises(IngestError, match="file plan"):
         ingestor.curate(Capture(text="x"), cls, raw, [])
     assert len(client.messages.calls) == _CURATE_ATTEMPTS  # one corrective retry tried
     assert not harness.vault.page_exists("actions/transformer-models.md")
-    assert not harness.vault.page_exists("concepts/transformer-models.md")
+    assert not harness.vault.page_exists("notes/transformer-models.md")
 
 
 def test_apply_navigation_skips_unknown_index_section(harness: IngestHarness) -> None:
@@ -1888,8 +1872,8 @@ def test_apply_navigation_skips_unknown_index_section(harness: IngestHarness) ->
 
     report = ingestor.ingest(Capture(url="https://e.com/a"))
 
-    assert report.page_paths == ["concepts/transformer-models.md"]
-    assert harness.vault.page_exists("concepts/transformer-models.md")
+    assert report.page_paths == ["notes/transformer-models.md"]
+    assert harness.vault.page_exists("notes/transformer-models.md")
     index_text = (harness.work / "index.md").read_text(encoding="utf-8")
     # The derived default catalog entry landed; the bogus section never did.
     assert "[[transformer-models]]" in index_text
@@ -1909,7 +1893,7 @@ def test_curate_passes_schema_md_as_system_extra(harness: IngestHarness) -> None
         harness.git,
         schema_md="# Vault Schema\nrules here",
     )
-    cls = Classification(page_type="concept", slug="transformer-models", title="T")
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
     ingestor.curate(Capture(text="x"), cls, raw, [])
     # The single create call carried the schema text in its system blocks.

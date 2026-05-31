@@ -5,7 +5,7 @@ No external boundary: the module is a pure read of package data via
 files for real and asserts on their parsed structure and on the accessor's
 name-confinement. The data directory ``src/thoth/templates/`` is not a Python
 package, so it is reached as a resource under the importable ``thoth`` package;
-these tests verify the accessor surfaces exactly the eight shipped templates and
+these tests verify the accessor surfaces exactly the nine shipped templates and
 rejects names that escape the resource root. The lint round-trip
 (``parse_taxonomy_tags`` over the seed ``SCHEMA.md``) skips cleanly if
 :mod:`thoth.lint` is not yet importable, keeping this module's tests independent
@@ -72,13 +72,13 @@ def test_home_base_has_nested_not_inside_and() -> None:
     )
 
 
-def test_media_base_has_an_or_view() -> None:
-    """``media.base`` exposes an OR view across the active media states."""
-    data: Any = yaml.safe_load(base_text("media"))
-    in_progress = next(v for v in data["views"] if v["name"] == "In Progress or Done")
-    or_list = in_progress["filters"]["or"]
-    assert 'status == "consuming"' in or_list
-    assert 'status == "consumed"' in or_list
+def test_actions_base_has_a_media_consume_view() -> None:
+    """``actions.base`` carries the media-consume queue (ADR 0005: media is action)."""
+    data: Any = yaml.safe_load(base_text("actions"))
+    media_view = next(v for v in data["views"] if "Media" in v["name"])
+    and_list = media_view["filters"]["and"]
+    assert 'tags.contains("media")' in and_list
+    assert 'status == "to_consume"' in and_list
 
 
 # --------------------------------------------------------------------------- #
@@ -160,8 +160,8 @@ def test_base_text_unknown_dashboard_raises() -> None:
         base_text("does-not-exist")
 
 
-def test_iter_templates_returns_all_eight_non_empty() -> None:
-    """``iter_templates`` yields all 8 templates, spine first, each non-empty."""
+def test_iter_templates_returns_all_nine_non_empty() -> None:
+    """``iter_templates`` yields all 9 templates, spine first, each non-empty."""
     items = iter_templates()
     names = [name for name, _ in items]
     assert names == [
@@ -170,9 +170,10 @@ def test_iter_templates_returns_all_eight_non_empty() -> None:
         "log.md",
         "_bases/home.base",
         "_bases/actions.base",
-        "_bases/media.base",
         "_bases/memories.base",
         "_bases/inbox.base",
+        "_bases/entities.base",
+        "_bases/notes.base",
     ]
     for name, text in items:
         assert text.strip(), name
@@ -185,7 +186,7 @@ def test_iter_templates_returns_independent_list() -> None:
     """``iter_templates`` returns a fresh list each call (no shared mutation)."""
     first = iter_templates()
     first.clear()
-    assert len(iter_templates()) == 8
+    assert len(iter_templates()) == 9
 
 
 # --------------------------------------------------------------------------- #
@@ -203,18 +204,18 @@ def test_schema_round_trips_through_lint_taxonomy_parser() -> None:
     assert expected <= tags, sorted(tags)
 
 
-def test_schema_taxonomy_agrees_with_code_knowledge_types() -> None:
-    """SCHEMA.md's human-readable taxonomy lists every code page type (#19).
+def test_schema_taxonomy_agrees_with_code_content_types() -> None:
+    """SCHEMA.md's human-readable taxonomy lists every code content type (ADR 0005).
 
     vault.py is the single source of the page-type vocabulary; SCHEMA.md carries a
     human-readable copy for the lint tag audit. This guards the copy against drift:
-    every canonical :data:`thoth.vault.KNOWLEDGE_TYPES` value must appear in the shipped
-    ``## Tag Taxonomy`` so a page type cannot be dropped from the schema while kept in
-    the code (which would silently flag every page using it as an unknown tag).
+    every content type in :data:`thoth.vault.TYPE_ENUMERATION` must appear in the
+    shipped ``## Tag Taxonomy`` so a page type cannot be dropped from the schema while
+    kept in the code (which would silently flag every page using it as an unknown tag).
     """
     lint = pytest.importorskip("thoth.lint")
-    from thoth.vault import KNOWLEDGE_TYPES
+    from thoth.vault import TYPE_ENUMERATION
 
     tags = lint.parse_taxonomy_tags(template_text("SCHEMA.md"))
-    missing = KNOWLEDGE_TYPES - tags
+    missing = set(TYPE_ENUMERATION) - tags
     assert not missing, f"page types absent from SCHEMA.md taxonomy: {sorted(missing)}"
