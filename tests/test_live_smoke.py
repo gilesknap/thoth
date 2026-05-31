@@ -164,9 +164,12 @@ def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> N
     hindsight = Hindsight(live_config)
     token = uuid.uuid4().hex
     rel_path = f"entities/scope-probe-{token}.md"
-    query = f"scope probe entity {token}"
+    # Keep the query lexically close to the fact so the probe reliably surfaces among
+    # real bank content (recall is semantic + token-bounded), as the rel-tag round-trip
+    # test above does -- this test is about the tag round-trip, not recall ranking.
+    query = f"tag scope probe entity fact {token}"
     hindsight.retain(
-        rel_path, f"A tag-scope probe fact tagged {token}.", tags=["entity"]
+        rel_path, f"A tag scope probe entity fact tagged {token}.", tags=["entity"]
     )
 
     match = next((h for h in hindsight.recall(query) if h.path == rel_path), None)
