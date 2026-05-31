@@ -62,6 +62,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from thoth.budget import KIND_HINDSIGHT, BudgetGuardLike
 from thoth.config import Config
 
 __all__ = [
@@ -389,6 +390,7 @@ class Hindsight:
         retries: int = 3,
         retry_wait_initial: float = 0.5,
         retry_wait_max: float = 4.0,
+        guard: BudgetGuardLike | None = None,
     ) -> None:
         """Build a :class:`Hindsight` wrapper.
 
@@ -406,8 +408,16 @@ class Hindsight:
             retries: Maximum attempts for a checked call (``1`` disables retry).
             retry_wait_initial: Initial exponential backoff in seconds.
             retry_wait_max: Cap on the exponential backoff in seconds.
+            guard: An optional daily-spend guard (:class:`thoth.budget.BudgetGuard`);
+                when wired, :meth:`retain` charges one Hindsight (Gemini
+                fact-extraction) call against the daily budget *before* the CLI runs and
+                raises :class:`thoth.budget.BudgetExceededError` once the cap is reached
+                -- the guard for the ``reindex --full-rebuild`` cost burst (issue #16).
+                ``None`` (the default) disables the cap, so existing callers are
+                unaffected.
         """
         self._config = config
+        self._guard = guard
         self._base_args: tuple[str, ...] = (
             tuple(base_args) if base_args is not None else _default_base_args()
         )
@@ -455,7 +465,14 @@ class Hindsight:
         Raises:
             HindsightError: if the CLI exits non-zero (permanent failures fail fast;
                 transient ones are retried up to ``retries`` times first).
+            thoth.budget.BudgetExceededError: when a budget guard is wired and the daily
+                call cap has been reached (raised before the CLI runs, so no Gemini
+                extraction is spent).
         """
+        if self._guard is not None:
+            # Charge before spawning the CLI so a cap-reached day defers the embedding
+            # rather than spending it; this guards the reindex burst (issue #16).
+            self._guard.charge(KIND_HINDSIGHT)
         argv: list[str] = [
             *self._base_args,
             *RETAIN_SUBCOMMAND,

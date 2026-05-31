@@ -50,6 +50,7 @@ from pathlib import Path
 
 import frontmatter
 
+from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.hindsight import (
     Hindsight,
@@ -126,6 +127,10 @@ class ReindexResult:
         pruned: Manifest entries for pages no longer present that were forgotten.
         live_pages: Distinct curated pages seen on disk this run.
         full_rebuild: Whether this pass wiped the bank and re-retained every page.
+        aborted: Whether the daily LLM budget (issue #16) was hit mid-walk, so the run
+            stopped early; the pages retained before the cap are recorded in the
+            manifest, but pruning is skipped (the walk is incomplete) and no liveness
+            marker is recorded. ``False`` on a normal complete pass.
     """
 
     changed: int
@@ -133,6 +138,7 @@ class ReindexResult:
     pruned: int
     live_pages: int
     full_rebuild: bool
+    aborted: bool = False
 
 
 def manifest_path(config: Config) -> Path:
@@ -367,15 +373,37 @@ class Reindexer:
         seen: set[str] = set()
         changed = 0
         skipped = 0
+        aborted = False
         for rel, markdown in self._iter_pages():
             seen.add(rel)
             digest = self.body_hash(markdown)
             if not full_rebuild and manifest.get(rel, {}).get("sha256") == digest:
                 skipped += 1
                 continue
-            self._retain_page(rel, markdown)
+            try:
+                self._retain_page(rel, markdown)
+            except BudgetExceededError:
+                # The daily LLM budget (issue #16) was reached mid-rebuild. Stop
+                # cleanly: the pages retained so far are advanced in the manifest below,
+                # but the walk is incomplete so we must NOT prune (unseen pages were not
+                # visited, not deleted) and must not record the reindex liveness marker.
+                # The guard has already emitted the one-per-day notification.
+                seen.discard(rel)
+                aborted = True
+                break
             manifest[rel] = {"sha256": digest, "retained_at": _now_iso()}
             changed += 1
+
+        if aborted:
+            self.write_manifest(manifest)
+            return ReindexResult(
+                changed=changed,
+                skipped=skipped,
+                pruned=0,
+                live_pages=len(seen),
+                full_rebuild=full_rebuild,
+                aborted=True,
+            )
 
         pruned = self._prune_deleted(manifest, seen)
         self.write_manifest(manifest)

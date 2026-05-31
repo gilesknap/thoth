@@ -59,6 +59,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any, overload
 
+from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.extract import ExtractError, Extractor, FetchedBinary
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
@@ -1130,6 +1131,12 @@ class Ingestor:
         Hindsight failure is surfaced (the vault write is already durable), so the page
         is never silently lost (SPEC steps 6-7 ordering).
 
+        A daily-budget trip (:class:`~thoth.budget.BudgetExceededError`) during retain
+        is **not** an error: the curated page is already on disk and committed, so
+        indexing is simply deferred to the next reindex (which re-retains every changed
+        page). The remaining pages are left unindexed too and the pass returns cleanly
+        -- the capture is filed, never lost, just not yet searchable (issue #16).
+
         Raises:
             IngestError: if a retain call fails (the page is still on disk).
         """
@@ -1141,6 +1148,10 @@ class Ingestor:
             facts = self._retain_facts(page.frontmatter, page.body)
             try:
                 self._hindsight.retain(rel, facts, tags=[cls.page_type, rel])
+            except BudgetExceededError:
+                # Cap reached mid-ingest: the page is durable on disk and will be
+                # indexed by the next reindex; stop retaining rather than fail (#16).
+                return
             except HindsightError as exc:
                 raise IngestError(
                     f"hindsight retain failed for {rel} (page is filed on disk): {exc}"
