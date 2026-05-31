@@ -6,8 +6,9 @@ collaborators that are constructed elsewhere and injected here: an
 :class:`~thoth.ingest.Ingestor` (capture), a :class:`~thoth.query.QueryEngine` (fast
 vault-only retrieve), and -- when wired -- a :class:`~thoth.research.ResearchEngine`
 (the blended web+vault Q&A that backs the default free-text path, SPEC section 7.1). The
-daemon listens for ``message.im`` and ``file_shared`` events, gates them through an
-allow-list and a transient redelivery dedupe, routes a bare URL / file to an ingest and
+daemon listens for ``message.im`` events (a file upload arrives as a ``message`` with
+subtype ``file_share`` carrying the full file objects), gates them through an allow-list
+and a transient redelivery dedupe, routes a bare URL / uploaded file to an ingest and
 sends **bare free text** through a lightweight intent gate
 (:class:`~thoth.intent.IntentClassifier`, issue #5) that picks capture / vault-query /
 blended ask -- falling back to the pre-gate default (blended ask, or vault-only query
@@ -46,6 +47,7 @@ from __future__ import annotations
 import os
 import tempfile
 import time
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -459,14 +461,23 @@ class Handlers:
         """Return ``True`` iff ``user_id`` is on the allow-list (fail-closed)."""
         return bool(user_id) and user_id in self.allowed_users
 
-    def handle_message(self, event: dict[str, Any], say: Callable[[str], None]) -> None:
+    def handle_message(
+        self,
+        event: dict[str, Any],
+        say: Callable[[str], None],
+        client: SlackClientLike | None = None,
+    ) -> None:
         """Gate, route, and reply to a ``message.im`` event.
 
-        Ignores bot/own messages and message subtypes (edits, joins) so the daemon does
-        not loop on its own replies. Enforces the allow-list (replying with a polite
-        refusal to a known but not-allowed sender) and the redelivery dedupe. Routing
-        (SPEC sections 6, 7.1):
+        Ignores bot/own messages and edit/join subtypes so the daemon does not loop on
+        its own replies. Enforces the allow-list (replying with a polite refusal to a
+        known but not-allowed sender) and the redelivery dedupe. Routing (SPEC sections
+        6, 7.1):
 
+        * a **file upload** (a ``message`` with subtype ``file_share``) downloads and
+          ingests every attached file via :meth:`_ingest_uploaded_files` -- this event
+          carries the full file objects (download URL + name) and a usable ``channel``,
+          unlike the bare ``file_shared`` event the appliance ignores;
         * a bare ``y``/``yes``/``save`` reply confirms a pending "save this answer?"
           offer and files the last blended answer as a ``queries/`` page;
         * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
@@ -485,6 +496,8 @@ class Handlers:
         Args:
             event: The Slack event payload.
             say: A callable that posts a reply string back to the channel.
+            client: The Slack web client (needed to download an uploaded file's bytes);
+                ``None`` for the text-only paths, which never touch it.
         """
         if not self._should_handle(event):
             return
@@ -493,6 +506,10 @@ class Handlers:
             say(_REFUSAL_TEXT)
             return
         if self.dedupe.seen(self._event_key(event)):
+            return
+
+        if event.get("subtype") == "file_share":
+            self._ingest_uploaded_files(event, client, say)
             return
 
         text = str(event.get("text", "")).strip()
@@ -511,42 +528,51 @@ class Handlers:
         else:
             self._route_free_text(text, channel, source, say)
 
-    def handle_file_shared(
+    def _ingest_uploaded_files(
         self,
         event: dict[str, Any],
-        client: SlackClientLike,
+        client: SlackClientLike | None,
         say: Callable[[str], None],
     ) -> None:
-        """Gate, download server-side, and ingest a ``file_shared`` event.
+        """Download and ingest every file on a ``file_share`` message (SPEC section 6).
 
-        Enforces the allow-list (rejecting a non-allowed user *before* any download) and
-        the redelivery dedupe, then downloads the file bytes to a temporary path via the
-        injected client and hands the ingestor a :class:`~thoth.ingest.Capture` carrying
-        that ``path`` -- never base64 (SPEC section 6). The temporary file is left for
-        the ingestor to consume (it moves binaries into the vault via ``save_asset``).
-
-        Args:
-            event: The Slack ``file_shared`` event payload (or its enclosing message).
-            client: The Slack web client used to look up and download the file.
-            say: A callable that posts a reply string back to the channel.
+        The ``message``/``file_share`` event carries the full ``files`` objects -- each
+        with a private download URL and ``name`` -- and a usable ``channel`` to reply
+        in.
+        Each file is downloaded server-side to a temporary path and handed to the
+        ingestor as a :class:`~thoth.ingest.Capture` with a ``path`` (never base64); the
+        ingestor moves binaries into the vault via ``save_asset``. A missing URL or a
+        download failure is surfaced fail-loud **per file** so the rest still ingest. An
+        upload's text caption is intentionally ignored -- the file is the capture.
         """
-        if not self._should_handle(event):
+        files = event.get("files")
+        if not isinstance(files, list) or not files:
+            say(":warning: That upload carried no files I could read.")
             return
-        user = str(event.get("user", "") or event.get("user_id", ""))
-        if not self.is_allowed(user):
-            say(_REFUSAL_TEXT)
-            return
-        if self.dedupe.seen(self._event_key(event)):
-            return
+        source = self._source_label()
+        for file_info in files:
+            if isinstance(file_info, dict):
+                self._ingest_one_file(file_info, client, source, say)
 
-        file_info = self._file_info(event, client)
+    def _ingest_one_file(
+        self,
+        file_info: dict[str, Any],
+        client: SlackClientLike | None,
+        source: str,
+        say: Callable[[str], None],
+    ) -> None:
+        """Download one Slack file object to a temp path and ingest it (fail-loud)."""
         url = self._download_url(file_info)
         if not url:
             say(":warning: Could not find a downloadable URL for that file.")
             return
         filename = file_info.get("name")
-        suffix = Path(filename).suffix if filename else ""
-        data = self._download_bytes(client, url)
+        suffix = Path(filename).suffix if isinstance(filename, str) and filename else ""
+        try:
+            data = self._download_bytes(client, url)
+        except SlackError as exc:
+            say(f":x: Could not download that file: {exc}")
+            return
         with tempfile.NamedTemporaryFile(
             prefix="thoth-upload-", suffix=suffix, delete=False
         ) as handle:
@@ -554,7 +580,7 @@ class Handlers:
             tmp_path = Path(handle.name)
         capture = Capture(
             path=tmp_path,
-            source=self._source_label(),
+            source=source,
             filename=filename if isinstance(filename, str) else None,
         )
         self._do_ingest(capture, say)
@@ -753,23 +779,23 @@ class Handlers:
 
     @staticmethod
     def _should_handle(event: dict[str, Any]) -> bool:
-        """Drop bot messages, our own echoes, and every message *subtype*.
+        """Drop bot messages and echoes, and every subtype EXCEPT ``file_share``.
 
-        Any subtype is dropped, including ``file_share``: a file upload arrives as both
-        a ``message`` (subtype ``file_share``) *and* a separate ``file_shared`` event,
-        and the two handlers carry different dedupe keys, so letting
-        :meth:`handle_message` also act on the upload message would double-process a
-        captioned upload (the caption would be ingested or queried while
-        :meth:`handle_file_shared` ingests the file). The file is therefore handled on
-        exactly one path -- the ``file_shared`` listener -- and an upload's caption is
-        intentionally ignored here.
+        A plain user DM has no subtype. Edit/join/delete subtypes (``message_changed`` /
+        ``message_deleted`` / ``channel_join`` ...) are dropped so the daemon never
+        loops on its own replies. The one subtype kept is ``file_share``: a DM file
+        upload
+        arrives as a ``message`` with that subtype carrying the **full** ``files``
+        objects (download URL + name) and a usable ``channel`` -- that is the event
+        :meth:`handle_message` ingests an upload from. Slack also emits a separate
+        ``file_shared`` event, but it embeds only a ``{"id": ...}`` stub (no URL, no
+        conversation ``channel`` to reply in), so the appliance ignores it (see
+        :func:`build_app`) and there is no cross-handler double-processing.
         """
         if event.get("bot_id"):
             return False
-        # message_changed / message_deleted / channel_join / file_share etc. all carry
-        # a subtype; a plain user DM has none. Drop them all so uploads are handled only
-        # by handle_file_shared (no cross-handler double-processing).
-        if event.get("subtype"):
+        subtype = event.get("subtype")
+        if subtype and subtype != "file_share":
             return False
         return True
 
@@ -805,26 +831,6 @@ class Handlers:
         return text
 
     @staticmethod
-    def _file_info(event: dict[str, Any], client: SlackClientLike) -> dict[str, Any]:
-        """Resolve the file metadata dict for a ``file_shared`` event.
-
-        Slack's ``file_shared`` event carries only a ``file_id``; the file's download
-        URL lives behind ``files.info``. If the event already embeds a ``file`` object
-        (some payload shapes do), that is used directly to save a round trip.
-        """
-        embedded = event.get("file")
-        if isinstance(embedded, dict):
-            return embedded
-        file_id = event.get("file_id") or event.get("file", {})
-        if isinstance(file_id, str) and file_id and hasattr(client, "files_info"):
-            response = client.files_info(file=file_id)  # type: ignore[attr-defined]
-            info = _response_value(response)
-            file_obj = info.get("file") if isinstance(info, dict) else None
-            if isinstance(file_obj, dict):
-                return file_obj
-        return {}
-
-    @staticmethod
     def _download_url(file_info: dict[str, Any]) -> str | None:
         """Pick the private download URL Slack exposes on a file object."""
         for key in ("url_private_download", "url_private"):
@@ -834,28 +840,30 @@ class Handlers:
         return None
 
     @staticmethod
-    def _download_bytes(client: SlackClientLike, url: str) -> bytes:
-        """Download file bytes via the client's authenticated transport.
+    def _download_bytes(client: SlackClientLike | None, url: str) -> bytes:
+        """Download private Slack file bytes via an authenticated request.
 
-        Bolt's ``WebClient`` exposes a token-bearing ``token`` attribute and an HTTP
-        helper; tests inject a fake exposing :meth:`download` so no real network call is
-        made. Raises :class:`SlackError` if the client cannot download.
+        A test injects a fake client exposing :meth:`download` (used directly, no
+        network). The real ``slack_sdk.WebClient`` has **no** download helper, so the
+        bytes are fetched with an authenticated ``GET`` to the file's private URL using
+        the client's bot ``token`` (``Authorization: Bearer ...``) -- the only way to
+        read a ``url_private``/``url_private_download`` link. Raises :class:`SlackError`
+        when there is no usable download path or the URL is not an ``https`` Slack URL.
         """
-        if hasattr(client, "download"):
-            return bytes(client.download(url))  # type: ignore[attr-defined]
-        raise SlackError("Slack client cannot download file bytes")
-
-
-def _response_value(response: Any) -> Any:
-    """Return a Slack SDK response's payload as a mapping where possible.
-
-    Bolt's ``SlackResponse`` is mapping-like and also carries a ``.data`` attribute;
-    a fake may simply return a ``dict``. This normalises both to the underlying mapping.
-    """
-    data = getattr(response, "data", None)
-    if isinstance(data, dict):
-        return data
-    return response
+        downloader = getattr(client, "download", None)
+        if callable(downloader):
+            data: Any = downloader(url)
+            return bytes(data)
+        token = getattr(client, "token", None)
+        if not token:
+            raise SlackError("Slack client has no token to download the file")
+        if not url.startswith("https://"):
+            raise SlackError(f"refusing to download a non-https file URL: {url!r}")
+        request = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}"}
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+            return bytes(response.read())
 
 
 def build_app(
@@ -868,11 +876,14 @@ def build_app(
     """Lazily import ``slack_bolt``, build the App, and register the handlers.
 
     ``slack_bolt`` is imported **inside** this function so module import stays CI-safe.
-    The returned app is fully wired (``message`` and ``file_shared`` listeners delegate
-    to a :class:`Handlers` built from the injected collaborators and the allow-list read
-    from ``SLACK_ALLOWED_USERS``) but is **not** started -- :func:`run` does that. When
-    ``research`` is provided, free-text questions take the blended web+vault path with
-    the offer-to-save (SPEC section 7.1); otherwise they take the vault-only path.
+    The returned app delegates the ``message`` listener (which also carries file
+    uploads, as a ``file_share`` subtype) to a :class:`Handlers` built from the injected
+    collaborators and the allow-list read from ``SLACK_ALLOWED_USERS``; the bare
+    ``file_shared`` event is bound to a no-op (it is a stub the appliance ignores -- see
+    :meth:`Handlers._should_handle`). The app is **not** started -- :func:`run` does
+    that. When ``research`` is provided, free-text questions take the blended web+vault
+    path with the offer-to-save (SPEC section 7.1); otherwise they take the vault-only
+    path.
 
     Args:
         config: The frozen runtime config (provides the Slack bot token).
@@ -917,14 +928,19 @@ def build_app(
     app = App(token=bot_token)
 
     @app.event("message")
-    def _on_message(event: dict[str, Any], say: Callable[[str], None]) -> None:
-        handlers.handle_message(event, say)
-
-    @app.event("file_shared")
-    def _on_file_shared(
+    def _on_message(
         event: dict[str, Any], client: Any, say: Callable[[str], None]
     ) -> None:
-        handlers.handle_file_shared(event, client, say)
+        handlers.handle_message(event, say, client=client)
+
+    # Slack emits a separate ``file_shared`` event for every upload, but it embeds only
+    # a ``{"id": ...}`` stub (no download URL) and no conversation ``channel`` to reply,
+    # so uploads are ingested from the ``message``/``file_share`` event above instead.
+    # This no-op listener exists solely so Bolt does not log each such event as an
+    # unhandled request (Bolt auto-acks it).
+    @app.event("file_shared")
+    def _on_file_shared(event: dict[str, Any]) -> None:
+        return None
 
     return app
 

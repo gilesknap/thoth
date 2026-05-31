@@ -28,7 +28,6 @@ from thoth.slack_app import (
     EventDedupe,
     Handlers,
     PendingSaves,
-    SlackError,
     build_app,
     parse_allowed_users,
     render_ask_result,
@@ -764,51 +763,18 @@ def test_handle_message_ignores_bot_and_subtype(config: Config) -> None:
     assert say.messages == []
 
 
-def test_handle_message_ignores_file_share_subtype(config: Config) -> None:
-    """A file-upload 'message' (subtype file_share) is ignored by handle_message.
+def test_captioned_upload_ingests_the_file_and_ignores_caption(config: Config) -> None:
+    """A captioned image upload ingests the FILE once; the caption is ignored.
 
-    A Slack DM file upload fans out into BOTH a message (subtype ``file_share``) and a
-    separate ``file_shared`` event; the file is ingested only by handle_file_shared.
-    handle_message must therefore NOT also act on the upload message (which would
-    double-process a captioned upload: caption -> a query/second ingest while the file
-    is ingested). The caption is intentionally dropped here.
+    A DM file upload arrives as a ``message`` with subtype ``file_share`` carrying the
+    full ``files`` objects. handle_message downloads + ingests each file by path (never
+    base64) and never runs the caption as a query/ingest -- even a caption that looks
+    like a bare URL (which guards the cross-handler double-processing the SPEC
+    closed-surface review flagged; the bare ``file_shared`` event is now a no-op).
     """
     handlers, ing, qry = _handlers(config)
     say = Recorder()
-    # A captioned upload message: text caption + the file_share subtype.
-    handlers.handle_message(
-        {
-            "user": ALLOWED,
-            "subtype": "file_share",
-            "text": "what is in this picture?",
-            "ts": "9.9",
-            "files": [{"id": "F1", "name": "pic.png"}],
-        },
-        say,
-    )
-    assert ing.captures == []  # no second ingest from the caption
-    assert qry.queries == []  # the caption is not run as a query
-    assert say.messages == []
-
-
-def test_captioned_upload_ingests_exactly_once(config: Config) -> None:
-    """A captioned image upload is ingested EXACTLY once (only via file_shared).
-
-    Drives both events Slack emits for one captioned upload through their respective
-    handlers and asserts a single ingest with the file path (never a duplicate from the
-    caption message). The two handlers carry different dedupe keys, so this guards the
-    cross-handler double-processing the SPEC closed-surface review flagged.
-    """
-    dedupe = EventDedupe(clock=lambda: 0.0)
-    handlers, ing, qry = _handlers(config, dedupe=dedupe)
-    say = Recorder()
-    file_info = {
-        "name": "pic.png",
-        "url_private_download": "https://files.slack.com/pic.png",
-    }
-    client = FakeSlackClient(file_info=file_info, payload=b"PNGDATA")
-
-    # 1) The message event for the captioned upload (subtype file_share, has caption).
+    client = FakeSlackClient(payload=b"PNGDATA")
     handlers.handle_message(
         {
             "user": ALLOWED,
@@ -816,15 +782,18 @@ def test_captioned_upload_ingests_exactly_once(config: Config) -> None:
             "text": "https://example.com/looks-like-a-url-caption",
             "ts": "10.1",
             "client_msg_id": "CM1",
+            "files": [
+                {
+                    "name": "pic.png",
+                    "url_private_download": "https://files.slack.com/pic.png",
+                }
+            ],
         },
         say,
+        client,
     )
-    # 2) The separate file_shared event for the same upload.
-    handlers.handle_file_shared(
-        {"user_id": ALLOWED, "file_id": "F1", "event_id": "EVF10"}, client, say
-    )
-
-    assert len(ing.captures) == 1  # exactly one ingest, from file_shared
+    assert client.downloaded == ["https://files.slack.com/pic.png"]
+    assert len(ing.captures) == 1  # the file, exactly once
     assert ing.captures[0].path is not None
     assert ing.captures[0].url is None
     assert qry.queries == []  # the bare-URL caption did NOT become a query
@@ -1006,21 +975,39 @@ def test_serve_with_alerting_clean_stop_is_silent() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# handle_file_shared
+# file uploads (message / file_share subtype)
 # --------------------------------------------------------------------------------------
 
 
-def test_handle_file_shared_downloads_to_tmp_and_ingests(config: Config) -> None:
-    """An allowed file upload is downloaded to a tmp path and ingested by path."""
-    file_info = {
-        "name": "diagram.png",
-        "url_private_download": "https://files.slack.com/diagram.png",
+def _file_share_event(*files: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """Build a ``message``/``file_share`` event carrying the given file objects."""
+    event: dict[str, Any] = {
+        "user": ALLOWED,
+        "subtype": "file_share",
+        "channel": "D1",
+        "text": "",
+        "ts": "20.1",
+        "client_msg_id": "CMF",
+        "files": list(files),
     }
-    client = FakeSlackClient(file_info=file_info, payload=b"PNGDATA")
+    event.update(overrides)
+    return event
+
+
+def test_file_upload_downloads_to_tmp_and_ingests(config: Config) -> None:
+    """An allowed file upload is downloaded to a tmp path and ingested by path."""
+    client = FakeSlackClient(payload=b"PNGDATA")
     handlers, ing, _ = _handlers(config)
     say = Recorder()
-    handlers.handle_file_shared(
-        {"user_id": ALLOWED, "file_id": "F1", "event_id": "EVF1"}, client, say
+    handlers.handle_message(
+        _file_share_event(
+            {
+                "name": "diagram.png",
+                "url_private_download": "https://files.slack.com/diagram.png",
+            }
+        ),
+        say,
+        client,
     )
     assert client.downloaded == ["https://files.slack.com/diagram.png"]
     assert len(ing.captures) == 1
@@ -1029,98 +1016,144 @@ def test_handle_file_shared_downloads_to_tmp_and_ingests(config: Config) -> None
     assert capture.url is None
     assert capture.text is None
     assert capture.filename == "diagram.png"
+    assert capture.source == "slack"
     # The bytes really landed on disk (server-side, never base64).
     assert capture.path.read_bytes() == b"PNGDATA"
     assert capture.path.suffix == ".png"
     capture.path.unlink()
 
 
-def test_handle_file_shared_denied_user_not_downloaded(config: Config) -> None:
-    """A non-allowed user is rejected BEFORE any download or ingest."""
-    client = FakeSlackClient(
-        file_info={"url_private_download": "https://files.slack.com/x.png"}
-    )
+def test_file_upload_with_multiple_files_ingests_each(config: Config) -> None:
+    """An upload carrying several files ingests every one of them."""
+    client = FakeSlackClient(payload=b"DATA")
     handlers, ing, _ = _handlers(config)
     say = Recorder()
-    handlers.handle_file_shared(
-        {"user_id": DENIED, "file_id": "F1", "event_id": "EVF2"}, client, say
+    handlers.handle_message(
+        _file_share_event(
+            {"name": "a.png", "url_private_download": "https://files.slack.com/a.png"},
+            {"name": "b.pdf", "url_private": "https://files.slack.com/b.pdf"},
+        ),
+        say,
+        client,
+    )
+    assert client.downloaded == [
+        "https://files.slack.com/a.png",
+        "https://files.slack.com/b.pdf",
+    ]
+    assert [c.filename for c in ing.captures] == ["a.png", "b.pdf"]
+    for capture in ing.captures:
+        assert capture.path is not None
+        capture.path.unlink()
+
+
+def test_file_upload_denied_user_not_downloaded(config: Config) -> None:
+    """A non-allowed user is rejected BEFORE any download or ingest."""
+    client = FakeSlackClient(payload=b"X")
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {"url_private_download": "https://files.slack.com/x.png"}, user=DENIED
+        ),
+        say,
+        client,
     )
     assert client.downloaded == []
-    assert client.files_info_calls == []
     assert ing.captures == []
     assert len(say.messages) == 1
     assert "not authorised" in say.messages[0].lower()
 
 
-def test_handle_file_shared_no_url_warns(config: Config) -> None:
+def test_file_upload_no_url_warns(config: Config) -> None:
     """A file with no downloadable URL warns and does not ingest."""
-    client = FakeSlackClient(file_info={"name": "x.png"})  # no url_private*
+    client = FakeSlackClient(payload=b"X")
     handlers, ing, _ = _handlers(config)
     say = Recorder()
-    handlers.handle_file_shared(
-        {"user_id": ALLOWED, "file_id": "F1", "event_id": "EVF3"}, client, say
-    )
+    handlers.handle_message(_file_share_event({"name": "x.png"}), say, client)
     assert ing.captures == []
     assert client.downloaded == []
     assert len(say.messages) == 1
     assert "could not find" in say.messages[0].lower()
 
 
-def test_handle_file_shared_redelivery_dropped(config: Config) -> None:
-    """A redelivered file_shared event downloads + ingests exactly once."""
-    file_info = {
-        "name": "scan.pdf",
-        "url_private": "https://files.slack.com/scan.pdf",
-    }
-    client = FakeSlackClient(file_info=file_info, payload=b"PDF")
+def test_file_upload_redelivery_dropped(config: Config) -> None:
+    """A redelivered file_share message downloads + ingests exactly once."""
+    client = FakeSlackClient(payload=b"PDF")
     handlers, ing, _ = _handlers(config)
     say = Recorder()
-    event = {"user_id": ALLOWED, "file_id": "F9", "event_id": "EVF9"}
-    handlers.handle_file_shared(dict(event), client, say)
-    handlers.handle_file_shared(dict(event), client, say)
+    event = _file_share_event(
+        {"name": "scan.pdf", "url_private": "https://files.slack.com/scan.pdf"}
+    )
+    handlers.handle_message(dict(event), say, client)
+    handlers.handle_message(dict(event), say, client)
     assert len(ing.captures) == 1
     assert len(client.downloaded) == 1
     ing.captures[0].path.unlink()  # type: ignore[union-attr]
 
 
-def test_handle_file_shared_embedded_file_object(config: Config) -> None:
-    """A payload that embeds the file object skips the files_info round trip."""
-    embedded = {
-        "name": "photo.jpg",
-        "url_private_download": "https://files.slack.com/photo.jpg",
-    }
-    client = FakeSlackClient(payload=b"JPG")
+def test_download_bytes_uses_token_get_when_no_download_helper(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a real WebClient-like client (token, no .download), bytes are fetched via an
+    authenticated https GET carrying the bot token."""
+
+    class TokenClient:
+        token = "xoxb-probe"
+
+    captured: dict[str, Any] = {}
+
+    class _Resp:
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"REALBYTES"
+
+    def fake_urlopen(request: Any, timeout: float = 0.0) -> _Resp:
+        captured["url"] = request.full_url
+        captured["auth"] = request.headers.get("Authorization")
+        return _Resp()
+
+    monkeypatch.setattr("thoth.slack_app.urllib.request.urlopen", fake_urlopen)
     handlers, ing, _ = _handlers(config)
     say = Recorder()
-    handlers.handle_file_shared(
-        {"user_id": ALLOWED, "file": embedded, "event_id": "EVF4"}, client, say
+    handlers.handle_message(
+        _file_share_event(
+            {"name": "p.png", "url_private_download": "https://files.slack.com/p.png"}
+        ),
+        say,
+        cast(Any, TokenClient()),
     )
-    assert client.files_info_calls == []  # used embedded object
-    assert client.downloaded == ["https://files.slack.com/photo.jpg"]
+    assert captured["url"] == "https://files.slack.com/p.png"
+    assert captured["auth"] == "Bearer xoxb-probe"
     assert len(ing.captures) == 1
-    ing.captures[0].path.unlink()  # type: ignore[union-attr]
+    assert ing.captures[0].path is not None
+    assert ing.captures[0].path.read_bytes() == b"REALBYTES"
+    ing.captures[0].path.unlink()
 
 
-def test_download_bytes_without_capability_raises(config: Config) -> None:
-    """A client lacking a download method raises SlackError (no silent loss)."""
+def test_download_without_token_or_helper_is_fail_loud(config: Config) -> None:
+    """A client with neither a download helper nor a token is surfaced fail-loud."""
 
-    class NoDownload:
-        def files_info(self, *, file: str) -> dict[str, Any]:  # noqa: N802
-            return {
-                "file": {
-                    "name": "x.png",
-                    "url_private_download": "https://files.slack.com/x.png",
-                }
-            }
+    class NoCapability:
+        pass
 
-    handlers, _, _ = _handlers(config)
+    handlers, ing, _ = _handlers(config)
     say = Recorder()
-    with pytest.raises(SlackError):
-        handlers.handle_file_shared(
-            {"user_id": ALLOWED, "file_id": "F1", "event_id": "EVF5"},
-            cast(Any, NoDownload()),
-            say,
-        )
+    handlers.handle_message(
+        _file_share_event(
+            {"name": "x.png", "url_private_download": "https://files.slack.com/x.png"}
+        ),
+        say,
+        cast(Any, NoCapability()),
+    )
+    assert ing.captures == []
+    assert len(say.messages) == 1
+    assert ":x:" in say.messages[0]
+    assert "could not download" in say.messages[0].lower()
 
 
 # --------------------------------------------------------------------------------------
