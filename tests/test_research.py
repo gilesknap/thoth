@@ -845,15 +845,22 @@ def test_ask_prompt_carries_clean_prose_instruction(
 
     prompt = _scripted(engine).calls[0]["messages"][0]["content"]
     assert "natural, concise answer" in prompt
-    assert "title only" in prompt
-    assert "[[wikilink]]" in prompt  # named as a thing NOT to write
-    assert "![[embed]]" in prompt
+    assert "cleanly in a Slack message" in prompt
+    assert "by their title" in prompt
+    assert "[[wikilinks]]" in prompt  # named as a thing NOT to paste
+    assert "![[embeds]]" in prompt
 
 
-def test_ask_vault_read_sanitises_embeds(
+def test_ask_vault_read_hands_full_body_to_model(
     config: Config, vault: Vault, query_engine: QueryEngine
 ) -> None:
-    """A vault_read result fed to the model has its ![[embed]] markup stripped (#34)."""
+    """A vault_read result hands the model the full page body, embeds included (#34).
+
+    Regression: the body used to be sanitised of ``![[embed]]`` markup before being fed
+    back, blinding the model to attachments. The full body is now handed over verbatim
+    -- so the model can answer questions about the image -- and clean Slack prose is the
+    prompt's job. The vault page on disk is untouched either way.
+    """
     embed = "![[diagram.png]]"
     path = "notes/embed-note.md"
     (vault.root / path).write_text(
@@ -873,13 +880,12 @@ def test_ask_vault_read_sanitises_embeds(
 
     engine.ask("embed-note")
 
-    # The tool_result fed back on the SECOND call must not echo the embed markup.
+    # The tool_result fed back on the SECOND call carries the full body, embed and all.
     second_messages = _scripted(engine).calls[1]["messages"]
     tool_result_text = second_messages[2]["content"][0]["content"]
-    assert embed not in tool_result_text
+    assert embed in tool_result_text
     assert "Prose before." in tool_result_text
     assert "Prose after." in tool_result_text
-    # The vault page on disk keeps its embed (only the LLM context was sanitised).
     assert embed in (vault.root / path).read_text(encoding="utf-8")
 
 

@@ -45,14 +45,10 @@ __all__ = [
     "QueryEngine",
     "QueryError",
     "QueryResult",
-    "strip_embeds",
 ]
 
 _WIKILINK_RE: re.Pattern[str] = re.compile(r"\[\[([^\]|#]+)")
 """Capture an Obsidian ``[[wikilink]]`` target (ignoring ``|alias`` / ``#anchor``)."""
-
-_EMBED_RE: re.Pattern[str] = re.compile(r"!\[\[[^\]]*\]\]")
-"""Match an Obsidian image/file embed ``![[...]]`` (stripped from LLM context only)."""
 
 _USED_LINE_RE: re.Pattern[str] = re.compile(
     r"^USED:\s*(.*)$", re.IGNORECASE | re.MULTILINE
@@ -507,26 +503,28 @@ class QueryEngine:
     ) -> tuple[str, list[Citation]]:
         """Hand the indexed candidate pages to the LLM; return prose + the used subset.
 
-        Each candidate is labelled with a 1-based index and its body is sanitised of
-        Obsidian ``![[embed]]`` lines (so the model cannot echo a dead image embed into
-        the prose) -- this only shapes the *LLM context*, never the vault page itself.
-        The model writes natural, concise prose referring to pages by title only, and
-        ends with a ``USED: <indices>`` line; that line is parsed back to the consulted
-        citations, stripped from the displayed answer, and the used subset returned. A
-        missing/garbled line falls back to all consulted citations.
+        Each candidate is labelled with a 1-based index and its full excerpt is handed
+        to the model verbatim (image ``![[embeds]]`` and all, so the model can answer
+        questions *about* the attachments). Clean Slack output is the prompt's job, not
+        a pre-processor's: the model is told to write natural, concise prose referring
+        to pages by title only -- never pasting paths, ``[[wikilinks]]`` or
+        ``![[embeds]]`` -- and to end with a ``USED: <indices>`` line; that line is
+        parsed back to the consulted citations, stripped from the displayed answer, and
+        the used subset returned. A missing/garbled line falls back to all citations.
         """
         context_parts: list[str] = []
         for index, citation in enumerate(consulted, start=1):
-            body = strip_embeds(self._excerpt(citation.path, limit=2000))
+            body = self._excerpt(citation.path, limit=2000)
             context_parts.append(
                 f"[{index}] ## {citation.title} ({citation.path})\n{body}"
             )
         context = "\n\n".join(context_parts)
         prompt = (
             "Answer the question using only the numbered vault pages below.\n\n"
-            "Write a natural, concise answer in your own words. Refer to pages by "
-            "their title only -- never write a file path, a [[wikilink]], or an "
-            "![[embed]]. Do not paste image embeds.\n\n"
+            "Write a natural, concise answer in your own words, formatted to read "
+            "cleanly in a Slack message. Refer to pages by their title -- do not paste "
+            "file paths, [[wikilinks]] or ![[embeds]]; the harness appends a clickable "
+            "source list for you.\n\n"
             "On the final line, list the page numbers that directly support your "
             "answer as `USED: 1, 3` (comma-separated), or `USED: none` if no page "
             "applies. Put nothing after that line.\n\n"
@@ -591,25 +589,6 @@ class QueryEngine:
 def _tokenize(text: str) -> list[str]:
     """Split a query into lowercase, non-empty whitespace-separated tokens."""
     return [token for token in text.lower().split() if token]
-
-
-def strip_embeds(text: str) -> str:
-    """Remove Obsidian ``![[embed]]`` markup from text fed to the LLM (issue #34).
-
-    Strips every ``![[...]]`` image/file embed (and collapses any line left blank by the
-    removal) so the model cannot echo a dead image embed into its prose, while keeping
-    all surrounding prose intact. This shapes only the *LLM context*; the vault page on
-    disk is never modified.
-
-    Args:
-        text: A page excerpt destined for the LLM context.
-
-    Returns:
-        The excerpt with embed markup removed and embed-only lines dropped.
-    """
-    stripped = _EMBED_RE.sub("", text)
-    kept = [line for line in stripped.splitlines() if line.strip()]
-    return "\n".join(kept)
 
 
 def _split_used(raw: str, consulted: list[Citation]) -> tuple[str, list[Citation]]:

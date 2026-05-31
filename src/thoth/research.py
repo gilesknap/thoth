@@ -44,7 +44,7 @@ from thoth.llm import (
     tool_result_block,
     user_blocks_message,
 )
-from thoth.query import Citation, QueryEngine, QueryError, strip_embeds
+from thoth.query import Citation, QueryEngine, QueryError
 from thoth.vault import SchemaError, SlugError, Vault, VaultError, slugify
 
 __all__ = [
@@ -591,9 +591,9 @@ class _ToolLoop:
         except VaultError as exc:
             return f"error: vault_read failed for {path}: {exc}", True
         self.read_vault_paths.append(page.path)
-        # Sanitise ![[embed]] markup from the body fed to the model (issue #34) so it
-        # cannot echo a dead image embed into the prose; the vault page is untouched.
-        return f"# {path}\n\n{strip_embeds(page.body)}", False
+        # Hand the full page body to the model (image ![[embeds]] and all) so it can
+        # answer questions about attachments; clean Slack prose is the prompt's job.
+        return f"# {path}\n\n{page.body}", False
 
     def _initial_prompt(self, question: str) -> str:
         """Build the opening user turn: the question plus the candidate page list."""
@@ -612,9 +612,9 @@ class _ToolLoop:
             "the vault_read tool, and (when offered) search and read the public web "
             "with web_search/web_extract. When you have enough, reply with the final "
             "answer and no further tool calls.\n\n"
-            "Write a natural, concise answer in your own words. Refer to the user's "
-            "vault pages by their title only -- never write a file path, a "
-            "[[wikilink]], or an ![[embed]], and do not paste image embeds. The "
+            "Write a natural, concise answer in your own words, formatted to read "
+            "cleanly in a Slack message. Refer to the user's vault pages by their "
+            "title -- do not paste file paths, [[wikilinks]] or ![[embeds]]. The "
             "sources are attached automatically, so do not list them yourself.\n\n"
             f"{candidate_block}"
             f"Question: {question}"

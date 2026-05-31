@@ -605,7 +605,7 @@ def test_answer_deduplicates_citations(engine: QueryEngine) -> None:
     assert len(paths) == len(set(paths))
 
 
-# --- the USED: source-filter + ![[embed]] sanitisation (issue #34) -----------------
+# --- the USED: source-filter + Slack-clean prose prompt (issue #34) ----------------
 
 
 def test_answer_keeps_only_the_used_subset(config: Config, vault: Vault) -> None:
@@ -703,12 +703,16 @@ def test_answer_keeps_leading_used_prose_line_picks_trailing_selection(
     assert result.answer == "USED: the rail drive to position the stage."
 
 
-def test_answer_sanitises_embeds_from_llm_context(config: Config, vault: Vault) -> None:
-    """``![[image.png]]`` embeds are stripped from the prompt fed to the LLM (#34).
+def test_answer_feeds_full_body_and_prompt_enforces_clean_prose(
+    config: Config, vault: Vault
+) -> None:
+    """Image embeds reach the model; clean Slack prose is the prompt's job (#34).
 
-    The page body carries an Obsidian image embed; the prompt the model receives must
-    not contain that embed text (so the model can't echo it), while the surrounding
-    prose is preserved. The vault page on disk is never modified.
+    Regression: the body used to be sanitised of ``![[image]]`` embeds before reaching
+    the LLM, which blinded the model to attachments (it would answer "no images on
+    file"). The full excerpt is now handed over verbatim -- so the model can answer
+    questions *about* the image -- and the prompt instructs Slack-legible prose that
+    refers to pages by title and pastes no raw markup. The vault page is never modified.
     """
     embed = "![[diagram.png]]"
     body = f"# Embed Page\n\nIntro prose.\n{embed}\nMore prose after the embed.\n"
@@ -722,10 +726,13 @@ def test_answer_sanitises_embeds_from_llm_context(config: Config, vault: Vault) 
 
     engine.answer("embed-page", max_pages=1)
     prompt = client.messages.calls[0]["messages"][0]["content"]
-    assert embed not in prompt
-    assert "Intro prose." in prompt  # surrounding prose preserved
+    # The model SEES the embed (so it can answer about the image) and nearby prose.
+    assert embed in prompt
     assert "More prose after the embed." in prompt
-    # The vault page itself is untouched -- the embed remains on disk.
+    # Clean output is the prompt's responsibility, not a pre-processor's.
+    assert "cleanly in a Slack message" in prompt
+    assert "![[embeds]]" in prompt  # named as a thing NOT to paste
+    # The vault page itself is untouched.
     assert embed in (vault.root / "notes" / "embed-page.md").read_text(encoding="utf-8")
 
 
