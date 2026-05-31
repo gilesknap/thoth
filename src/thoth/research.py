@@ -591,6 +591,8 @@ class _ToolLoop:
         except VaultError as exc:
             return f"error: vault_read failed for {path}: {exc}", True
         self.read_vault_paths.append(page.path)
+        # Hand the full page body to the model (image ![[embeds]] and all) so it can
+        # answer questions about attachments; clean Slack prose is the prompt's job.
         return f"# {path}\n\n{page.body}", False
 
     def _initial_prompt(self, question: str) -> str:
@@ -608,8 +610,12 @@ class _ToolLoop:
         return (
             "Answer the user's question. You may read their personal vault pages with "
             "the vault_read tool, and (when offered) search and read the public web "
-            "with web_search/web_extract. Cite what you used. When you have enough, "
-            "reply with the final answer and no further tool calls.\n\n"
+            "with web_search/web_extract. When you have enough, reply with the final "
+            "answer and no further tool calls.\n\n"
+            "Write a natural, concise answer in your own words, formatted to read "
+            "cleanly in a Slack message. Refer to the user's vault pages by their "
+            "title -- do not paste file paths, [[wikilinks]] or ![[embeds]]. The "
+            "sources are attached automatically, so do not list them yourself.\n\n"
             f"{candidate_block}"
             f"Question: {question}"
         )

@@ -828,6 +828,67 @@ def test_ask_surfaces_vault_candidates_in_prompt(
     assert "notes/distributed-systems.md" in prompt
 
 
+def test_ask_prompt_carries_clean_prose_instruction(
+    config: Config, vault: Vault, query_engine: QueryEngine
+) -> None:
+    """The opening prompt instructs natural prose: titles only, no paths/links/embeds.
+
+    Acceptance (issue #34): the ask path gets the same clean-prose contract as the
+    vault-only query path so blended answers read conversationally with no dead Slack
+    markup leaking into the prose.
+    """
+    extractor = _FakeExtractor()
+    responses = [_text_response("answer")]
+    engine = _engine(config, vault, query_engine, extractor, responses)
+
+    engine.ask("distributed-systems")
+
+    prompt = _scripted(engine).calls[0]["messages"][0]["content"]
+    assert "natural, concise answer" in prompt
+    assert "cleanly in a Slack message" in prompt
+    assert "by their title" in prompt
+    assert "[[wikilinks]]" in prompt  # named as a thing NOT to paste
+    assert "![[embeds]]" in prompt
+
+
+def test_ask_vault_read_hands_full_body_to_model(
+    config: Config, vault: Vault, query_engine: QueryEngine
+) -> None:
+    """A vault_read result hands the model the full page body, embeds included (#34).
+
+    Regression: the body used to be sanitised of ``![[embed]]`` markup before being fed
+    back, blinding the model to attachments. The full body is now handed over verbatim
+    -- so the model can answer questions about the image -- and clean Slack prose is the
+    prompt's job. The vault page on disk is untouched either way.
+    """
+    embed = "![[diagram.png]]"
+    path = "notes/embed-note.md"
+    (vault.root / path).write_text(
+        _page(
+            title="Embed Note",
+            page_type="note",
+            body=f"# Embed Note\n\nProse before.\n{embed}\nProse after.\n",
+        ),
+        encoding="utf-8",
+    )
+    extractor = _FakeExtractor()
+    responses = [
+        _tool_response(_tool_use_block("vault_read", {"path": path})),
+        _text_response("Composed answer."),
+    ]
+    engine = _engine(config, vault, query_engine, extractor, responses)
+
+    engine.ask("embed-note")
+
+    # The tool_result fed back on the SECOND call carries the full body, embed and all.
+    second_messages = _scripted(engine).calls[1]["messages"]
+    tool_result_text = second_messages[2]["content"][0]["content"]
+    assert embed in tool_result_text
+    assert "Prose before." in tool_result_text
+    assert "Prose after." in tool_result_text
+    assert embed in (vault.root / path).read_text(encoding="utf-8")
+
+
 def test_ask_no_vault_match_still_answers_from_web(
     config: Config, vault: Vault, query_engine: QueryEngine
 ) -> None:

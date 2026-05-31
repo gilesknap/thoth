@@ -14,7 +14,10 @@ sends **bare free text** through a lightweight intent gate
 blended ask -- falling back to the pre-gate default (blended ask, or vault-only query
 when no research engine is injected) when no classifier is wired. It offers to save a
 blended answer as a ``notes/`` page on a follow-up "y", and replies in Slack
-``mrkdwn``.
+``mrkdwn``. A slow request shows an immediate placeholder (":hourglass_flowing_sand:
+Filing…" / ":mag: Looking…") that is edited in place with the final render via
+``chat.update`` (issue #34, Slice B) so a multi-second capture is not a dead pause; this
+degrades to a single ``say`` on a client-less path.
 
 Design constraints enforced here:
 
@@ -175,9 +178,11 @@ def render_query_result(result: QueryResult) -> str:
     """Render a composed answer plus its citation list as a ``mrkdwn`` block.
 
     The answer prose comes first, followed by a ``Sources:`` list with one
-    :func:`render_citation` line per cited page (SPEC Appendix worked example). When the
-    answer has no citations the prose stands alone -- no trailing note is added (issue
-    #53).
+    :func:`render_citation` line per cited page (SPEC Appendix worked example). The
+    cited set is the pages the model said it actually used (issue #34's ``USED:`` line,
+    parsed in :mod:`thoth.query`), so the list reflects what the answer drew on rather
+    than the whole retrieval candidate set. When the answer has no citations the prose
+    stands alone -- no trailing note is added (issue #53).
 
     Args:
         result: The query result to render.
@@ -441,6 +446,99 @@ class SlackClientLike(Protocol):
         """Post a message to a channel (Slack ``chat.postMessage``)."""
         ...
 
+    def chat_update(  # noqa: N802 - Slack SDK method name
+        self, *, channel: str, ts: str, text: str, **kwargs: Any
+    ) -> Any:
+        """Edit a previously-posted message in place (Slack ``chat.update``)."""
+        ...
+
+
+# Placeholder lines shown the instant a slow request is received (issue #34, Slice B),
+# so a multi-second capture/answer is not a dead pause. They are edited in place (via
+# chat.update) with the final render once the work completes.
+_INGEST_PLACEHOLDER: str = ":hourglass_flowing_sand: Filing…"
+_ASK_PLACEHOLDER: str = ":mag: Looking…"
+
+
+class Responder:
+    """The reply seam for one message: an immediate placeholder, then a final edit.
+
+    A multi-second capture/answer (a ``git pull`` -> classify -> extract -> curate ->
+    Hindsight retain+probe -> commit+push chain, easily 5-15s) shows nothing until done
+    if the handler only ``say()``s once at the end. This object (issue #34, Slice B)
+    posts an immediate placeholder via the Slack web client, remembers its message
+    ``ts``, and edits that same message in place with the final render (``chat.update``)
+    -- so the user sees "Filing…" within ~1s and it resolves to the report, with no
+    second message.
+
+    It degrades cleanly: when no web ``client`` or ``channel`` is available (the
+    text-only/test paths that pass only a bare ``say``), :meth:`progress` posts nothing
+    and :meth:`finish` falls back to a single ``say(text)`` -- the exact pre-#34
+    behaviour. So the placeholder+update is best-effort UX layered over the existing
+    single-``say`` contract, never a hard dependency on the client.
+    """
+
+    def __init__(
+        self,
+        say: Callable[[str], None],
+        *,
+        client: SlackClientLike | None = None,
+        channel: str = "",
+    ) -> None:
+        """Build a responder over a ``say`` callable and an optional web client+channel.
+
+        Args:
+            say: The Bolt ``say`` callable that posts a reply to the conversation.
+            client: The Slack web client used to post + edit the placeholder; ``None``
+                disables the placeholder (the single-``say`` fallback).
+            channel: The conversation id the placeholder is posted to / edited in; an
+                empty id also disables the placeholder.
+        """
+        self._say = say
+        self._client = client
+        self._channel = channel
+        self._ts: str | None = None
+
+    def say(self, text: str) -> None:
+        """Post ``text`` as a plain reply (the early conflict/error/refusal paths)."""
+        self._say(text)
+
+    def progress(self, placeholder: str) -> None:
+        """Post an immediate placeholder (best-effort); remember its ts for the edit.
+
+        With no client/channel, or if the post fails for any reason, this no-ops and a
+        later :meth:`finish` falls back to a single ``say`` -- the placeholder must
+        never be able to swallow the real reply.
+        """
+        if self._client is None or not self._channel:
+            return
+        try:
+            response = self._client.chat_postMessage(
+                channel=self._channel, text=placeholder
+            )
+        except Exception:  # noqa: BLE001 - placeholder is best-effort UX, never fatal
+            return
+        ts = response.get("ts") if isinstance(response, dict) else None
+        if isinstance(ts, str) and ts:
+            self._ts = ts
+
+    def finish(self, text: str) -> None:
+        """Deliver the final reply: edit the placeholder in place, else a fresh ``say``.
+
+        When a placeholder ts was captured the message is edited via ``chat.update`` (so
+        the "Filing…" line becomes the report). When there is no placeholder -- no
+        client, the post failed, or a non-DM/client-less path -- it falls back to
+        ``say(text)``, the single-reply pre-#34 behaviour. A failed edit also falls back
+        to ``say`` so the user always gets the reply.
+        """
+        if self._client is not None and self._channel and self._ts is not None:
+            try:
+                self._client.chat_update(channel=self._channel, ts=self._ts, text=text)
+            except Exception:  # noqa: BLE001 - fall back to a fresh post on any edit error
+                self._say(text)
+            return
+        self._say(text)
+
 
 class AlerterLike(Protocol):
     """The slice of :class:`thoth.alerts.Alerter` the daemon + handlers use.
@@ -532,31 +630,33 @@ class Handlers:
         if self.dedupe.seen(self._event_key(event)):
             return
 
+        channel = self._channel(event)
         if event.get("subtype") == "file_share":
-            self._ingest_uploaded_files(event, client, say)
+            responder = Responder(say, client=client, channel=channel)
+            self._ingest_uploaded_files(event, client, responder)
             return
 
         text = str(event.get("text", "")).strip()
         if not text:
             return
-        channel = self._channel(event)
         source = self._source_label()
+        responder = Responder(say, client=client, channel=channel)
         if self._is_confirm_save(text) and self._try_confirm_save(channel, say):
             return
         if self._is_capture_text(text):
             capture = Capture(text=self._strip_capture_prefix(text), source=source)
-            self._do_ingest(capture, say)
+            self._do_ingest(capture, responder)
         elif self._looks_like_url(text):
             capture = Capture(url=text, source=source)
-            self._do_ingest(capture, say)
+            self._do_ingest(capture, responder)
         else:
-            self._route_free_text(text, channel, source, say)
+            self._route_free_text(text, channel, source, responder)
 
     def _ingest_uploaded_files(
         self,
         event: dict[str, Any],
         client: SlackClientLike | None,
-        say: Callable[[str], None],
+        responder: Responder,
     ) -> None:
         """Download and ingest every file on a ``file_share`` message (SPEC section 6).
 
@@ -571,31 +671,31 @@ class Handlers:
         """
         files = event.get("files")
         if not isinstance(files, list) or not files:
-            say(":warning: That upload carried no files I could read.")
+            responder.say(":warning: That upload carried no files I could read.")
             return
         source = self._source_label()
         for file_info in files:
             if isinstance(file_info, dict):
-                self._ingest_one_file(file_info, client, source, say)
+                self._ingest_one_file(file_info, client, source, responder)
 
     def _ingest_one_file(
         self,
         file_info: dict[str, Any],
         client: SlackClientLike | None,
         source: str,
-        say: Callable[[str], None],
+        responder: Responder,
     ) -> None:
         """Download one Slack file object to a temp path and ingest it (fail-loud)."""
         url = self._download_url(file_info)
         if not url:
-            say(":warning: Could not find a downloadable URL for that file.")
+            responder.say(":warning: Could not find a downloadable URL for that file.")
             return
         filename = file_info.get("name")
         suffix = Path(filename).suffix if isinstance(filename, str) and filename else ""
         try:
             data = self._download_bytes(client, url)
         except SlackError as exc:
-            say(f":x: Could not download that file: {exc}")
+            responder.say(f":x: Could not download that file: {exc}")
             return
         with tempfile.NamedTemporaryFile(
             prefix="thoth-upload-", suffix=suffix, delete=False
@@ -607,12 +707,12 @@ class Handlers:
             source=source,
             filename=filename if isinstance(filename, str) else None,
         )
-        self._do_ingest(capture, say)
+        self._do_ingest(capture, responder)
 
     # ---- internals ---------------------------------------------------------------
 
     def _route_free_text(
-        self, text: str, channel: str, source: str, say: Callable[[str], None]
+        self, text: str, channel: str, source: str, responder: Responder
     ) -> None:
         """Route bare free text through the intent gate (issue #5).
 
@@ -634,13 +734,13 @@ class Handlers:
         route = self._free_text_route(text)
         if route == "capture":
             capture = Capture(text=text, source=source)
-            self._do_ingest(capture, say, hint=_GATE_CAPTURE_HINT)
+            self._do_ingest(capture, responder, hint=_GATE_CAPTURE_HINT)
         elif route == "query":
-            self._do_query(text, say)
+            self._do_query(text, responder)
         elif self.research is not None:
-            self._do_ask(text, channel, say)
+            self._do_ask(text, channel, responder)
         else:
-            self._do_query(text, say)
+            self._do_query(text, responder)
 
     def _free_text_route(self, text: str) -> str:
         """Pick the engine for bare free text: ``capture`` / ``ask`` / ``query``.
@@ -663,11 +763,16 @@ class Handlers:
     def _do_ingest(
         self,
         capture: Capture,
-        say: Callable[[str], None],
+        responder: Responder,
         *,
         hint: str | None = None,
     ) -> None:
         """Run an ingest and reply; render a conflict/error fail-loud, never crash.
+
+        Posts an immediate ":hourglass_flowing_sand: Filing…" placeholder (issue #34,
+        Slice B) so a multi-second capture is not a dead pause, then edits it in place
+        with the final confirmation (or the conflict/error line). When the responder has
+        no web client (the text-only/test paths) this degrades to a single reply.
 
         A vault conflict (the ingestor's :attr:`~thoth.ingest.IngestReport.conflict`, or
         a raised :class:`~thoth.git_sync.VaultConflictError`) means content was filed
@@ -681,21 +786,24 @@ class Handlers:
         passes :data:`_GATE_CAPTURE_HINT` so a gate-routed capture is recoverable (issue
         #5). It is not appended to the early conflict/error replies above.
         """
+        responder.progress(_INGEST_PLACEHOLDER)
         try:
             report = self.ingestor.ingest(capture)
         except VaultConflictError as exc:
-            say(f":warning: *Vault conflict* - {exc}. Resolve in Obsidian, then retry.")
+            responder.finish(
+                f":warning: *Vault conflict* - {exc}. Resolve in Obsidian, then retry."
+            )
             self._alert_divergence(str(exc))
             return
         except IngestError as exc:
-            say(f":x: Could not file that: {exc}")
+            responder.finish(f":x: Could not file that: {exc}")
             return
         if report.conflict:
             self._alert_divergence(report.message)
         message = render_ingest_report(report)
         if hint:
             message = f"{message}\n{hint}"
-        say(message)
+        responder.finish(message)
 
     def _alert_divergence(self, detail: str) -> None:
         """Route an unpushed-divergence alert to the errors-to-Slack target (issue #15).
@@ -724,20 +832,31 @@ class Handlers:
             commits_ahead=ahead, since=since, detail=detail
         )
 
-    def _do_query(self, text: str, say: Callable[[str], None]) -> None:
-        """Run a vault-only query and reply; render an error fail-loud, never crash."""
+    def _do_query(self, text: str, responder: Responder) -> None:
+        """Run a vault-only query and reply; render an error fail-loud, never crash.
+
+        Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
+        it in place with the rendered answer; degrades to a single reply on a
+        client-less path. The ``Sources:`` block lists only the pages the model said it
+        used (issue #34's ``USED:`` filter, parsed in :mod:`thoth.query`).
+        """
+        responder.progress(_ASK_PLACEHOLDER)
         try:
             result = self.query_engine.answer(text)
         except BudgetExceededError:
-            say(_BUDGET_REACHED_TEXT)
+            responder.finish(_BUDGET_REACHED_TEXT)
             return
         except QueryError as exc:
-            say(f":x: Could not answer that: {exc}")
+            responder.finish(f":x: Could not answer that: {exc}")
             return
-        say(render_query_result(result))
+        responder.finish(render_query_result(result))
 
-    def _do_ask(self, text: str, channel: str, say: Callable[[str], None]) -> None:
+    def _do_ask(self, text: str, channel: str, responder: Responder) -> None:
         """Run the blended web+vault ask, reply with the offer-to-save, and remember it.
+
+        Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
+        it in place with the rendered answer; degrades to a single reply on a
+        client-less path.
 
         The (model-decided) web gate lives in :meth:`thoth.research.ResearchEngine.ask`;
         a leading ``research:`` marker / ``force_web`` forces the web on. On success the
@@ -746,17 +865,18 @@ class Handlers:
         files it. A :class:`~thoth.research.ResearchError` is rendered fail-loud.
         """
         assert self.research is not None  # routing guard guarantees this
+        responder.progress(_ASK_PLACEHOLDER)
         try:
             result = self.research.ask(text)
         except BudgetExceededError:
-            say(_BUDGET_REACHED_TEXT)
+            responder.finish(_BUDGET_REACHED_TEXT)
             return
         except ResearchError as exc:
-            say(f":x: Could not answer that: {exc}")
+            responder.finish(f":x: Could not answer that: {exc}")
             return
         offer = bool(result.answer.strip())
         self.pending_saves.remember(channel, text, result)
-        say(render_ask_result(result, offer_save=offer))
+        responder.finish(render_ask_result(result, offer_save=offer))
 
     def _try_confirm_save(self, channel: str, say: Callable[[str], None]) -> bool:
         """File the channel's pending answer as a ``notes/`` page on a "y" reply.

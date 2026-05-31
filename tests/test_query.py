@@ -603,3 +603,146 @@ def test_answer_deduplicates_citations(engine: QueryEngine) -> None:
     result = engine.answer("program-motion-controller", max_pages=5)
     paths = [c.path for c in result.citations]
     assert len(paths) == len(set(paths))
+
+
+# --- the USED: source-filter + Slack-clean prose prompt (issue #34) ----------------
+
+
+def test_answer_keeps_only_the_used_subset(config: Config, vault: Vault) -> None:
+    """A ``USED: 2`` line keeps only the 2nd consulted page; the line is not displayed.
+
+    The PMC query consults [PMC, drive-control-module] at max_pages=2; the model says it
+    used only page 2, so the result cites just drive-control-module and the displayed
+    prose carries no ``USED:`` line. ``consulted_count`` still records the full set.
+    """
+    client = _FakeClient("Drive control runs the rail.\nUSED: 2")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    assert result.consulted_count == 2
+    assert [c.path for c in result.citations] == ["entities/drive-control-module.md"]
+    assert result.answer == "Drive control runs the rail."
+    assert "USED:" not in result.answer
+
+
+def test_answer_used_none_yields_no_citations(config: Config, vault: Vault) -> None:
+    """``USED: none`` keeps no citations (the answer cited nothing)."""
+    client = _FakeClient("I could not find anything relevant.\nUSED: none")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    assert result.citations == []
+    assert result.consulted_count == 2
+    assert "USED:" not in result.answer
+
+
+def test_answer_missing_used_line_falls_back_to_all(
+    config: Config, vault: Vault
+) -> None:
+    """A reply with no ``USED:`` line keeps ALL consulted citations (no regression)."""
+    client = _FakeClient("A plain answer with no selection line.")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    assert len(result.citations) == 2  # all consulted pages kept
+    assert result.consulted_count == 2
+
+
+def test_answer_garbled_used_line_falls_back_to_all(
+    config: Config, vault: Vault
+) -> None:
+    """A garbled ``USED:`` line (no parseable index) keeps all consulted citations."""
+    client = _FakeClient("An answer.\nUSED: pages one and three")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    assert len(result.citations) == 2
+
+
+def test_answer_uses_last_used_line_when_model_emits_two(
+    config: Config, vault: Vault
+) -> None:
+    """Two ``USED:`` lines: the LAST wins and NEITHER leaks into the displayed prose.
+
+    The design's prompt promises the selection is on the *final* line; if the model
+    misbehaves and emits two, parsing the first would (a) cite the wrong subset and
+    (b) leave the trailing ``USED: 2`` visible in the Slack answer. The trailing line
+    must drive the selection and the prose must carry no ``USED:`` text at all.
+    """
+    client = _FakeClient("Drive control runs the rail.\nUSED: 1\nUSED: 2")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    # The trailing "USED: 2" wins -> the 2nd consulted page, not the 1st.
+    assert [c.path for c in result.citations] == ["entities/drive-control-module.md"]
+    assert result.answer == "Drive control runs the rail."
+    assert "USED:" not in result.answer
+
+
+def test_answer_keeps_leading_used_prose_line_picks_trailing_selection(
+    config: Config, vault: Vault
+) -> None:
+    """A prose sentence starting ``USED:`` is preserved; the trailing line selects.
+
+    A legitimate answer line that happens to begin with ``USED:`` must NOT be consumed
+    as the selection (which would both garble the choice and leave the real trailing
+    ``USED: 2`` visible). The last match drives selection; the leading prose survives.
+    """
+    client = _FakeClient("USED: the rail drive to position the stage.\nUSED: 2")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    # Trailing "USED: 2" selects the 2nd page; the leading prose line is preserved.
+    assert [c.path for c in result.citations] == ["entities/drive-control-module.md"]
+    assert result.answer == "USED: the rail drive to position the stage."
+
+
+def test_answer_feeds_full_body_and_prompt_enforces_clean_prose(
+    config: Config, vault: Vault
+) -> None:
+    """Image embeds reach the model; clean Slack prose is the prompt's job (#34).
+
+    Regression: the body used to be sanitised of ``![[image]]`` embeds before reaching
+    the LLM, which blinded the model to attachments (it would answer "no images on
+    file"). The full excerpt is now handed over verbatim -- so the model can answer
+    questions *about* the image -- and the prompt instructs Slack-legible prose that
+    refers to pages by title and pastes no raw markup. The vault page is never modified.
+    """
+    embed = "![[diagram.png]]"
+    body = f"# Embed Page\n\nIntro prose.\n{embed}\nMore prose after the embed.\n"
+    (vault.root / "notes" / "embed-page.md").write_text(
+        _page(title="Embed Page", page_type="note", body=body),
+        encoding="utf-8",
+    )
+    client = _FakeClient("Composed.\nUSED: 1")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    engine.answer("embed-page", max_pages=1)
+    prompt = client.messages.calls[0]["messages"][0]["content"]
+    # The model SEES the embed (so it can answer about the image) and nearby prose.
+    assert embed in prompt
+    assert "More prose after the embed." in prompt
+    # Clean output is the prompt's responsibility, not a pre-processor's.
+    assert "cleanly in a Slack message" in prompt
+    assert "![[embeds]]" in prompt  # named as a thing NOT to paste
+    # The vault page itself is untouched.
+    assert embed in (vault.root / "notes" / "embed-page.md").read_text(encoding="utf-8")
+
+
+def test_answer_labels_candidates_with_indices(config: Config, vault: Vault) -> None:
+    """Each candidate page is labelled with a 1-based ``[n]`` index in the prompt."""
+    client = _FakeClient("Composed.\nUSED: 1")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    engine.answer("program-motion-controller", max_pages=2)
+    prompt = client.messages.calls[0]["messages"][0]["content"]
+    assert "[1] ## Program Motion Controller" in prompt
+    assert "[2] ## Drive Control Module" in prompt
