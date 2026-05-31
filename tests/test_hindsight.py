@@ -325,7 +325,7 @@ def test_parse_recall_non_json_no_markers_returns_empty() -> None:
 def test_retain_builds_official_argv_with_bank_positional_and_tags(
     config: Config,
 ) -> None:
-    """retain builds base_args + memory retain + <bank> + <text>, then --tags."""
+    """retain builds base_args + retain + <bank> + <text>, then --document-tags."""
     runner = RecordingRunner()
     hs = _make(config, runner)
 
@@ -345,12 +345,12 @@ def test_retain_builds_official_argv_with_bank_positional_and_tags(
 
 
 def test_retain_adds_the_rel_path_as_a_provenance_tag(config: Config) -> None:
-    """The vault path is always added to --tags as primary provenance (#7)."""
+    """The vault path is always added to --document-tags as primary provenance (#7)."""
     runner = RecordingRunner()
     hs = _make(config, runner)
 
     hs.retain("entities/foo.md", "facts", tags=["entity"])
-    tag_value = runner.last[runner.last.index("--tags") + 1]
+    tag_value = runner.last[runner.last.index("--document-tags") + 1]
     tags = tag_value.split(",")
     # Both the page type and the rel path are present; rel path is the provenance tag.
     assert tags == ["entity", "entities/foo.md"]
@@ -359,12 +359,12 @@ def test_retain_adds_the_rel_path_as_a_provenance_tag(config: Config) -> None:
 def test_retain_dedupes_rel_path_when_caller_already_passes_it(
     config: Config,
 ) -> None:
-    """If the caller already includes the rel path, it is not duplicated in --tags."""
+    """If the caller already includes the rel path, it is not duplicated in tags."""
     runner = RecordingRunner()
     hs = _make(config, runner)
     # ingest/reindex pass tags=[page_type, rel]; the rel must appear exactly once.
     hs.retain("entities/foo.md", "facts", tags=["entity", "entities/foo.md"])
-    tag_value = runner.last[runner.last.index("--tags") + 1]
+    tag_value = runner.last[runner.last.index("--document-tags") + 1]
     assert tag_value == "entity,entities/foo.md"
     assert tag_value.count("entities/foo.md") == 1
 
@@ -375,11 +375,12 @@ def test_retain_drops_empty_tags_but_always_keeps_rel_path(config: Config) -> No
     hs = _make(config, runner)
 
     hs.retain("concepts/bar.md", "facts", tags=["", "concept", ""])
-    assert runner.last[runner.last.index("--tags") + 1] == "concept,concepts/bar.md"
+    idx = runner.last.index("--document-tags")
+    assert runner.last[idx + 1] == "concept,concepts/bar.md"
 
     # Even with no caller tags, the rel path tag is emitted (provenance must survive).
     hs.retain("concepts/baz.md", "facts")
-    assert runner.last[runner.last.index("--tags") + 1] == "concepts/baz.md"
+    assert runner.last[runner.last.index("--document-tags") + 1] == "concepts/baz.md"
 
 
 def test_retain_raises_on_permanent_exit_without_retry(config: Config) -> None:
@@ -411,7 +412,7 @@ def test_retain_passes_configured_timeout_to_runner(config: Config) -> None:
 def test_recall_builds_argv_with_json_output_and_parses_tag_paths(
     config: Config,
 ) -> None:
-    """recall sends <bank> <query> -o json --limit and maps tag paths into hits."""
+    """recall sends <bank> <query> -o json (no --limit) and maps tag paths into hits."""
     runner = RecordingRunner(
         stdout=_json_recall(
             {"text": "fact", "tags": ["entity", "entities/foo.md"]},
@@ -431,8 +432,27 @@ def test_recall_builds_argv_with_json_output_and_parses_tag_paths(
     assert "how does foo work" in argv
     # Structured output requested, not pretty-stdout scraping.
     assert argv[argv.index("-o") + 1] == "json"
-    assert argv[argv.index("--limit") + 1] == "3"
+    # VPS-confirmed: hindsight-embed recall has no --limit; the cap is client-side.
+    assert "--limit" not in argv
     assert [h.path for h in hits] == ["entities/foo.md", "concepts/bar.md"]
+
+
+def test_recall_caps_results_client_side_to_limit(config: Config) -> None:
+    """With no CLI --limit, recall truncates the parsed hits to ``limit`` itself."""
+    runner = RecordingRunner(
+        stdout=_json_recall(
+            {"text": "a", "tags": ["entity", "entities/a.md"]},
+            {"text": "b", "tags": ["concept", "concepts/b.md"]},
+            {"text": "c", "tags": ["entity", "entities/c.md"]},
+        )
+    )
+    hs = _make(config, runner)
+
+    hits = hs.recall("everything", limit=2)
+
+    # Three hits parsed, but the client-side cap keeps only the first two (in order).
+    assert "--limit" not in runner.last
+    assert [h.path for h in hits] == ["entities/a.md", "concepts/b.md"]
 
 
 def test_recall_empty_json_returns_empty_and_does_not_raise(config: Config) -> None:
