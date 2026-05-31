@@ -13,6 +13,19 @@ properties:
   url:        { displayName: URL }
 views:
   - type: table
+    name: Imminent
+    filters:
+      and:
+        - status != "done"
+        - status != "completed"
+        - status != "cancelled"
+        - due_date != ""
+        - due_date <= now() + "2 days"
+    order: [file.name, due_date, priority, status, project]
+    sort:
+      - { property: due_date, direction: ASC }
+      - { property: priority, direction: ASC }
+  - type: table
     name: Open Actions
     filters:
       and:

@@ -62,6 +62,30 @@ def test_actions_due_soon_uses_date_arithmetic_string() -> None:
     assert 'due_date < now() + "7 days"' in conditions
 
 
+def test_actions_base_has_imminent_view_first() -> None:
+    """``actions.base`` leads with an 'Imminent' view (issue #62 dashboard).
+
+    The Imminent view drives the dashboard's expanded red lead callout, so it is the
+    first view in the file (the embed pins it by name, but ordering keeps it the
+    default if the name pin is ever dropped).
+    """
+    data: Any = yaml.safe_load(base_text("actions"))
+    assert data["views"][0]["name"] == "Imminent"
+
+
+def test_actions_base_imminent_filters_overdue_and_due_soon() -> None:
+    """'Imminent' filters open actions overdue or due within two days (issue #62)."""
+    data: Any = yaml.safe_load(base_text("actions"))
+    imminent = next(v for v in data["views"] if v["name"] == "Imminent")
+    conditions = imminent["filters"]["and"]
+    # Open only: a done/completed/cancelled action is never imminent.
+    assert 'status != "done"' in conditions
+    # Must carry a due date that is on or before now + 2 days; an overdue action
+    # (due_date already < now) therefore matches too.
+    assert 'due_date != ""' in conditions
+    assert 'due_date <= now() + "2 days"' in conditions
+
+
 def test_home_base_has_nested_not_inside_and() -> None:
     """``home.base`` nests a ``not:`` object inside its view's ``and:`` list."""
     data: Any = yaml.safe_load(base_text("home"))
@@ -110,6 +134,51 @@ def test_actions_base_media_views_split_by_consume_status() -> None:
 # --------------------------------------------------------------------------- #
 # Spine files: frontmatter / structural anchors used downstream.
 # --------------------------------------------------------------------------- #
+
+
+def test_index_is_a_callout_dashboard() -> None:
+    """``index.md`` leads with an expanded red Imminent callout (issue #62)."""
+    text = template_text("index.md")
+    # Imminent actions lead in an expanded ('+') danger (red) callout.
+    assert "> [!danger]+" in text
+    # Every other section is a collapsed ('-') colour-coded callout.
+    for marker in (
+        "> [!todo]-",
+        "> [!example]-",
+        "> [!tip]-",
+        "> [!quote]-",
+        "> [!warning]-",
+        "> [!info]-",
+    ):
+        assert marker in text, marker
+    # The danger callout is the first callout on the page.
+    assert text.index("[!danger]+") < text.index("[!todo]-")
+    # It embeds the actions Imminent view.
+    assert "![[_bases/actions.base#Imminent]]" in text
+
+
+def test_index_dashboard_embeds_resolve_to_real_base_views() -> None:
+    """Every ``![[_bases/x.base#View]]`` embed names a view that exists (issue #62)."""
+    import re
+
+    text = template_text("index.md")
+    embeds = re.findall(r"!\[\[_bases/([^#\]]+\.base)#([^\]]+)\]\]", text)
+    assert embeds, "the dashboard must embed at least one named Base view"
+    for base_name, view_name in embeds:
+        name = base_name.removesuffix(".base")
+        base = yaml.safe_load(base_text(name))
+        view_names = {v["name"] for v in base["views"]}
+        assert view_name in view_names, f"{base_name}#{view_name}"
+
+
+def test_index_preserves_knowledge_catalog_machinery() -> None:
+    """The dashboard keeps the catalog headings ``append_index`` / lint depend on."""
+    text = template_text("index.md")
+    # Vault.append_index writes catalog lines under these headings; lint's
+    # index-completeness check reads them, so the seed must keep them.
+    for heading in ("### Entities", "### Notes", "### Memories"):
+        assert heading in text, heading
+    assert "Total pages:" in text
 
 
 def test_index_md_frontmatter_is_summary_type() -> None:
