@@ -1343,9 +1343,9 @@ class Ingestor:
     def _page_tags(self, page_paths: list[str]) -> list[str]:
         """Collect the curated pages' frontmatter tags for the success log (issue #52).
 
-        Reads each curated page's ``tags`` and returns the de-duplicated, order-preserving
-        union; an unreadable page or a missing/ill-typed ``tags`` value is skipped so the
-        observability line never raises or blocks an otherwise-successful ingest.
+        Reads each curated page's ``tags`` and returns the de-duplicated,
+        order-preserving union; an unreadable page or a missing/ill-typed ``tags`` value
+        is skipped so the observability line never raises or blocks a good ingest.
         """
         seen: list[str] = []
         for path in page_paths:

@@ -126,10 +126,10 @@ def _configure_logging(config: Config) -> None:
 
     The appliance was silent on the happy path (issue #52): the per-operation success
     lines emitted by ingest/query/research/intent only surface once the root logger has
-    a handler. This calls :func:`logging.basicConfig` with the configured level (default
-    ``INFO``) so a long-running daemon (``thoth slack``/``mcp``) and the cron entrypoints
-    print concise operator-readable progress. An unknown level name falls back to
-    ``INFO`` rather than raising, so a typo in ``THOTH_LOG_LEVEL`` never blocks boot.
+    a handler. This calls :func:`logging.basicConfig` with the configured level
+    (default ``INFO``) so a long-running daemon (``thoth slack``/``mcp``) and the cron
+    entrypoints print concise operator-readable progress. An unknown level name falls
+    back to ``INFO`` rather than raising, so a typo never blocks boot.
     """
     level = logging.getLevelName(config.log_level.upper())
     if not isinstance(level, int):
