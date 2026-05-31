@@ -8,9 +8,12 @@ vault-only retrieve), and -- when wired -- a :class:`~thoth.research.ResearchEng
 (the blended web+vault Q&A that backs the default free-text path, SPEC section 7.1). The
 daemon listens for ``message.im`` and ``file_shared`` events, gates them through an
 allow-list and a transient redelivery dedupe, routes a bare URL / file to an ingest and
-free text to the blended ask (falling back to the vault-only query when no research
-engine is injected), offers to save a blended answer as a ``queries/`` page on a
-follow-up "y", and replies in Slack ``mrkdwn``.
+sends **bare free text** through a lightweight intent gate
+(:class:`~thoth.intent.IntentClassifier`, issue #5) that picks capture / vault-query /
+blended ask -- falling back to the pre-gate default (blended ask, or vault-only query
+when no research engine is injected) when no classifier is wired. It offers to save a
+blended answer as a ``queries/`` page on a follow-up "y", and replies in Slack
+``mrkdwn``.
 
 Design constraints enforced here:
 
@@ -52,8 +55,14 @@ from typing import Any, Protocol
 from thoth.config import Config
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
+from thoth.intent import IntentClassifier
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
-from thoth.research import AskResult, ResearchEngine, ResearchError
+from thoth.research import (
+    AskResult,
+    ResearchEngine,
+    ResearchError,
+    force_web_requested,
+)
 from thoth.state import EventStore
 
 DEDUPE_TTL_SECONDS: float = 3600.0
@@ -76,6 +85,14 @@ _REFUSAL_TEXT: str = "Sorry, you are not authorised to use this assistant."
 
 # The offer-to-save line appended to a blended answer (SPEC section 7.1 step 4).
 _SAVE_OFFER_TEXT: str = "_Save this answer to the vault? Reply *y* to file it._"
+
+# Appended to a confirmation when the intent gate (issue #5) routed *bare* free text to
+# capture, so a misfile is recoverable in one reply: the user can just re-send it as a
+# question. Explicit-prefix / URL / file captures never carry this -- they are
+# unambiguous, deliberate captures.
+_GATE_CAPTURE_HINT: str = (
+    "_Filed as a note. If you meant to ask, just send it again as a question._"
+)
 
 
 class SlackError(Exception):
@@ -432,6 +449,7 @@ class Handlers:
     query_engine: QueryEngine
     allowed_users: frozenset[str]
     research: ResearchEngine | None = None
+    intent_classifier: IntentClassifier | None = None
     dedupe: EventDedupe = field(default_factory=EventDedupe)
     pending_saves: PendingSaves = field(default_factory=PendingSaves)
     alerter: AlerterLike | None = None
@@ -453,10 +471,13 @@ class Handlers:
           offer and files the last blended answer as a ``queries/`` page;
         * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
           ingest (:meth:`thoth.ingest.Ingestor.ingest`);
-        * any other free text is the **blended** Q&A path
-          (:meth:`thoth.research.ResearchEngine.ask`) when a research engine is wired,
-          replying with the offer-to-save; if none is wired it falls back to the
-          vault-only :meth:`thoth.query.QueryEngine.answer`.
+        * any other **bare free text** is routed by the intent gate
+          (:meth:`_route_free_text`, issue #5): an injected
+          :class:`~thoth.intent.IntentClassifier` chooses capture / vault-query /
+          blended ask. With no classifier wired the pre-gate default holds -- the
+          **blended** Q&A path (:meth:`thoth.research.ResearchEngine.ask`) when a
+          research engine is wired, else the vault-only
+          :meth:`thoth.query.QueryEngine.answer`.
 
         A surfaced :class:`~thoth.git_sync.VaultConflictError` is rendered fail-loud
         rather than swallowed.
@@ -487,10 +508,8 @@ class Handlers:
         elif self._looks_like_url(text):
             capture = Capture(url=text, source=source)
             self._do_ingest(capture, say)
-        elif self.research is not None:
-            self._do_ask(text, channel, say)
         else:
-            self._do_query(text, say)
+            self._route_free_text(text, channel, source, say)
 
     def handle_file_shared(
         self,
@@ -542,7 +561,62 @@ class Handlers:
 
     # ---- internals ---------------------------------------------------------------
 
-    def _do_ingest(self, capture: Capture, say: Callable[[str], None]) -> None:
+    def _route_free_text(
+        self, text: str, channel: str, source: str, say: Callable[[str], None]
+    ) -> None:
+        """Route bare free text through the intent gate (issue #5).
+
+        Only reached for a message that hit none of the deterministic short-circuits
+        (pending-save affirmative, ``capture:``/``note:``/``save:`` prefix, bare URL,
+        shared file). The injected :class:`~thoth.intent.IntentClassifier` -- when wired
+        -- chooses the engine:
+
+        * ``capture`` files the text as a note, appending :data:`_GATE_CAPTURE_HINT`
+          so a misfile is recoverable in one reply;
+        * ``query`` runs the vault-only :meth:`thoth.query.QueryEngine.answer`;
+        * ``ask`` (the default, and the low-confidence fallback) takes the blended
+          web+vault path when a research engine is wired, else the vault-only query.
+
+        With no classifier wired the route is always ``ask``, so the pre-gate behaviour
+        is preserved exactly: blended ask when research is wired, vault-only query
+        otherwise.
+        """
+        route = self._free_text_route(text)
+        if route == "capture":
+            capture = Capture(text=text, source=source)
+            self._do_ingest(capture, say, hint=_GATE_CAPTURE_HINT)
+        elif route == "query":
+            self._do_query(text, say)
+        elif self.research is not None:
+            self._do_ask(text, channel, say)
+        else:
+            self._do_query(text, say)
+
+    def _free_text_route(self, text: str) -> str:
+        """Pick the engine for bare free text: ``capture`` / ``ask`` / ``query``.
+
+        Returns ``ask`` when no classifier is wired (the pre-gate default, so the
+        research/query fallback in :meth:`_route_free_text` is unchanged) **and** when
+        the text carries the explicit ``research:`` marker -- that marker is a
+        deterministic "ask the web" escape hatch (issue #5) and must bypass the gate to
+        reach :meth:`thoth.research.ResearchEngine.ask`, which strips it and forces the
+        web on; classifying it could misroute it to capture/query. Otherwise it consults
+        the gate and returns its :attr:`~thoth.intent.IntentDecision.route`, which
+        already collapses a low-confidence verdict to the safe ``ask``. The classifier
+        is itself total, so a model/parse failure also yields ``ask`` rather than
+        raising.
+        """
+        if self.intent_classifier is None or force_web_requested(text):
+            return "ask"
+        return self.intent_classifier.classify(text).route
+
+    def _do_ingest(
+        self,
+        capture: Capture,
+        say: Callable[[str], None],
+        *,
+        hint: str | None = None,
+    ) -> None:
         """Run an ingest and reply; render a conflict/error fail-loud, never crash.
 
         A vault conflict (the ingestor's :attr:`~thoth.ingest.IngestReport.conflict`, or
@@ -552,6 +626,10 @@ class Handlers:
         unpushed-divergence alert is routed to the errors-to-Slack target (issue #15) --
         the daily channel the user actually watches -- with the commits-ahead count +
         oldest-unpushed time computed from git.
+
+        ``hint`` is an optional extra line appended to the confirmation; the intent gate
+        passes :data:`_GATE_CAPTURE_HINT` so a gate-routed capture is recoverable (issue
+        #5). It is not appended to the early conflict/error replies above.
         """
         try:
             report = self.ingestor.ingest(capture)
@@ -564,7 +642,10 @@ class Handlers:
             return
         if report.conflict:
             self._alert_divergence(report.message)
-        say(render_ingest_report(report))
+        message = render_ingest_report(report)
+        if hint:
+            message = f"{message}\n{hint}"
+        say(message)
 
     def _alert_divergence(self, detail: str) -> None:
         """Route an unpushed-divergence alert to the errors-to-Slack target (issue #15).
@@ -806,6 +887,8 @@ def build_app(
     from slack_bolt import App
 
     from thoth.alerts import make_alerter
+    from thoth.intent import DEFAULT_INTENT_MODEL
+    from thoth.llm import LLM
 
     bot_token, _ = config.require_slack()
     handlers = Handlers(
@@ -814,6 +897,14 @@ def build_app(
         query_engine=query_engine,
         allowed_users=parse_allowed_users(os.environ.get("SLACK_ALLOWED_USERS")),
         research=research,
+        # Free-text intent gate (issue #5): one cheap Haiku call routes bare prose to
+        # capture / vault-query / blended ask instead of always defaulting to ask. Its
+        # own lazy LLM client (a different, cheaper model than the ask/curate Sonnet);
+        # the model is overridable without a redeploy via THOTH_INTENT_MODEL.
+        intent_classifier=IntentClassifier(
+            LLM(config),
+            model=os.environ.get("THOTH_INTENT_MODEL") or DEFAULT_INTENT_MODEL,
+        ),
         # Durable redelivery dedupe so a Slack retry across a daemon restart is still
         # dropped (the in-memory cache alone is lost on restart, SPEC section 10).
         dedupe=EventDedupe(store=EventStore(config.state_db_path)),

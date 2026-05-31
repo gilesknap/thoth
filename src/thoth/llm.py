@@ -456,6 +456,7 @@ class LLM:
         system_extra: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
     ) -> Any:
         """Call ``client.messages.create`` with assembled kwargs; return the response.
 
@@ -464,6 +465,8 @@ class LLM:
             system_extra: Optional uncached extra system text.
             max_tokens: Maximum tokens to generate.
             tools: Optional tool definitions to pass through.
+            model: Optional model id overriding ``config.anthropic_model`` (e.g. a
+                cheaper Haiku for the Slack intent gate).
 
         Returns:
             The raw response object returned by the client.
@@ -474,6 +477,7 @@ class LLM:
             system_extra=system_extra,
             max_tokens=max_tokens,
             tools=tools,
+            model=model,
         )
         return self.client.messages.create(**kwargs)
 
