@@ -134,7 +134,7 @@ def test_live_hindsight_retain_recall_roundtrip(live_config: Config) -> None:
     hindsight = Hindsight(live_config)
     # A unique token so this probe cannot collide with real bank contents.
     token = uuid.uuid4().hex
-    rel_path = f"concepts/first-light-{token}.md"
+    rel_path = f"notes/first-light-{token}.md"
     query = f"first light smoke probe {token}"
 
     hindsight.retain(rel_path, f"A first-light smoke probe fact tagged {token}.")
@@ -149,17 +149,18 @@ def test_live_hindsight_retain_recall_roundtrip(live_config: Config) -> None:
 def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> None:
     """The ``page_type`` tag round-trips through recall and scopes results (ADR 0004).
 
-    Issue #40 indexes life-admin content too and partitions recall **by the page-type
-    tag at query time**. CI mocks the CLI, so the live risk is whether the real
-    ``hindsight-embed`` round-trips that tag back in recall JSON. This retains a
-    uniquely-tagged ``entity`` probe, recalls it, and asserts the recovered
+    Issue #40 indexes all content and partitions recall **by the page-type tag at query
+    time**. CI mocks the CLI, so the live risk is whether the real ``hindsight-embed``
+    round-trips that tag back in recall JSON. This retains a uniquely-tagged ``entity``
+    probe, recalls it, and asserts the recovered
     :attr:`~thoth.hindsight.RecallHit.page_type` is ``entity`` -- then that a
-    knowledge-type scope keeps the hit while a life-admin-only scope filters it out.
+    reference-type scope keeps the hit while an actionable-only scope filters it out
+    (ADR 0005).
     """
     import uuid
 
     from thoth.hindsight import Hindsight
-    from thoth.vault import KNOWLEDGE_TYPES, LIFE_ADMIN_TYPES
+    from thoth.vault import REFERENCE_TYPES
 
     hindsight = Hindsight(live_config)
     token = uuid.uuid4().hex
@@ -178,12 +179,12 @@ def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> N
         f"page_type tag did not round-trip; got {match.page_type!r}"
     )
 
-    # Knowledge scope keeps the entity hit; a life-admin-only scope filters it out.
-    knowledge = hindsight.recall(query, types=KNOWLEDGE_TYPES)
-    assert any(h.path == rel_path for h in knowledge), "knowledge scope dropped a hit"
-    life_admin = hindsight.recall(query, types=LIFE_ADMIN_TYPES)
-    assert all(h.path != rel_path for h in life_admin), (
-        "life-admin scope wrongly kept an entity hit"
+    # Reference scope keeps the entity hit; an actionable-only scope filters it out.
+    reference = hindsight.recall(query, types=REFERENCE_TYPES)
+    assert any(h.path == rel_path for h in reference), "reference scope dropped a hit"
+    actionable = hindsight.recall(query, types=frozenset({"action"}))
+    assert all(h.path != rel_path for h in actionable), (
+        "actionable scope wrongly kept an entity hit"
     )
 
 
@@ -388,7 +389,7 @@ def test_live_budget_guard_blocks_real_anthropic_call(
     hs_guard.charge(KIND_HINDSIGHT)  # exhaust the single-call budget
     hindsight = Hindsight(live_config, guard=hs_guard)
     with pytest.raises(BudgetExceededError):
-        hindsight.retain("concepts/never-spent.md", "this must be blocked")
+        hindsight.retain("notes/never-spent.md", "this must be blocked")
 
 
 # --------------------------------------------------------------------------------------
@@ -402,13 +403,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 

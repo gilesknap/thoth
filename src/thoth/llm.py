@@ -279,8 +279,11 @@ def file_plan_contract_text() -> str:
         '"files": ["folder/slug.md"]}   // optional\n'
         "}\n"
         f"Folder -> required type: {folder_types}.\n"
+        "A note carries a tag for its kind (concept/comparison/query); a media item is "
+        "an action tagged 'media' filed under actions.\n"
         f'index_entries "section" (if you include any) MUST be one of: {sections}; '
-        "omit index_entries entirely if none fit.\n"
+        "actions are surfaced by the dashboards, not the catalog, so omit "
+        "index_entries for them; omit index_entries entirely if none fit.\n"
         '"source" is the capture CHANNEL (one of the list above) -- NEVER a file path '
         "or the raw page path.\n"
         "Use today's date for created/updated. Do not invent folders, types, sources, "

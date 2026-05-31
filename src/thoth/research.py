@@ -18,7 +18,7 @@ An SSRF/extract failure is caught and fed back to the model as a ``tool_result``
 string -- it never escapes :meth:`ResearchEngine.ask`.
 
 The one *writing* action is the explicit offer-to-save step
-(:meth:`ResearchEngine.save_answer`): on confirmation it writes a ``queries/<slug>.md``
+(:meth:`ResearchEngine.save_answer`): on confirmation it writes a ``notes/<slug>.md``
 page through the validated :meth:`~thoth.vault.Vault.write_page`, so web knowledge
 becomes a curated second-brain page. It still routes through the same closed surface.
 
@@ -163,7 +163,7 @@ class AskResult:
     used_web: bool = False
     """Whether any web tool (search or extract) was invoked during the run."""
     saved_path: str | None = None
-    """Vault-relative path of a saved ``queries/`` page; set by :meth:`save_answer`."""
+    """Vault-relative path of a saved ``notes/`` page; set by :meth:`save_answer`."""
 
 
 def force_web_requested(question: str, *, force_web: bool = False) -> bool:
@@ -324,10 +324,10 @@ class ResearchEngine:
         slug: str | None = None,
         today: date | None = None,
     ) -> str:
-        """Write the answer as a ``queries/<slug>.md`` page via the validated vault.
+        """Write the answer as a ``notes/<slug>.md`` page (tagged ``query``).
 
-        Builds frontmatter (``type='query'``, ``source='mcp'``, a tag set, and a
-        ``sources`` list of the web URLs) and a body of the answer followed by a
+        Builds frontmatter (``type='note'`` tagged ``query``, ``source='mcp'``, a tag
+        set, ``sources`` list of the web URLs) and a body of the answer followed by a
         ``## Sources`` section listing the web URLs and ``[[wikilinks]]`` for the vault
         citations, then writes it through :meth:`~thoth.vault.Vault.write_page` (which
         validates the folder/type contract, the slug, and confines the path). The slug
@@ -340,11 +340,11 @@ class ResearchEngine:
             today: The date to stamp; defaults to :meth:`date.today`.
 
         Returns:
-            The vault-relative path written (always under ``queries/``).
+            The vault-relative path written (always under ``notes/``).
 
         Raises:
             ResearchError: if the slug is invalid or the vault otherwise rejects the
-                page (nothing is written outside ``queries/``).
+                page (nothing is written outside ``notes/``).
         """
         clean_question = strip_research_prefix(question)
         page_slug = slug if slug is not None else _slugify(clean_question)
@@ -356,7 +356,7 @@ class ResearchEngine:
         web_urls = [c.url for c in result.web_citations]
         frontmatter: dict[str, object] = {
             "title": clean_question or page_slug.replace("-", " ").title(),
-            "type": "query",
+            "type": "note",
             "source": "mcp",
             "tags": ["query"],
         }
@@ -365,7 +365,7 @@ class ResearchEngine:
         body = self._render_save_body(result, web_urls)
         try:
             return self._vault.write_page(
-                "queries", page_slug, frontmatter, body, today=today
+                "notes", page_slug, frontmatter, body, today=today
             )
         except (SchemaError, SlugError, VaultError) as exc:
             raise ResearchError(f"vault rejected saved answer: {exc}") from exc
@@ -679,7 +679,7 @@ def _block_input(block: Any) -> dict[str, Any]:
 
 
 def _slugify(text: str) -> str:
-    """Build a ``queries/`` slug from a question via the shared vault slugifier.
+    """Build a ``notes/`` slug from a question via the shared vault slugifier.
 
     Thin wrapper over :func:`thoth.vault.slugify` (which wraps ``python-slugify`` with
     the project caps and transliterates non-ASCII) that supplies the ``"query"``

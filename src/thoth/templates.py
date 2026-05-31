@@ -16,8 +16,8 @@ Two kinds of template ship:
   embeds the Bases dashboards; ``SCHEMA.md`` carries the frontmatter contract and
   the ``## Tag Taxonomy`` section that :func:`thoth.lint.parse_taxonomy_tags`
   reads as its single source of truth; ``log.md`` is the append-only action log.
-* **Bases dashboards** -- :data:`BASE_NAMES` (``home``, ``actions``, ``media``,
-  ``memories``, ``inbox``): YAML ``.base`` files under ``_bases/`` embedded by
+* **Bases dashboards** -- :data:`BASE_NAMES` (``home``, ``actions``, ``memories``,
+  ``inbox``, ``entities``, ``notes``): YAML ``.base`` files under ``_bases/`` used by
   ``index.md``. Every ``filters:`` block is an object keyed by exactly one of
   ``and:`` / ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
 
@@ -64,7 +64,14 @@ __all__ = [
 
 #: The five Bases dashboard names (without the ``.base`` suffix), in the order
 #: ``index.md`` embeds them.
-BASE_NAMES: tuple[str, ...] = ("home", "actions", "media", "memories", "inbox")
+BASE_NAMES: tuple[str, ...] = (
+    "home",
+    "actions",
+    "memories",
+    "inbox",
+    "entities",
+    "notes",
+)
 
 #: The three vault-spine file names shipped as package data.
 SPINE_NAMES: tuple[str, ...] = ("index.md", "SCHEMA.md", "log.md")

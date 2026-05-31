@@ -63,10 +63,10 @@ import yaml
 
 from thoth.config import Config
 from thoth.vault import (
+    ACTIONABLE_DIRS,
     ASSET_SLUG_RE,
+    CURATED_DIRS,
     FOLDER_TYPE_CONTRACT,
-    KNOWLEDGE_DIRS,
-    LIFE_ADMIN_DIRS,
     REQUIRED_COMMON_FIELDS,
     VALID_SOURCES,
     VALID_TYPES,
@@ -75,8 +75,8 @@ from thoth.vault import (
 
 __all__ = [
     "LONDON",
-    "KNOWLEDGE_DIRS",
-    "LIFE_ADMIN_DIRS",
+    "CURATED_DIRS",
+    "ACTIONABLE_DIRS",
     "SPINE_FILES",
     "EXCLUDED_DIRS",
     "PAGE_SIZE_LIMIT",
@@ -104,14 +104,15 @@ Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is a base depend
 this resolves identically across the 3.11-3.14 matrix even on a minimal container.
 """
 
-# KNOWLEDGE_DIRS / LIFE_ADMIN_DIRS are the canonical folder vocabulary owned by
-# thoth.vault (issue #19); they are imported above and re-exported here so existing
-# ``thoth.lint.KNOWLEDGE_DIRS`` consumers and the __all__ surface are unchanged.
-# "Curated page" means the same thing here as in the reindex job: a fact-bearing page in
-# one of the KNOWLEDGE_DIRS folders (orphan, index-completeness, page-size and
-# quality-signal checks scope to these). The LIFE_ADMIN_DIRS pages are exempt from the
-# orphan / index-completeness checks (Bases surface them, SPEC check 1) but still carry
-# the common frontmatter contract.
+# CURATED_DIRS / ACTIONABLE_DIRS are the canonical folder vocabulary owned by
+# thoth.vault (ADR 0005); they are imported above and re-exported here so the __all__
+# surface and lint consumers derive the same list instead of restating it.
+# "Curated page" means a lifecycle-free reference page in one of the CURATED_DIRS
+# folders (entities/notes/memories): the orphan, index-completeness, page-size and
+# quality-signal checks scope to these. The ACTIONABLE_DIRS pages (actions/, which also
+# holds the media queue as actions tagged 'media') are exempt from the orphan /
+# index-completeness checks (Bases dashboards surface them) but still carry the common
+# frontmatter contract and get the overdue / cold-media checks instead.
 
 SPINE_FILES: frozenset[str] = frozenset({"index.md", "SCHEMA.md", "log.md"})
 """Structural backbone files (matches ``reindex.SKIP_FILES``); not curated knowledge."""
@@ -148,15 +149,33 @@ _TAXONOMY_HEADING: str = "## Tag Taxonomy"
 
 TYPE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "action": ("status",),
-    "media": ("status",),
 }
-"""Type-specific required frontmatter fields beyond the common set (SPEC check 4)."""
+"""Type-specific required frontmatter fields beyond the common set (SPEC check 4).
+
+ADR 0005 folded the media queue into ``actions/`` (a media item is an ``action`` tagged
+``media``), so the single ``action`` type carries the ``status`` requirement.
+"""
 
 STATUS_VOCAB: dict[str, frozenset[str]] = {
-    "action": frozenset({"todo", "in_progress", "done", "completed", "cancelled"}),
-    "media": frozenset({"to_consume", "consuming", "consumed"}),
+    "action": frozenset(
+        {
+            "todo",
+            "in_progress",
+            "done",
+            "completed",
+            "cancelled",
+            "to_consume",
+            "consuming",
+            "consumed",
+        }
+    ),
 }
-"""Allowed ``status`` values per ``type`` (Metadata-Menu vocab, SPEC table)."""
+"""Allowed ``status`` values per ``type`` (Metadata-Menu vocab, SPEC table).
+
+ADR 0005: ``action`` covers both the todo lifecycle (``todo``..``cancelled``) and the
+media consume queue (``to_consume``/``consuming``/``consumed``), since a media item is
+now an ``action`` tagged ``media``.
+"""
 
 PRIORITY_VOCAB: frozenset[str] = frozenset(
     {"1 - Urgent", "2 - High", "3 - Medium", "4 - Low"}
@@ -355,14 +374,14 @@ class LintEngine:
     # ---- check 1: orphan pages -------------------------------------------------------
 
     def check_orphans(self) -> list[Finding]:
-        """Flag curated knowledge pages with zero inbound wikilinks (check 1).
+        """Flag curated reference pages with zero inbound wikilinks (check 1).
 
-        Life-admin pages are exempt (Bases surface them). A page is reachable if any
-        *other* page links to its slug or to one of its ``aliases``; a page linking only
-        to itself does not count as inbound.
+        Actionable (``actions/``) pages are exempt (Bases dashboards surface them). A
+        page is reachable if any *other* page links to its slug or to one of its
+        ``aliases``; a page linking only to itself does not count as inbound.
 
         Returns:
-            One :class:`Finding` (``Severity.ORPHAN``) per orphaned knowledge page.
+            One :class:`Finding` (``Severity.ORPHAN``) per orphaned reference page.
         """
         pages = self._curated_pages()
         inbound = self._inbound_targets(pages)
@@ -377,7 +396,7 @@ class LintEngine:
                     name="orphan",
                     severity=Severity.ORPHAN,
                     path=page.path,
-                    message="knowledge page has no inbound [[wikilinks]]",
+                    message="reference page has no inbound [[wikilinks]]",
                 )
             )
         return findings
@@ -544,13 +563,13 @@ class LintEngine:
     # ---- check 5: stale content ------------------------------------------------------
 
     def check_stale(self) -> list[Finding]:
-        """Flag stale knowledge pages and overdue / cold life-admin pages (check 5).
+        """Flag stale reference pages and overdue / cold actionable pages (check 5).
 
-        A curated knowledge page whose ``updated`` is more than :data:`STALE_DAYS`
+        A curated reference page whose ``updated`` is more than :data:`STALE_DAYS`
         before :attr:`today` is flagged; an open ``action`` past its ``due_date`` is
-        flagged (done/completed/cancelled exempt); a ``media`` ``to_consume`` page
-        whose ``created`` is more than :data:`MEDIA_STALE_DAYS` ago is flagged. All
-        findings are ``Severity.STALE``.
+        flagged (done/completed/cancelled exempt); an ``action`` tagged ``media`` whose
+        ``status`` is ``to_consume`` and whose ``created`` is more than
+        :data:`MEDIA_STALE_DAYS` ago is flagged. All findings are ``Severity.STALE``.
 
         Returns:
             The stale-content findings.
@@ -568,21 +587,28 @@ class LintEngine:
                         severity=Severity.STALE,
                         path=page.path,
                         message=(
-                            f"knowledge page updated {updated.isoformat()} is older "
+                            f"reference page updated {updated.isoformat()} is older "
                             f"than {STALE_DAYS} days"
                         ),
                     )
                 )
-        for page in self._life_admin_pages():
-            findings.extend(self._stale_life_admin(page, media_floor))
+        for page in self._actionable_pages():
+            findings.extend(self._stale_actionable(page, media_floor))
         return findings
 
-    def _stale_life_admin(self, page: _Page, media_floor: date) -> list[Finding]:
-        """Return overdue-action / cold-media findings for one life-admin page."""
+    def _stale_actionable(self, page: _Page, media_floor: date) -> list[Finding]:
+        """Return overdue-action / cold-media findings for one actionable page.
+
+        ADR 0005: the media queue lives in ``actions/`` as an ``action`` tagged
+        ``media``, so the cold-media check keys off the ``media`` tag plus the
+        ``to_consume`` status rather than a separate ``media`` type / folder.
+        """
         out: list[Finding] = []
         page_type = _str_field(page.meta.get("type"))
         status = _str_field(page.meta.get("status"))
-        if page_type == "action" and status not in _ACTION_CLOSED_STATUSES:
+        if page_type != "action":
+            return out
+        if status not in _ACTION_CLOSED_STATUSES:
             due = _parse_date(page.meta.get("due_date"))
             if due is not None and due < self._today:
                 out.append(
@@ -594,7 +620,7 @@ class LintEngine:
                         message=f"action is past its due date {due.isoformat()}",
                     )
                 )
-        if page_type == "media" and status == _MEDIA_OPEN_STATUS:
+        if status == _MEDIA_OPEN_STATUS and "media" in _page_tags(page.meta):
             added = _parse_date(page.meta.get("created"))
             if added is not None and added < media_floor:
                 out.append(
@@ -877,16 +903,33 @@ class LintEngine:
     # ---- internal page model + walks -------------------------------------------------
 
     def _curated_pages(self) -> list[_Page]:
-        """Return parsed pages in :data:`KNOWLEDGE_DIRS` (spine files skipped)."""
-        return self._pages_in(KNOWLEDGE_DIRS)
+        """Return parsed pages in :data:`CURATED_DIRS` (spine files skipped).
 
-    def _life_admin_pages(self) -> list[_Page]:
-        """Return parsed pages in :data:`LIFE_ADMIN_DIRS` (spine files skipped)."""
-        return self._pages_in(LIFE_ADMIN_DIRS)
+        The lifecycle-free reference folders (entities/notes/memories): the orphan,
+        index-completeness and stale checks scope to these.
+        """
+        return self._pages_in(CURATED_DIRS)
+
+    def _actionable_pages(self) -> list[_Page]:
+        """Return parsed pages in :data:`ACTIONABLE_DIRS` (spine files skipped).
+
+        The lifecycle-bearing folder(s) (actions/, which also holds the media queue as
+        actions tagged 'media'): the overdue / cold-media checks scope to these.
+        """
+        return self._pages_in(ACTIONABLE_DIRS)
 
     def _all_scanned_pages(self) -> list[_Page]:
-        """Return curated + life-admin pages (the set most checks scan)."""
-        return [*self._curated_pages(), *self._life_admin_pages()]
+        """Return reference + actionable + inbox pages (the set most checks scan).
+
+        ``inbox/`` holding pages are machinery (exempt from the orphan / index checks,
+        which scope to :data:`CURATED_DIRS`) but still carry the common frontmatter
+        contract, so they are scanned here for the frontmatter / broken-link checks.
+        """
+        return [
+            *self._curated_pages(),
+            *self._actionable_pages(),
+            *self._pages_in(("inbox",)),
+        ]
 
     def _raw_pages(self) -> list[_Page]:
         """Return parsed pages in ``raw/{articles,papers,transcripts}``."""

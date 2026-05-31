@@ -516,20 +516,16 @@ def _printed_total(out: str) -> int:
 def _seed_vault_with_one_broken_link(root: Path) -> None:
     """Seed a spine plus one knowledge page carrying a single broken wikilink.
 
-    The page is filed in ``concepts/`` with otherwise-valid common frontmatter and an
+    The page is filed in ``notes/`` with otherwise-valid common frontmatter and an
     outbound ``[[no-such-page]]`` whose target does not exist, so a deterministic linter
     flags at least one issue (a broken wikilink). The ``log.md`` starts with the SPEC
     seed block, so a fresh log already has exactly one ``## [`` block.
     """
     for folder in (
         "entities",
-        "concepts",
-        "comparisons",
-        "queries",
-        "actions",
-        "media",
+        "notes",
         "memories",
-        "people",
+        "actions",
         "inbox",
     ):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -543,24 +539,22 @@ def _seed_vault_with_one_broken_link(root: Path) -> None:
         "# Home\n\n"
         "## Knowledge catalog\n\n"
         "### Entities\n\n"
-        "### Concepts\n\n"
-        "### Comparisons\n\n"
-        "### Queries\n\n"
-        "### People\n",
+        "### Notes\n\n"
+        "### Memories\n",
         encoding="utf-8",
     )
     (root / "SCHEMA.md").write_text(
-        "# Vault Schema\n\n## Tag Taxonomy\n- concept\n- entity\n",
+        "# Vault Schema\n\n## Tag Taxonomy\n- concept\n- note\n- entity\n",
         encoding="utf-8",
     )
     (root / "log.md").write_text(
         "# Vault Log\n\n## [2026-05-30] create | Vault initialized\n",
         encoding="utf-8",
     )
-    (root / "concepts" / "widget.md").write_text(
+    (root / "notes" / "widget.md").write_text(
         "---\n"
         "title: Widget\n"
-        "type: concept\n"
+        "type: note\n"
         "created: 2026-05-30\n"
         "updated: 2026-05-30\n"
         "source: slack\n"
@@ -576,13 +570,9 @@ def _seed_clean_spine_only_vault(root: Path) -> None:
     """Seed only the empty folders + a clean spine (no curated pages, no findings)."""
     for folder in (
         "entities",
-        "concepts",
-        "comparisons",
-        "queries",
-        "actions",
-        "media",
+        "notes",
         "memories",
-        "people",
+        "actions",
         "inbox",
     ):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -596,14 +586,12 @@ def _seed_clean_spine_only_vault(root: Path) -> None:
         "# Home\n\n"
         "## Knowledge catalog\n\n"
         "### Entities\n\n"
-        "### Concepts\n\n"
-        "### Comparisons\n\n"
-        "### Queries\n\n"
-        "### People\n",
+        "### Notes\n\n"
+        "### Memories\n",
         encoding="utf-8",
     )
     (root / "SCHEMA.md").write_text(
-        "# Vault Schema\n\n## Tag Taxonomy\n- concept\n- entity\n",
+        "# Vault Schema\n\n## Tag Taxonomy\n- concept\n- note\n- entity\n",
         encoding="utf-8",
     )
     (root / "log.md").write_text(
@@ -646,7 +634,7 @@ def test_run_lint_prints_report_and_appends_one_log_block(
     # so at least one issue is guaranteed regardless of the run date.
     assert total >= 1
     # The offending page path appears in the grouped report (every Finding carries it).
-    assert "concepts/widget.md" in out
+    assert "notes/widget.md" in out
     # The broken wikilink itself is named in the report.
     assert "no-such-page" in out
 

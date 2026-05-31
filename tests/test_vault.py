@@ -17,13 +17,13 @@ import pytest
 
 from thoth.config import Config, load_config
 from thoth.vault import (
+    ACTIONABLE_DIRS,
     ASSET_SLUG_RE,
+    CURATED_DIRS,
     FOLDER_TYPE_CONTRACT,
-    KNOWLEDGE_DIRS,
-    KNOWLEDGE_TYPES,
-    LIFE_ADMIN_DIRS,
-    LIFE_ADMIN_TYPES,
+    INBOX_TYPE,
     RAW_SUBDIRS,
+    REFERENCE_TYPES,
     REQUIRED_COMMON_FIELDS,
     SLUG_RE,
     TYPE_ENUMERATION,
@@ -62,13 +62,9 @@ updated: 2026-05-30
 
 ### Entities
 
-### Concepts
+### Notes
 
-### Comparisons
-
-### Queries
-
-### People
+### Memories
 """
 
 _LOG_SEED = """\
@@ -86,13 +82,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 
@@ -130,18 +122,29 @@ def _valid_frontmatter(**overrides: object) -> dict[str, object]:
 # --- module constants --------------------------------------------------------------
 
 
-def test_type_constants_partition() -> None:
-    """VALID_TYPES is exactly the union of knowledge and life-admin, no overlap."""
-    assert VALID_TYPES == KNOWLEDGE_TYPES | LIFE_ADMIN_TYPES
-    assert KNOWLEDGE_TYPES.isdisjoint(LIFE_ADMIN_TYPES)
+def test_type_constants_four_content_types_plus_inbox() -> None:
+    """VALID_TYPES is the four content types plus the inbox machinery type."""
+    assert VALID_TYPES == {"entity", "note", "memory", "action", INBOX_TYPE}
+    assert INBOX_TYPE == "inbox"
+    # inbox is machinery, not a classify target, so it is absent from the enumeration.
+    assert INBOX_TYPE not in TYPE_ENUMERATION
+    # REFERENCE_TYPES are the lifecycle-free types: everything that is not actionable.
+    assert REFERENCE_TYPES == {"entity", "note", "memory"}
+    assert "action" not in REFERENCE_TYPES
     assert VALID_SOURCES == {"slack", "mcp", "web", "manual", "cron"}
 
 
-def test_folder_type_contract_values_are_valid_types() -> None:
-    """Every type permitted by the folder contract is a known VALID_TYPE."""
+def test_folder_type_contract_is_four_flat_folders_plus_inbox() -> None:
+    """The folder contract is the 4 flat content folders plus inbox (ADR 0005)."""
+    assert FOLDER_TYPE_CONTRACT == {
+        "entities": {"entity"},
+        "notes": {"note"},
+        "memories": {"memory"},
+        "actions": {"action"},
+        "inbox": {"inbox"},
+    }
     for allowed in FOLDER_TYPE_CONTRACT.values():
         assert allowed <= VALID_TYPES
-    assert FOLDER_TYPE_CONTRACT["people"] == {"entity"}
     assert RAW_SUBDIRS == {"articles", "papers", "transcripts", "assets"}
     assert REQUIRED_COMMON_FIELDS == (
         "title",
@@ -153,33 +156,33 @@ def test_folder_type_contract_values_are_valid_types() -> None:
     )
 
 
-def test_type_enumeration_is_canonical_ordering_of_valid_types() -> None:
-    """TYPE_ENUMERATION (used by the classify prompt) covers VALID_TYPES exactly (#19).
+def test_type_enumeration_is_the_four_content_types() -> None:
+    """TYPE_ENUMERATION (the classify prompt's list) is the four content types.
 
     The classify prompt derives its "type (one of ...)" list from this tuple, so it must
-    enumerate every legal type once with no extras -- otherwise the prompt and the
-    enforcement gate would drift.
+    enumerate the four content types once with no extras and no inbox machinery type.
     """
-    assert set(TYPE_ENUMERATION) == VALID_TYPES
-    assert len(TYPE_ENUMERATION) == len(VALID_TYPES)  # no duplicates
-    # Knowledge types lead, life-admin types follow (a stable, human-readable order).
-    knowledge_prefix = TYPE_ENUMERATION[: len(KNOWLEDGE_TYPES)]
-    assert set(knowledge_prefix) == KNOWLEDGE_TYPES
+    assert TYPE_ENUMERATION == ("entity", "note", "memory", "action")
+    assert set(TYPE_ENUMERATION) == VALID_TYPES - {INBOX_TYPE}
+    assert len(TYPE_ENUMERATION) == len(set(TYPE_ENUMERATION))  # no duplicates
 
 
 def test_folder_dir_tuples_partition_the_folder_contract() -> None:
-    """KNOWLEDGE_DIRS + LIFE_ADMIN_DIRS partition the folder contract keys (#19).
+    """CURATED_DIRS + ACTIONABLE_DIRS + inbox partition the folder contract (ADR 0005).
 
     These canonical folder lists are derived from here by :mod:`thoth.lint` and
-    :mod:`thoth.summary`; together they must be exactly the top-level folders the
-    contract governs, with no overlap, so a folder is added in one place only.
+    :mod:`thoth.summary`; the reference + actionable folders plus the inbox holding
+    folder must be exactly the top-level folders the contract governs, with no overlap.
     """
-    assert set(KNOWLEDGE_DIRS).isdisjoint(LIFE_ADMIN_DIRS)
-    assert set(KNOWLEDGE_DIRS) | set(LIFE_ADMIN_DIRS) == set(FOLDER_TYPE_CONTRACT)
-    # Each knowledge folder admits only knowledge types (people admits the 'entity'
-    # knowledge type but scans as life-admin, so it lives in LIFE_ADMIN_DIRS).
-    for folder in KNOWLEDGE_DIRS:
-        assert FOLDER_TYPE_CONTRACT[folder] <= KNOWLEDGE_TYPES
+    assert CURATED_DIRS == ("entities", "notes", "memories")
+    assert ACTIONABLE_DIRS == ("actions",)
+    assert set(CURATED_DIRS).isdisjoint(ACTIONABLE_DIRS)
+    assert set(CURATED_DIRS) | set(ACTIONABLE_DIRS) | {"inbox"} == set(
+        FOLDER_TYPE_CONTRACT
+    )
+    # Each reference folder admits exactly one reference type.
+    for folder in CURATED_DIRS:
+        assert FOLDER_TYPE_CONTRACT[folder] <= REFERENCE_TYPES
 
 
 # --- slugify (the one shared slug builder, issue #10) ------------------------------
@@ -338,7 +341,8 @@ def test_validate_asset_filename_rejects(name: str) -> None:
 def test_validate_folder_type_ok(vault: Vault) -> None:
     """Allowed folder/type pairs pass silently."""
     Vault.validate_folder_type("entities", "entity")
-    Vault.validate_folder_type("people", "entity")
+    Vault.validate_folder_type("notes", "note")
+    Vault.validate_folder_type("memories", "memory")
     Vault.validate_folder_type("actions", "action")
     Vault.validate_folder_type("inbox", "inbox")
 
@@ -347,9 +351,9 @@ def test_validate_folder_type_ok(vault: Vault) -> None:
     ("folder", "page_type"),
     [
         ("entities", "action"),
-        ("people", "action"),
+        ("notes", "action"),
         ("actions", "entity"),
-        ("concepts", "entity"),
+        ("notes", "entity"),
     ],
 )
 def test_validate_folder_type_mismatch(
@@ -669,11 +673,11 @@ def test_append_index_inserts_sorted_and_deduped(vault: Vault) -> None:
 
 def test_append_index_does_not_disturb_other_sections(vault: Vault) -> None:
     """Adding under one heading leaves the other headings intact."""
-    vault.append_index("People", "jane-doe", "collaborator")
+    vault.append_index("Notes", "raft", "consensus")
     text = (vault.root / "index.md").read_text(encoding="utf-8")
-    for heading in ("### Entities", "### Concepts", "### Comparisons", "### Queries"):
+    for heading in ("### Entities", "### Notes", "### Memories"):
         assert heading in text
-    assert "- [[jane-doe]] - collaborator" in text
+    assert "- [[raft]] - consensus" in text
 
 
 def test_append_index_unknown_section(vault: Vault) -> None:
@@ -684,8 +688,8 @@ def test_append_index_unknown_section(vault: Vault) -> None:
 
 def test_append_index_round_trips_as_markdown(vault: Vault) -> None:
     """index.md remains parseable and the new entry survives a second add."""
-    vault.append_index("Concepts", "cap-theorem", "consistency trade-offs")
-    vault.append_index("Concepts", "raft", "consensus")
+    vault.append_index("Notes", "cap-theorem", "consistency trade-offs")
+    vault.append_index("Notes", "raft", "consensus")
     text = (vault.root / "index.md").read_text(encoding="utf-8")
     assert text.count("- [[cap-theorem]]") == 1
     assert text.count("- [[raft]]") == 1
@@ -814,13 +818,13 @@ def test_root_equals_config_vault_path(tmp_path: Path) -> None:
 def test_written_file_is_loadable_by_frontmatter(vault: Vault) -> None:
     """The on-disk format is valid frontmatter (independent parser confirms)."""
     vault.write_page(
-        "concepts",
+        "notes",
         "raft",
-        _valid_frontmatter(type="concept", title="Raft"),
+        _valid_frontmatter(type="note", title="Raft"),
         "# Raft\n\nConsensus algorithm.",
         today=date(2026, 5, 30),
     )
-    raw = (vault.root / "concepts" / "raft.md").read_text(encoding="utf-8")
+    raw = (vault.root / "notes" / "raft.md").read_text(encoding="utf-8")
     post = frontmatter.loads(raw)
     assert post.metadata["title"] == "Raft"
     assert post.content.strip() == "# Raft\n\nConsensus algorithm."

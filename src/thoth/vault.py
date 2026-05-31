@@ -47,72 +47,81 @@ from thoth.config import Config
 
 # --- module-level constants: the folder x type contract ---------------------------
 
-KNOWLEDGE_TYPES: frozenset[str] = frozenset(
-    {"entity", "concept", "comparison", "query", "summary"}
-)
-"""``type`` values for curated knowledge pages (SPEC section 5)."""
-
-LIFE_ADMIN_TYPES: frozenset[str] = frozenset({"action", "media", "memory", "inbox"})
-"""``type`` values for life-admin pages (SPEC section 9)."""
-
-VALID_TYPES: frozenset[str] = KNOWLEDGE_TYPES | LIFE_ADMIN_TYPES
-"""Every legal frontmatter ``type`` value (knowledge union life-admin)."""
-
-# A stable, human-ordered enumeration of every type for prompt text. Frozensets have no
-# meaningful order, so the classify prompt (thoth.ingest) derives its "one of ..." list
-# from this tuple rather than restating the vocabulary. ``set(TYPE_ENUMERATION) ==
-# VALID_TYPES`` is asserted in the tests, so a new type cannot land in one place only.
+# A stable, human-ordered enumeration of the four content types a capture may be
+# classified into (ADR 0005). Frozensets have no meaningful order, so the classify
+# prompt (thoth.ingest) derives its "one of ..." list from this tuple rather than
+# restating the vocabulary. ``inbox`` is machinery (the durable pre-curate holding
+# type), never a classify target, so it is excluded here and added to VALID_TYPES.
 TYPE_ENUMERATION: tuple[str, ...] = (
     "entity",
-    "concept",
-    "comparison",
-    "query",
-    "summary",
-    "action",
-    "media",
+    "note",
     "memory",
-    "inbox",
+    "action",
 )
-"""Canonical knowledge-then-life-admin ordering of :data:`VALID_TYPES` for prompts."""
+"""Canonical ordering of the four content :data:`VALID_TYPES` offered to the classifier.
+
+ADR 0005 collapsed the eight folders into four flat, equal folders, so a capture is one
+of exactly four content types: ``entity`` (nouns), ``note`` (everything written,
+differentiated by a ``tags:`` value such as ``concept``/``comparison``/``query``),
+``memory`` (personal reference), and ``action`` (carries ``status``/``due``; a media
+item is an ``action`` tagged ``media``). ``summary`` is no longer a content type -- it
+survives only as the label on the spine ``index.md`` Home page.
+"""
+
+INBOX_TYPE: str = "inbox"
+"""The machinery ``type`` for a durable pre-curate ``inbox/`` holding page (ADR 0004).
+
+Not a content type the classifier may pick (so absent from :data:`TYPE_ENUMERATION`),
+but a legal frontmatter ``type`` :meth:`Vault.write_page` accepts for the ``inbox/``
+folder, so it is a member of :data:`VALID_TYPES`.
+"""
+
+VALID_TYPES: frozenset[str] = frozenset(TYPE_ENUMERATION) | {INBOX_TYPE}
+"""Every legal frontmatter ``type`` value (the four content types plus ``inbox``)."""
+
+REFERENCE_TYPES: frozenset[str] = frozenset({"entity", "note", "memory"})
+"""The lifecycle-free reference content types (ADR 0005): the non-actionable types.
+
+Replaces the old ``KNOWLEDGE_TYPES`` family. Used as the default recall scope for
+knowledge Q&A (:meth:`thoth.query.QueryEngine.recall_paths`): with the knowledge /
+life-admin families gone, "what do I know about X?" excludes the actionable ``action``
+type (todos and the to-consume media queue) by scoping to these reference types instead.
+"""
 
 VALID_SOURCES: frozenset[str] = frozenset({"slack", "mcp", "web", "manual", "cron"})
 """Every legal frontmatter ``source`` value (SPEC frontmatter contract)."""
 
 FOLDER_TYPE_CONTRACT: dict[str, frozenset[str]] = {
     "entities": frozenset({"entity"}),
-    "concepts": frozenset({"concept"}),
-    "comparisons": frozenset({"comparison"}),
-    "queries": frozenset({"query"}),
-    "people": frozenset({"entity"}),
-    "actions": frozenset({"action"}),
-    "media": frozenset({"media"}),
+    "notes": frozenset({"note"}),
     "memories": frozenset({"memory"}),
+    "actions": frozenset({"action"}),
     "inbox": frozenset({"inbox"}),
 }
-"""Top-level vault folder -> the ``type`` values allowed to be written there."""
+"""Top-level vault folder -> the ``type`` values allowed to be written there (ADR 0005).
 
-KNOWLEDGE_DIRS: tuple[str, ...] = ("entities", "concepts", "comparisons", "queries")
-"""Curated knowledge folders, in catalog order (the four single-knowledge-type folders).
-
-Canonical here so :mod:`thoth.lint` (its ``KNOWLEDGE_DIRS``) and :mod:`thoth.summary`
-(its curated-scan dirs) derive the same list instead of restating it. Every entry is a
-:data:`FOLDER_TYPE_CONTRACT` folder whose only allowed ``type`` is a knowledge type;
-``people`` is a knowledge-typed folder too but is life-admin in the scans, so it is
-listed under :data:`LIFE_ADMIN_DIRS` rather than here.
+Four flat content folders plus the ``inbox/`` holding folder. ``entities/`` absorbs the
+old ``people/``; ``notes/`` absorbs ``concepts/``/``comparisons/``/``queries/``
+(differentiated by a ``tags:`` value, not a folder); ``actions/`` absorbs ``media/`` (a
+media item is an ``action`` tagged ``media``); ``memories/`` is kept as its own folder.
 """
 
-LIFE_ADMIN_DIRS: tuple[str, ...] = (
-    "actions",
-    "media",
-    "memories",
-    "people",
-    "inbox",
-)
-"""Life-admin folders, additionally scanned for frontmatter / stale / overdue checks.
+CURATED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
+"""The lifecycle-free reference folders, in catalog order (ADR 0005).
 
-Canonical here so :mod:`thoth.lint` derives the same list. Together with
-:data:`KNOWLEDGE_DIRS` these partition the :data:`FOLDER_TYPE_CONTRACT` folder set (a
-consistency the tests assert), so adding a folder is a one-place edit.
+Canonical here so :mod:`thoth.lint` and :mod:`thoth.summary` derive the same list
+instead of restating it. These are the pages that earn an ``index.md`` catalog entry and
+orphan / index-completeness / stale checks. They carry no ``status``/``due`` lifecycle.
+"""
+
+ACTIONABLE_DIRS: tuple[str, ...] = ("actions",)
+"""The lifecycle-bearing folder(s) scanned for overdue / cold checks (ADR 0005).
+
+A page here carries ``status``/``due`` and shows in the actionable Bases dashboards; the
+to-consume media queue lives here too (an ``action`` tagged ``media``). Together with
+:data:`CURATED_DIRS` and the ``inbox/`` holding folder these are the
+:data:`FOLDER_TYPE_CONTRACT` folders (a consistency the tests assert), so adding a
+folder is a one-place edit.
 """
 
 RAW_SUBDIRS: frozenset[str] = frozenset({"articles", "papers", "transcripts", "assets"})
@@ -148,9 +157,7 @@ _AUTHOR_REQUIRED_FIELDS: tuple[str, ...] = tuple(
 )
 
 # Headings under "## Knowledge catalog" in index.md that append_index may target.
-INDEX_SECTIONS: frozenset[str] = frozenset(
-    {"Entities", "Concepts", "Comparisons", "Queries", "People"}
-)
+INDEX_SECTIONS: frozenset[str] = frozenset({"Entities", "Notes", "Memories"})
 """Valid ``index.md`` catalog section headings :meth:`Vault.append_index` may target.
 
 Public so the curate prompt (:func:`thoth.llm.file_plan_contract_text`) can offer the
@@ -647,8 +654,7 @@ class Vault:
         of the last call wins).
 
         Args:
-            section: One of ``Entities``, ``Concepts``, ``Comparisons``, ``Queries``,
-                ``People``.
+            section: One of ``Entities``, ``Notes``, ``Memories``.
             wikilink: The wikilink target (without the ``[[ ]]`` brackets).
             summary: A one-line summary shown after the wikilink.
 

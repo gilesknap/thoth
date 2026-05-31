@@ -64,7 +64,7 @@ import yaml
 
 from thoth.config import Config
 from thoth.state import HEARTBEAT_MARKERS, MarkerStore
-from thoth.vault import KNOWLEDGE_DIRS, Vault
+from thoth.vault import CURATED_DIRS, Vault
 
 __all__ = [
     "LONDON",
@@ -104,18 +104,19 @@ MEDIA_OPEN_STATUS: str = "to_consume"
 DUE_SOON_DAYS: int = 3
 """The inclusive look-ahead window (in days) for the daily "next N days" bucket."""
 
-# Curated knowledge folders whose pages count as "ingests" for the recent/week scans.
-# Life-admin folders churn for unrelated reasons (status changes), so they are excluded
-# from the ingest-count view (SPEC Appendix: "new/changed curated pages"). Derived from
-# the canonical vault.KNOWLEDGE_DIRS so the folder vocabulary lives in exactly one place
-# (issue #19); a divergence is caught by the tests.
-_CURATED_DIRS: tuple[str, ...] = KNOWLEDGE_DIRS
+# Reference folders whose pages count as "ingests" for the recent/week scans. The
+# actionable folder (actions/) churns for unrelated reasons (status changes), so it is
+# excluded from the ingest-count view (SPEC Appendix: "new/changed curated pages").
+# Derived from the canonical vault.CURATED_DIRS so the folder vocabulary lives in
+# exactly one place (ADR 0005); a divergence is caught by the tests.
+_CURATED_DIRS: tuple[str, ...] = CURATED_DIRS
 
-# Folder holding life-admin action pages.
+# Folder holding actionable pages (todos + the media consume queue). ADR 0005 folded the
+# old media/ folder in here: a media item is an action tagged 'media'.
 _ACTIONS_DIR: str = "actions"
 
-# Folder holding life-admin media pages.
-_MEDIA_DIR: str = "media"
+# The tag that marks an action as a media-queue item (ADR 0005).
+_MEDIA_TAG: str = "media"
 
 # Weekly window length in days.
 _WEEK_DAYS: int = 7
@@ -517,9 +518,9 @@ class SummaryEngine:
         The window is ``today - days <= page_date <= today``, so ``days == 1`` covers
         yesterday and today (the daily digest's "yesterday's ingests"), and ``days ==
         7`` covers the last week (the weekly week-in-review). A page with no date
-        is excluded (it cannot be placed in the window). Only the curated knowledge
-        folders are scanned; life-admin folders are excluded (their churn is not an
-        "ingest").
+        is excluded (it cannot be placed in the window). Only the reference folders
+        (entities/notes/memories) are scanned; the actionable ``actions/`` folder is
+        excluded (its status churn is not an "ingest").
 
         Args:
             days: The look-back window length in days (``1`` = yesterday + today).
@@ -571,15 +572,19 @@ class SummaryEngine:
         return items
 
     def _scan_media_with_status(self) -> list[tuple[MediaItem, str]]:
-        """Parse every ``media/*.md`` page into a (:class:`MediaItem`, status) pair.
+        """Parse every media-tagged ``actions/*.md`` page into a (item, status) pair.
 
-        The status is returned alongside the item (rather than stored on the frozen
-        :class:`MediaItem`, whose contract has no status field) so
+        ADR 0005: the media queue lives in ``actions/`` as an ``action`` tagged
+        ``media``, so this walks ``actions/`` and keeps only pages whose ``tags``
+        contain ``media``. The status is returned alongside the item (rather than stored
+        on the frozen :class:`MediaItem`, whose contract has no status field) so
         :meth:`media_backlog` can filter on ``to_consume`` without the item carrying a
         field it does not declare.
         """
         pairs: list[tuple[MediaItem, str]] = []
-        for rel, meta in self._iter_pages(_MEDIA_DIR):
+        for rel, meta in self._iter_pages(_ACTIONS_DIR):
+            if _MEDIA_TAG not in _page_tags(meta):
+                continue
             slug = PurePosixPath(rel).stem
             item = MediaItem(
                 path=rel,
@@ -753,6 +758,16 @@ def _str_field(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _page_tags(meta: dict[str, object]) -> list[str]:
+    """Return a page's ``tags`` frontmatter as a list of trimmed strings."""
+    raw = meta.get("tags")
+    if isinstance(raw, list):
+        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    return []
 
 
 def _is_flagged(meta: dict[str, object]) -> bool:

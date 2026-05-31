@@ -48,16 +48,12 @@ updated: 2026-05-30
 ### Entities
 - [[program-motion-controller]] - central coordinator in the motor-control stack.
 - [[drive-control-module]] — hardware interface for the motor rail.
+- [[jane-doe]] - collaborator on home + controls work.
 
-### Concepts
+### Notes
 - [[distributed-systems]] - notes on CAP and consensus.
 
-### Comparisons
-
-### Queries
-
-### People
-- [[people/jane-doe]] - collaborator on home + controls work.
+### Memories
 """
 
 _LOG_SEED = """\
@@ -75,13 +71,9 @@ _FOLDERS = (
     "raw/transcripts",
     "raw/assets",
     "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "actions",
-    "media",
+    "notes",
     "memories",
-    "people",
+    "actions",
     "inbox",
 )
 
@@ -138,10 +130,10 @@ def _seed_vault(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (root / "concepts" / "distributed-systems.md").write_text(
+    (root / "notes" / "distributed-systems.md").write_text(
         _page(
             title="Distributed Systems",
-            page_type="concept",
+            page_type="note",
             body=(
                 "# Distributed Systems\n\n"
                 "Notes on the CAP theorem and consensus. The acronym CAP stands for\n"
@@ -151,7 +143,7 @@ def _seed_vault(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (root / "people" / "jane-doe.md").write_text(
+    (root / "entities" / "jane-doe.md").write_text(
         _page(
             title="Jane Doe",
             page_type="entity",
@@ -242,14 +234,12 @@ def engine(config: Config, vault: Vault, hindsight: _FakeHindsight) -> QueryEngi
 # --- module constants --------------------------------------------------------------
 
 
-def test_searched_dirs_are_curated_knowledge_folders() -> None:
-    """The lexical scan targets the curated-knowledge folders plus people."""
+def test_searched_dirs_are_reference_folders() -> None:
+    """The lexical scan targets the reference folders (ADR 0005)."""
     assert SEARCHED_DIRS == (
         "entities",
-        "concepts",
-        "comparisons",
-        "queries",
-        "people",
+        "notes",
+        "memories",
     )
 
 
@@ -297,11 +287,11 @@ def test_build_citation_rejects_absolute_path(engine: QueryEngine) -> None:
 
 def test_citation_obsidian_uri_is_percent_encoded(engine: QueryEngine) -> None:
     """obsidian_uri uses %2F separators; the path + wikilink ride alongside."""
-    citation = engine.build_citation("concepts/distributed-systems.md")
+    citation = engine.build_citation("notes/distributed-systems.md")
     assert citation.obsidian_uri.startswith("obsidian://open?vault=pkm-vault&file=")
-    assert "concepts%2Fdistributed-systems.md" in citation.obsidian_uri
+    assert "notes%2Fdistributed-systems.md" in citation.obsidian_uri
     # The scheme-independent handles are always present.
-    assert citation.path == "concepts/distributed-systems.md"
+    assert citation.path == "notes/distributed-systems.md"
     assert citation.wikilink == "[[distributed-systems]]"
 
 
@@ -316,7 +306,7 @@ def test_index_summaries_parses_catalog_lines(engine: QueryEngine) -> None:
         == "central coordinator in the motor-control stack."
     )
     assert summaries["distributed-systems"] == "notes on CAP and consensus."
-    assert summaries["people/jane-doe"] == "collaborator on home + controls work."
+    assert summaries["jane-doe"] == "collaborator on home + controls work."
     # Headings and the blockquote legend are not catalog lines.
     assert "Knowledge catalog" not in summaries
     assert "link" not in summaries
@@ -343,7 +333,7 @@ def test_index_summaries_empty_when_no_index(
 def test_grep_matches_body_text(engine: QueryEngine) -> None:
     """A term in a page body is found and returned as a vault-relative path."""
     hits = engine.grep("consensus")
-    assert "concepts/distributed-systems.md" in hits
+    assert "notes/distributed-systems.md" in hits
 
 
 def test_grep_matches_filename(engine: QueryEngine) -> None:
@@ -356,8 +346,8 @@ def test_grep_matches_filename(engine: QueryEngine) -> None:
 
 def test_grep_is_case_insensitive(engine: QueryEngine) -> None:
     """Matching ignores case on both filename and body."""
-    assert "concepts/distributed-systems.md" in engine.grep("CAP")
-    assert "concepts/distributed-systems.md" in engine.grep("cap")
+    assert "notes/distributed-systems.md" in engine.grep("CAP")
+    assert "notes/distributed-systems.md" in engine.grep("cap")
 
 
 def test_grep_respects_limit(engine: QueryEngine) -> None:
@@ -395,7 +385,7 @@ def test_follow_wikilinks_resolves_existing_targets(engine: QueryEngine) -> None
     """[[slug]] links in a body resolve to existing pages in the searched dirs."""
     resolved = engine.follow_wikilinks("entities/program-motion-controller.md")
     assert "entities/drive-control-module.md" in resolved
-    assert "concepts/distributed-systems.md" in resolved
+    assert "notes/distributed-systems.md" in resolved
 
 
 def test_follow_wikilinks_skips_dangling_links(engine: QueryEngine) -> None:
@@ -448,61 +438,60 @@ def test_recall_paths_drops_paths_outside_vault(config: Config, vault: Vault) ->
         ),
         RecallHit(path="/etc/passwd", text="SOURCE: /etc/passwd", page_type="entity"),
         RecallHit(
-            path="concepts/distributed-systems.md",
+            path="notes/distributed-systems.md",
             text="SOURCE: ok",
-            page_type="concept",
+            page_type="note",
         ),
     ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
-    assert engine.recall_paths("anything") == ["concepts/distributed-systems.md"]
+    assert engine.recall_paths("anything") == ["notes/distributed-systems.md"]
 
 
 def test_recall_paths_dedupes_preserving_order(config: Config, vault: Vault) -> None:
     """Duplicate recall hits collapse to the first occurrence."""
-    page = "concepts/distributed-systems.md"
+    page = "notes/distributed-systems.md"
     hits = [
-        RecallHit(path=page, text="a", page_type="concept"),
+        RecallHit(path=page, text="a", page_type="note"),
         RecallHit(
             path="entities/drive-control-module.md", text="b", page_type="entity"
         ),
-        RecallHit(path=page, text="c", page_type="concept"),
+        RecallHit(path=page, text="c", page_type="note"),
     ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
     assert engine.recall_paths("x") == [page, "entities/drive-control-module.md"]
 
 
-def test_recall_paths_scopes_to_knowledge_by_default(
+def test_recall_paths_scopes_to_reference_by_default(
     config: Config, vault: Vault
 ) -> None:
-    """Recall is knowledge-scoped by default; life-admin needs an explicit scope (#40).
+    """Recall is reference-scoped by default; actionable needs an explicit scope.
 
-    The index now holds life-admin pages too (ADR 0004), so knowledge Q&A must filter to
-    knowledge types to keep its precision. A caller can widen the scope explicitly.
+    The index holds every content page (ADR 0004), so knowledge Q&A filters to the
+    reference types (entity/note/memory) to keep its precision, excluding the
+    actionable ``action`` type (ADR 0005). A caller can widen the scope explicitly.
     """
-    (vault.root / "memories" / "wifi-password.md").write_text(
-        _page(title="Wifi", page_type="memory", body="hunter2", tags="[secret]"),
+    (vault.root / "actions" / "read-paper.md").write_text(
+        _page(title="Read paper", page_type="action", body="todo", tags="[task]"),
         encoding="utf-8",
     )
     hits = [
-        RecallHit(
-            path="concepts/distributed-systems.md", text="x", page_type="concept"
-        ),
-        RecallHit(path="memories/wifi-password.md", text="y", page_type="memory"),
+        RecallHit(path="notes/distributed-systems.md", text="x", page_type="note"),
+        RecallHit(path="actions/read-paper.md", text="y", page_type="action"),
     ]
     engine = QueryEngine(config, vault, _FakeHindsight(config, hits=hits))
 
-    # Default: only the knowledge hit survives (the memory is filtered out).
-    assert engine.recall_paths("q") == ["concepts/distributed-systems.md"]
-    # Explicit life-admin scope returns the memory page.
-    assert engine.recall_paths("q", types=frozenset({"memory"})) == [
-        "memories/wifi-password.md"
+    # Default: only the reference hit survives (the action is filtered out).
+    assert engine.recall_paths("q") == ["notes/distributed-systems.md"]
+    # Explicit actionable scope returns the action page.
+    assert engine.recall_paths("q", types=frozenset({"action"})) == [
+        "actions/read-paper.md"
     ]
     # No scope ("search everything") returns both, in order.
     assert engine.recall_paths("q", types=None) == [
-        "concepts/distributed-systems.md",
-        "memories/wifi-password.md",
+        "notes/distributed-systems.md",
+        "actions/read-paper.md",
     ]
 
 
@@ -519,7 +508,7 @@ def test_answer_acronym_hits_grep_and_cites_real_page(engine: QueryEngine) -> No
     result = engine.answer("CAP", max_pages=3)
     assert isinstance(result, QueryResult)
     cited = {c.path for c in result.citations}
-    assert "concepts/distributed-systems.md" in cited
+    assert "notes/distributed-systems.md" in cited
     # Every cited path is a real, confined file under the vault root.
     for citation in result.citations:
         assert engine.build_citation(citation.path).path == citation.path
@@ -538,9 +527,7 @@ def test_answer_use_recall_false_never_calls_hindsight(
     config: Config, vault: Vault
 ) -> None:
     """use_recall=False keeps the path structural-only: recall is never consulted."""
-    hits = [
-        RecallHit(path="concepts/distributed-systems.md", text="x", page_type="concept")
-    ]
+    hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
     # A query that grep cannot satisfy would normally fall through to recall.
@@ -553,14 +540,12 @@ def test_answer_falls_back_to_recall_and_sets_flag(
     config: Config, vault: Vault
 ) -> None:
     """A phrasing-independent query with no lexical hit is answered via recall."""
-    hits = [
-        RecallHit(path="concepts/distributed-systems.md", text="x", page_type="concept")
-    ]
+    hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
     result = engine.answer("zzzznolexicalmatch", max_pages=3)
     assert result.used_recall is True
-    assert result.citations[0].path == "concepts/distributed-systems.md"
+    assert result.citations[0].path == "notes/distributed-systems.md"
     assert hindsight.recall_calls  # recall was consulted
 
 

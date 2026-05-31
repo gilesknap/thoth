@@ -36,7 +36,7 @@ from pathlib import Path, PurePosixPath
 from thoth.config import Config
 from thoth.hindsight import Hindsight
 from thoth.llm import LLM, Message, extract_text
-from thoth.vault import KNOWLEDGE_TYPES, Vault, VaultError
+from thoth.vault import REFERENCE_TYPES, Vault, VaultError
 
 __all__ = [
     "SEARCHED_DIRS",
@@ -55,17 +55,11 @@ _CATALOG_LINE_RE: re.Pattern[str] = re.compile(
     r"^- \[\[([^\]|#]+?)\]\]\s*(?:[-–—]\s*(.*))?$"
 )
 
-# Folders searched for lexical/structural retrieval (the curated knowledge layer plus
-# people). raw/ and life-admin folders are intentionally excluded: retrieval composes
-# from curated pages, and raw sources are reached via their owning page's wikilinks.
-SEARCHED_DIRS: tuple[str, ...] = (
-    "entities",
-    "concepts",
-    "comparisons",
-    "queries",
-    "people",
-)
-"""Top-level vault folders scanned by :meth:`QueryEngine.grep` (curated knowledge)."""
+# Folders searched for lexical/structural retrieval (the reference layer). raw/ and the
+# actionable actions/ folder are intentionally excluded: retrieval composes from
+# reference pages, and raw sources are reached via their owning page's wikilinks.
+SEARCHED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
+"""Top-level vault folders scanned by :meth:`QueryEngine.grep` (reference layer)."""
 
 # Cap on bytes read per page during grep so a pathological file cannot blow up a scan.
 _MAX_GREP_BYTES: int = 1_000_000
@@ -354,7 +348,7 @@ class QueryEngine:
         query: str,
         *,
         limit: int = 10,
-        types: frozenset[str] | None = KNOWLEDGE_TYPES,
+        types: frozenset[str] | None = REFERENCE_TYPES,
     ) -> list[str]:
         """Semantic recall via Hindsight, keeping only hits that resolve to real pages.
 
@@ -364,18 +358,20 @@ class QueryEngine:
         exists (or a path that would escape the vault): such hits are dropped rather
         than fabricated into a citation. Order is preserved, duplicates removed.
 
-        Recall is **scoped to knowledge types by default** (ADR 0004): the index now
-        also holds life-admin pages (memories, actions, ...), so knowledge Q&A filters
-        to :data:`~thoth.vault.KNOWLEDGE_TYPES` to keep the precision it had when only
-        knowledge was indexed. A caller wanting life-admin recall (e.g. "search my
-        memories", idea-mining #37) passes a different ``types`` set, or ``None`` to
-        search everything.
+        Recall is **scoped to reference types by default** (ADR 0004 + ADR 0005): the
+        index holds every content page, so knowledge Q&A filters to
+        :data:`~thoth.vault.REFERENCE_TYPES` (``entity``/``note``/``memory``) to exclude
+        the actionable ``action`` type (todos and the to-consume media queue) and keep
+        the precision it had when only knowledge was indexed. With the knowledge /
+        life-admin families gone, the scope is the reference/actionable axis carried on
+        the page ``type`` tag, not a family. A caller wanting actionable recall passes a
+        different ``types`` set, or ``None`` to search everything.
 
         Args:
             query: The natural-language query passed to Hindsight.
             limit: Maximum number of recall hits to request.
             types: The page-type domain scope forwarded to :meth:`Hindsight.recall`;
-                defaults to knowledge types, ``None`` searches all indexed content.
+                defaults to reference types, ``None`` searches all indexed content.
 
         Returns:
             Vault-relative paths from recall that exist on disk, ordered and deduped.
