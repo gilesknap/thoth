@@ -2,12 +2,13 @@
 <!DOCTYPE html>
 
 
-<html lang="en" data-content_root="./" >
+<html lang="en" data-content_root="../../" >
 
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Index &#8212; thoth 0.1.dev26+g163580e6e documentation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis &#8212; thoth 0.1.dev26+g163580e6e documentation</title>
   
   
   
@@ -26,27 +27,27 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
-<link href="_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+  <link href="../../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
 
-    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="_static/graphviz.css?v=4ae1632d" />
-    <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
+  <script defer src="../../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
-<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="_static/documentation_options.js?v=b207154b"></script>
-    <script src="_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script src="_static/clipboard.min.js?v=a7894cd8"></script>
-    <script src="_static/copybutton.js?v=30646c52"></script>
-    <script src="_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'genindex';</script>
+    <script src="../../_static/documentation_options.js?v=b207154b"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=30646c52"></script>
+    <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0007-hindsight-as-semantic-recall-backend';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -55,17 +56,19 @@
             false;
         </script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <link rel="icon" href="_static/dls-logo.svg"/>
-    <link rel="index" title="Index" href="#" />
-    <link rel="search" title="Search" href="search.html" />
+    <link rel="icon" href="../../_static/dls-logo.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="4. Index all content in the embedding store, scope recall by tag" href="0004-index-all-content-with-tag-scoped-recall.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
   
     
-    <script src="_static/searchtools.js"></script>
-    <script src="_static/language_data.js"></script>
-    <script src="searchindex.js"></script>
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
   
   </head>
   <body data-default-mode="">
@@ -85,7 +88,7 @@
   <dialog id="pst-search-dialog">
     
 <form class="bd-search d-flex align-items-center"
-      action="search.html"
+      action="../../search.html"
       method="get">
   <i class="fa-solid fa-magnifying-glass"></i>
   <input type="search"
@@ -121,7 +124,7 @@
     
   
 
-<a class="navbar-brand logo" href="index.html">
+<a class="navbar-brand logo" href="../../index.html">
   
   
   
@@ -132,8 +135,8 @@
       
     
     
-    <img src="_static/dls-logo.svg" class="logo__image only-light" alt=""/>
-    <img src="_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
+    <img src="../../_static/dls-logo.svg" class="logo__image only-light" alt=""/>
+    <img src="../../_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
   
   
     <p class="title logo__title">thoth</p>
@@ -151,28 +154,28 @@
   <ul class="bd-navbar-elements navbar-nav">
     
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="tutorials.html">
+  <a class="nav-link nav-internal" href="../../tutorials.html">
     Tutorials
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="how-to.html">
+  <a class="nav-link nav-internal" href="../../how-to.html">
     How-to Guides
   </a>
 </li>
 
 
-<li class="nav-item ">
-  <a class="nav-link nav-internal" href="explanations.html">
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../../explanations.html">
     Explanations
   </a>
 </li>
 
 
-<li class="nav-item current active">
-  <a class="nav-link nav-internal" href="reference.html">
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../reference.html">
     Reference
   </a>
 </li>
@@ -273,6 +276,10 @@
   
 
   
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
 </div>
 
     </header>
@@ -300,28 +307,28 @@
   <ul class="bd-navbar-elements navbar-nav">
     
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="tutorials.html">
+  <a class="nav-link nav-internal" href="../../tutorials.html">
     Tutorials
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="how-to.html">
+  <a class="nav-link nav-internal" href="../../how-to.html">
     How-to Guides
   </a>
 </li>
 
 
-<li class="nav-item ">
-  <a class="nav-link nav-internal" href="explanations.html">
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../../explanations.html">
     Explanations
   </a>
 </li>
 
 
-<li class="nav-item current active">
-  <a class="nav-link nav-internal" href="reference.html">
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../reference.html">
     Reference
   </a>
 </li>
@@ -414,9 +421,14 @@
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="_api/thoth.html">API</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Index</a></li>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/gilesknap/thoth/releases">Release Notes</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../decisions.html">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
+</ul>
+</details></li>
 </ul>
 </div>
 </nav></div>
@@ -442,7 +454,37 @@
           <div class="bd-content">
             <div class="bd-article-container">
               
-              <div class="bd-header-article d-print-none"></div>
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../../explanations.html" class="nav-link">Explanations</a></li>
+    
+    
+    <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
               
               
               
@@ -450,49 +492,86 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-
-<h1 id="index">Index</h1>
-
-<div class="genindex-jumpbox">
- <a href="#_"><strong>_</strong></a>
- | <a href="#M"><strong>M</strong></a>
- | <a href="#T"><strong>T</strong></a>
- 
-</div>
-<h2 id="_">_</h2>
-<table style="width: 100%" class="indextable genindextable"><tr>
-  <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="_api/thoth.html#thoth.__version__">__version__ (in module thoth)</a>
-</li>
-  </ul></td>
-</tr></table>
-
-<h2 id="M">M</h2>
-<table style="width: 100%" class="indextable genindextable"><tr>
-  <td style="width: 33%; vertical-align: top;"><ul>
-      <li>
-    module
-
-      <ul>
-        <li><a href="_api/thoth.html#module-thoth">thoth</a>
-</li>
-      </ul></li>
-  </ul></td>
-</tr></table>
-
-<h2 id="T">T</h2>
-<table style="width: 100%" class="indextable genindextable"><tr>
-  <td style="width: 33%; vertical-align: top;"><ul>
-      <li>
-    thoth
-
-      <ul>
-        <li><a href="_api/thoth.html#module-thoth">module</a>
-</li>
-      </ul></li>
-  </ul></td>
-</tr></table>
-
+  <section id="retain-hindsight-as-the-semantic-recall-backend-use-llm-comparison-for-structural-analysis">
+<h1>7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis<a class="headerlink" href="#retain-hindsight-as-the-semantic-recall-backend-use-llm-comparison-for-structural-analysis" title="Link to this heading">#</a></h1>
+<p>Date: 2026-05-31</p>
+<section id="status">
+<h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
+<p>Accepted</p>
+</section>
+<section id="context">
+<h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
+<p>Thoth uses Hindsight (<code class="docutils literal notranslate"><span class="pre">hindsight.vectorize.io</span></code> CLI, self-hosted) as its sole semantic
+memory backend. The wrapper (<code class="docutils literal notranslate"><span class="pre">thoth.hindsight</span></code>) shells out to the <code class="docutils literal notranslate"><span class="pre">hindsight</span></code> binary,
+which stores facts in a local Postgres instance with a vector extension. The only
+external network call is to the configured LLM provider for fact-extraction (the
+embedding/extraction step); no data is sent to a Vectorize.io cloud service.</p>
+<p>The Hindsight CLI exposes two checked operations: <code class="docutils literal notranslate"><span class="pre">memory</span> <span class="pre">retain</span></code> (write) and
+<code class="docutils literal notranslate"><span class="pre">memory</span> <span class="pre">recall</span></code> (semantic query). It does <strong>not</strong> expose raw embedding vectors,
+cosine-similarity access, or any clustering primitive.</p>
+<p>Two open issues require operations that Hindsight cannot satisfy directly:</p>
+<ul class="simple">
+<li><p><strong>#38 (semantic near-duplicate detection):</strong> finding page pairs above a
+cosine-similarity threshold requires either direct vector access (e.g. iterating
+all embeddings and computing pairwise similarity) or a dedicated similarity-search
+API. Hindsight’s recall is query-driven — you ask a question, it returns hits — so
+there is no way to ask “give me all page vectors” or “score these two pages against
+each other”.</p></li>
+<li><p><strong>#37 (idea-mining):</strong> discovering latent themes across a corpus of loose pages would
+benefit from embedding-based clustering. Hindsight cannot enumerate all embeddings or
+return a distance matrix.</p></li>
+</ul>
+<p>Alternatives considered:</p>
+<ol class="arabic simple">
+<li><p><strong>Keep Hindsight; use LLM comparison for #37/#38.</strong> Feed candidate page
+summaries/content to a Claude call to judge similarity or surface themes. No new
+dependency. Token cost is higher than vector math but both features are offline/async
+(lint and cron), so latency is acceptable.</p></li>
+<li><p><strong>Add a local vector store alongside Hindsight</strong> (LanceDB, ChromaDB). Gains raw
+embedding access and clustering; adds a second index to maintain, duplicating the
+retain path and doubling reindex complexity.</p></li>
+<li><p><strong>Replace Hindsight with a local vector store.</strong> Eliminates LLM fact-extraction
+(Hindsight’s main quality advantage over naive chunking) and requires thoth to own
+the chunking/extraction problem. Significant regression risk for recall quality.</p></li>
+<li><p><strong>Replace Hindsight with mem0 or a managed embedding service.</strong> Trades one managed
+service for another; still exposes no raw vector API.</p></li>
+</ol>
+</section>
+<section id="decision">
+<h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
+<p><strong>Keep Hindsight as the sole semantic recall backend.</strong> Implement #37 (idea-mining) and
+#38 (near-duplicate detection) using LLM-based comparison rather than vector math:</p>
+<ul class="simple">
+<li><p><strong>#38:</strong> feed pairs of page summaries/frontmatter to a model call to judge whether
+they represent the same entity. The lint pass is offline so per-pair token cost is
+acceptable.</p></li>
+<li><p><strong>#37:</strong> summarise recent <code class="docutils literal notranslate"><span class="pre">raw/</span></code>/<code class="docutils literal notranslate"><span class="pre">memories</span></code> pages into a prompt and ask the model to
+identify recurring themes. The weekly cron cadence means throughput is not a concern.</p></li>
+</ul>
+<p>If raw embedding access becomes a hard requirement for a future feature, <strong>LanceDB</strong> is
+the preferred replacement: pure Python library, no server, local files, supports cosine
+similarity and raw vector iteration. That decision is deferred until a concrete use case
+cannot be satisfied by LLM comparison.</p>
+</section>
+<section id="consequences">
+<h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>No new infrastructure, no second index to maintain, no additional dependency.</p></li>
+<li><p>#37 and #38 are implementable on top of existing page-scanning and LLM infrastructure
+already present in <code class="docutils literal notranslate"><span class="pre">summary.py</span></code> and <code class="docutils literal notranslate"><span class="pre">lint.py</span></code>.</p></li>
+<li><p>Token cost per lint run and per idea-mining digest is higher than pure vector math;
+this is acceptable given both are async/background operations.</p></li>
+<li><p>The decision to keep Hindsight relies on its self-hosted, local-Postgres deployment.
+If a future deployment must use Hindsight Cloud (external service), the privacy and
+data-residency trade-off should be re-evaluated.</p></li>
+<li><p>Hindsight’s LLM fact-extraction provider is configurable (Anthropic, OpenAI, Gemini,
+Ollama, etc.); thoth does not prescribe which to use.</p></li>
+<li><p>The existing <code class="docutils literal notranslate"><span class="pre">forget</span></code> limitation (no confirmed per-path CLI verb; best-effort only)
+remains; the authoritative reset is a full <code class="docutils literal notranslate"><span class="pre">reindex</span> <span class="pre">--full-rebuild</span></code> as documented in
+SPEC §8.</p></li>
+</ul>
+</section>
+</section>
 
 
                 </article>
@@ -504,12 +583,76 @@
                 <footer class="prev-next-footer d-print-none">
                   
 <div class="prev-next-area">
+    <a class="left-prev"
+       href="0004-index-all-content-with-tag-scoped-recall.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">4. Index all content in the embedding store, scope recall by tag</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../../reference.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Reference</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
 </div>
                 </footer>
               
             </div>
             
             
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#status">Status</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#context">Context</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decision">Decision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#consequences">Consequences</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0007-hindsight-as-semantic-recall-backend.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../../_sources/explanations/decisions/0007-hindsight-as-semantic-recall-backend.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
               
             
           </div>
@@ -522,8 +665,8 @@
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
-<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
+  <script defer src="../../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
