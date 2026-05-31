@@ -2036,7 +2036,7 @@ def test_image_analysis_routing_drives_classification(
         analyser=FakeAnalyser(analysis=_whiteboard_analysis()),
     )
     capture = Capture(path=src, filename="whiteboard.png")
-    analysis = ingestor.analyse(capture)
+    analysis = ingestor.analyse(capture).analysis
     cls = ingestor.classify(capture, analysis=analysis)
     assert cls.page_type == "note"  # promoted from the blind memory default
     assert "sprint-planning" in cls.concepts
@@ -2225,3 +2225,176 @@ def test_audio_capture_runs_no_analyse_pass(
 
     assert analyser.image_calls == []
     assert analyser.pdf_calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Issue #42 / PR #50 review: a URL binary is fetched ONCE for analyse + capture
+# (no second download, no leaked temp file).
+# --------------------------------------------------------------------------- #
+
+
+def test_url_image_analyse_fetches_binary_once_and_leaks_no_temp(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A URL image is downloaded exactly ONCE for the analyse pass + the asset write.
+
+    The analyse pass (issue #42) needs the bytes to OCR/vision-route the image, and the
+    raw-capture pass needs them to save the asset. The bytes are fetched a single time
+    and threaded through, so ``fetch_binary`` is called exactly once -- no redundant
+    second network download -- and the staged ``thoth-fetch-*`` temp file is consumed
+    by the asset store rather than leaked (the bug this test guards against). The
+    capture is still routed/filed by the analysed content (here promoted from the blind
+    ``memory`` default to ``note``).
+    """
+    staged = tmp_path / "thoth-fetch-url-image.png"
+    staged.write_bytes(b"\x89PNG\r\n\x1a\n" + b"url-image-bytes")
+    binary = FetchedBinary(
+        source_url="https://example.com/whiteboard",
+        tmp_path=staged,
+        content_type="image/png",
+        suggested_ext="png",
+    )
+    extractor = FakeExtractor(binary=binary)
+    # The classify model returns the blind memory default; analyse promotes it to note.
+    classify = _classify_json(
+        page_type="memory", slug="sprint-whiteboard", title="Whiteboard", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="sprint-whiteboard",
+        page_type="note",
+        title="Sprint Planning Whiteboard",
+        body="Notes from the sprint planning session.",
+    )
+    analyser = FakeAnalyser(analysis=_whiteboard_analysis())
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=extractor,
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(
+        Capture(
+            url="https://example.com/whiteboard.png",
+            filename="whiteboard.png",
+            source="slack",
+        )
+    )
+
+    # The binary was fetched exactly once (analyse + capture share the one download).
+    assert extractor.fetch_calls == ["https://example.com/whiteboard.png"]
+    # The vision seam saw the real downloaded bytes (not base64), once.
+    assert analyser.image_calls == [(b"\x89PNG\r\n\x1a\n" + b"url-image-bytes", "png")]
+    # Routed + filed by the analysed content, with the asset saved as a real binary.
+    assert report.page_paths == ["notes/sprint-whiteboard.md"]
+    assert report.asset_paths == ["raw/assets/sprint-whiteboard.png"]
+    asset = harness.work / "raw/assets/sprint-whiteboard.png"
+    assert asset.read_bytes().startswith(b"\x89PNG")
+    page_text = (harness.work / "notes/sprint-whiteboard.md").read_text(
+        encoding="utf-8"
+    )
+    assert "![[sprint-whiteboard.png]]" in page_text
+    assert "ship vision pass" in page_text  # OCR'd text landed in the body
+    # No leaked temp file: the staged download was consumed by the asset store.
+    assert not staged.exists()
+
+
+def test_url_pdf_analyse_fetches_binary_once_and_leaks_no_temp(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A URL PDF is downloaded ONCE for the analyse pass + the paper/asset write.
+
+    Mirrors the image case for the PDF analyse path: a single ``fetch_binary`` call
+    feeds both the document-analysis pass and the kept-binary write, and the staged temp
+    file is not leaked.
+    """
+    staged = tmp_path / "thoth-fetch-url-pdf.pdf"
+    staged.write_bytes(b"%PDF-1.7\n" + b"url-pdf-bytes")
+    binary = FetchedBinary(
+        source_url="https://example.com/spec",
+        tmp_path=staged,
+        content_type="application/pdf",
+        suggested_ext="pdf",
+    )
+    extractor = FakeExtractor(binary=binary)
+    analysis = Analysis(
+        text="Section 1. The appliance files captures into a vault.",
+        description="A design spec for a personal knowledge appliance.",
+        summary="PKM appliance spec",
+        suggested_type="note",
+        concepts=["pkm-appliance"],
+    )
+    classify = _classify_json(
+        page_type="memory", slug="pkm-spec", title="Spec", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="pkm-spec",
+        page_type="note",
+        title="PKM Appliance Spec",
+        body="A spec for a personal knowledge appliance.",
+    )
+    analyser = FakeAnalyser(analysis=analysis)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=extractor,
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(
+        Capture(
+            url="https://example.com/spec.pdf",
+            filename="spec.pdf",
+            source="slack",
+        )
+    )
+
+    # Fetched exactly once across the analyse + capture passes.
+    assert extractor.fetch_calls == ["https://example.com/spec.pdf"]
+    assert analyser.pdf_calls == [b"%PDF-1.7\n" + b"url-pdf-bytes"]
+    # Routed by content into notes/, the binary kept, the paper stub written.
+    assert report.page_paths == ["notes/pkm-spec.md"]
+    assert report.asset_paths == ["raw/assets/pkm-spec.pdf"]
+    assert (harness.work / "raw/assets/pkm-spec.pdf").read_bytes().startswith(b"%PDF")
+    # No leaked temp file.
+    assert not staged.exists()
+
+
+def test_url_image_analyse_defer_cleans_up_fetched_temp(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A deferral after fetching a URL binary still cleans up the staged temp file.
+
+    When classify/curate (or analyse) defers, ``capture_raw`` never runs to consume the
+    analyse-pass download, so the ingest must unlink the staged ``thoth-fetch-*`` file
+    itself rather than leak it. Here the analyse call fails (transport) after the binary
+    was fetched; the capture defers (held durably) and the temp file is gone.
+    """
+    staged = tmp_path / "thoth-fetch-defer.png"
+    staged.write_bytes(b"\x89PNG\r\n\x1a\n" + b"defer-bytes")
+    binary = FetchedBinary(
+        source_url="https://example.com/pic",
+        tmp_path=staged,
+        content_type="image/png",
+        suggested_ext="png",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(binary=binary),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(error=RuntimeError("vision API down")),
+    )
+
+    report = ingestor.ingest(
+        Capture(url="https://example.com/pic.png", filename="pic.png", source="slack")
+    )
+
+    # Deferred (held durably), and the staged download was NOT leaked.
+    assert report.deferred is True
+    assert report.raw_paths[0].startswith("inbox/")
+    assert not staged.exists()
