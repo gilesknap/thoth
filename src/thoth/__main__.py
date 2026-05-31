@@ -5,7 +5,9 @@ section 13 Phase 3-4): the ``pkm-slack`` / ``thoth-slack`` systemd unit runs ``t
 slack``; Claude Code's MCP config runs ``thoth mcp``; the 06:30 cron runs ``thoth
 reindex`` (``--full-rebuild`` on recovery); the 07:00 / Mon-07:00 cron runs ``thoth
 summary daily`` / ``thoth summary weekly``; and the Mon-08:00 cron runs ``thoth lint``
-(SPEC section 11). Each subcommand loads the configuration once via
+(SPEC section 11). ``thoth init`` seeds a fresh or wiped vault with the packaged spine
+(``index.md`` / ``SCHEMA.md`` / ``log.md``) and Bases dashboards (idempotent). Each
+subcommand loads the configuration once via
 :func:`thoth.config.load_config` and constructs the collaborator graph, then delegates
 to the already-built Phase 0-4 entrypoint (:func:`thoth.slack_app.run`,
 :func:`thoth.mcp_server.run`, :meth:`thoth.reindex_from_vault.Reindexer.run`,
@@ -36,11 +38,12 @@ __all__ = ["main", "build_parser"]
 def build_parser() -> ArgumentParser:
     """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
 
-    Subcommands: ``slack`` (the capture/retrieve daemon), ``mcp`` (the stdio MCP
-    server), ``reindex`` (nightly incremental, ``--full-rebuild`` for recovery),
-    ``summary`` (``daily`` / ``weekly`` Slack digest), and ``lint`` (the 13-check vault
-    maintenance scan, ``--no-log`` to suppress the log entry). ``-v/--version`` prints
-    the version and exits.
+    Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
+    ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
+    stdio MCP server), ``reindex`` (nightly incremental, ``--full-rebuild`` for
+    recovery), ``summary`` (``daily`` / ``weekly`` Slack digest), and ``lint`` (the
+    13-check vault maintenance scan, ``--no-log`` to suppress the log entry).
+    ``-v/--version`` prints the version and exits.
 
     Returns:
         The configured :class:`argparse.ArgumentParser`.
@@ -53,7 +56,14 @@ def build_parser() -> ArgumentParser:
         version=__version__,
     )
     sub = parser.add_subparsers(
-        dest="command", metavar="{slack,mcp,reindex,summary,lint}"
+        dest="command", metavar="{init,slack,mcp,reindex,summary,lint}"
+    )
+
+    init = sub.add_parser("init", help="seed the vault spine + dashboards (idempotent)")
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing spine/dashboard files",
     )
 
     sub.add_parser("slack", help="run the Slack Socket-Mode capture/retrieve daemon")
@@ -110,6 +120,7 @@ def main(args: Sequence[str] | None = None) -> None:
 def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
     """Route a parsed ``command`` to its handler with the loaded ``config``."""
     handlers: dict[str, Callable[[Namespace, Config], None]] = {
+        "init": run_init,
         "slack": run_slack,
         "mcp": run_mcp,
         "reindex": run_reindex,
@@ -117,6 +128,29 @@ def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
         "lint": run_lint,
     }
     handlers[command](namespace, config)
+
+
+def run_init(namespace: Namespace, config: Config) -> None:
+    """Seed the vault spine + dashboards (``thoth init [--force]``).
+
+    Builds a real :class:`~thoth.vault.Vault` and calls
+    :meth:`~thoth.vault.Vault.seed`, which writes the packaged spine (``index.md`` /
+    ``SCHEMA.md`` / ``log.md``) and Bases dashboards and creates the empty content
+    folders. Idempotent: existing spine files are left untouched unless ``--force`` is
+    passed. A one-line created/skipped summary is printed. The heavy import is local to
+    the handler so importing this module never needs the vault surface.
+
+    Args:
+        namespace: The parsed args (carries ``--force``).
+        config: The frozen runtime config (used to build the vault).
+    """
+    from .vault import Vault
+
+    vault = Vault(config)
+    result = vault.seed(force=bool(namespace.force))
+    print(f"init: {len(result.created)} written, {len(result.skipped)} skipped")
+    for name in result.created:
+        print(f"  + {name}")
 
 
 def run_slack(namespace: Namespace, config: Config) -> None:

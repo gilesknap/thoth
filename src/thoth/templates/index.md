@@ -32,7 +32,7 @@ updated: 2026-05-30
 
 ### Entities
 - [[program-motion-controller]] — central coordinator in the motor-control stack.
-- [[people/jane-doe]] — collaborator on home + controls work.
+- [[jane-doe]] — collaborator on home + controls work.
 
 ### Notes
 - [[ioc-network-architecture]] — RTEMS IOC boot/VLAN/TFTP design notes.

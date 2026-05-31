@@ -58,7 +58,9 @@ def test_build_parser_lint_no_log_flag() -> None:
     assert parser.parse_args(["lint"]).no_log is False
 
 
-@pytest.mark.parametrize("command", ["slack", "mcp", "reindex", "summary", "lint"])
+@pytest.mark.parametrize(
+    "command", ["init", "slack", "mcp", "reindex", "summary", "lint"]
+)
 def test_build_parser_recognises_each_subcommand(command: str) -> None:
     """Each Phase-3/4 subcommand is recognised and sets ``command``."""
     parser = __main__.build_parser()
@@ -97,13 +99,21 @@ def test_main_dispatches_each_command(
     """Each subcommand routes to its handler with the loaded config."""
     calls: list[tuple[str, Config]] = []
 
-    for name in ("run_slack", "run_mcp", "run_reindex", "run_summary", "run_lint"):
+    for name in (
+        "run_init",
+        "run_slack",
+        "run_mcp",
+        "run_reindex",
+        "run_summary",
+        "run_lint",
+    ):
 
         def _record(ns: Any, cfg: Config, _name: str = name) -> None:
             calls.append((_name, cfg))
 
         monkeypatch.setattr(__main__, name, _record)
 
+    __main__.main(["init"])
     __main__.main(["slack"])
     __main__.main(["mcp"])
     __main__.main(["reindex"])
@@ -111,6 +121,7 @@ def test_main_dispatches_each_command(
     __main__.main(["lint"])
 
     assert [name for name, _ in calls] == [
+        "run_init",
         "run_slack",
         "run_mcp",
         "run_reindex",
@@ -118,6 +129,38 @@ def test_main_dispatches_each_command(
         "run_lint",
     ]
     assert all(cfg is stub_config for _, cfg in calls)
+
+
+# --- run_init (builds a Vault and seeds it) ----------------------------------------
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_run_init_builds_vault_and_seeds(
+    monkeypatch: pytest.MonkeyPatch, stub_config: Config, force: bool
+) -> None:
+    """``thoth init [--force]`` builds a Vault and calls seed with the right force."""
+    seen: dict[str, Any] = {}
+
+    class _FakeVault:
+        def __init__(self, config: Config) -> None:
+            seen["config"] = config
+
+        def seed(self, *, force: bool) -> Any:
+            seen["force"] = force
+            from thoth.vault import SeedResult
+
+            return SeedResult(created=("index.md",), skipped=())
+
+    import thoth.vault as vault_module
+
+    monkeypatch.setattr(vault_module, "Vault", _FakeVault)
+
+    args = ["init", "--force"] if force else ["init"]
+    namespace = __main__.build_parser().parse_args(args)
+    __main__.run_init(namespace, stub_config)
+
+    assert seen["config"] is stub_config
+    assert seen["force"] is force
 
 
 # --- run_slack / run_mcp (routing only; nothing blocks) ----------------------------
@@ -303,11 +346,10 @@ def _seed_minimal_vault(root: Path) -> None:
     """Lay down folders + spine + one due action so the daily digest is non-empty."""
     for folder in (
         "entities",
-        "concepts",
-        "comparisons",
-        "queries",
+        "notes",
+        "memories",
         "actions",
-        "media",
+        "inbox",
     ):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / "index.md").write_text("# Home\n", encoding="utf-8")
@@ -371,11 +413,10 @@ def test_run_summary_skip_when_empty_does_not_post(tmp_path: Path) -> None:
     # Folders + spine only -> nothing actionable -> empty daily digest.
     for folder in (
         "entities",
-        "concepts",
-        "comparisons",
-        "queries",
+        "notes",
+        "memories",
         "actions",
-        "media",
+        "inbox",
     ):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / "index.md").write_text("# Home\n", encoding="utf-8")
@@ -402,11 +443,10 @@ def test_run_summary_requires_summary_channel(tmp_path: Path) -> None:
     root.mkdir()
     for folder in (
         "entities",
-        "concepts",
-        "comparisons",
-        "queries",
+        "notes",
+        "memories",
         "actions",
-        "media",
+        "inbox",
     ):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / "index.md").write_text("# Home\n", encoding="utf-8")

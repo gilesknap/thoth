@@ -25,6 +25,7 @@ from thoth.vault import (
     RAW_SUBDIRS,
     REFERENCE_TYPES,
     REQUIRED_COMMON_FIELDS,
+    SEED_DIRS,
     SLUG_RE,
     TYPE_ENUMERATION,
     VALID_SOURCES,
@@ -32,6 +33,7 @@ from thoth.vault import (
     Page,
     PathConfinementError,
     SchemaError,
+    SeedResult,
     SlugError,
     Vault,
     VaultError,
@@ -848,3 +850,68 @@ def test_schema_md_absent_returns_none(vault: Vault) -> None:
     if schema.exists():
         schema.unlink()
     assert vault.schema_md() is None
+
+
+# --------------------------------------------------------------------------- #
+# seed (idempotent vault-spine provisioning, `thoth init`).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def bare_vault(tmp_path: Path) -> Vault:
+    """A Vault over an empty (unseeded) tmp_path vault root."""
+    root = tmp_path / "bare-vault"
+    root.mkdir()
+    config = load_config({"PKM_VAULT": str(root)})
+    return Vault(config)
+
+
+def test_seed_writes_spine_and_creates_folders(bare_vault: Vault) -> None:
+    """A bare vault gets the spine + dashboards written and content folders created."""
+    from thoth.templates import iter_templates
+
+    result = bare_vault.seed()
+
+    assert isinstance(result, SeedResult)
+    expected = tuple(name for name, _ in iter_templates())
+    assert result.created == expected
+    assert result.skipped == ()
+
+    root = bare_vault.root
+    for name in ("index.md", "SCHEMA.md", "log.md"):
+        assert (root / name).is_file()
+    for base in ("home", "actions", "memories", "inbox", "entities", "notes"):
+        assert (root / "_bases" / f"{base}.base").is_file()
+    for folder in SEED_DIRS:
+        assert (root / folder).is_dir()
+
+
+def test_seed_is_idempotent_and_does_not_clobber(bare_vault: Vault) -> None:
+    """A second seed() writes nothing new and leaves an edited spine page untouched."""
+    from thoth.templates import iter_templates
+
+    bare_vault.seed()
+    edited = bare_vault.root / "index.md"
+    edited.write_text("# my own home page\n", encoding="utf-8")
+
+    result = bare_vault.seed()
+
+    expected_names = tuple(name for name, _ in iter_templates())
+    assert result.created == ()
+    assert result.skipped == expected_names
+    assert edited.read_text(encoding="utf-8") == "# my own home page\n"
+
+
+def test_seed_force_overwrites_edited_spine(bare_vault: Vault) -> None:
+    """``force=True`` overwrites an edited spine file back to the packaged text."""
+    from thoth.templates import template_text
+
+    bare_vault.seed()
+    edited = bare_vault.root / "index.md"
+    edited.write_text("# my own home page\n", encoding="utf-8")
+
+    result = bare_vault.seed(force=True)
+
+    assert "index.md" in result.created
+    assert result.skipped == ()
+    assert edited.read_text(encoding="utf-8") == template_text("index.md")

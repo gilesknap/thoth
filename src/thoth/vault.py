@@ -127,6 +127,20 @@ folder is a one-place edit.
 RAW_SUBDIRS: frozenset[str] = frozenset({"articles", "papers", "transcripts", "assets"})
 """The ``raw/`` subdirectories (SPEC vault tree); ``assets`` is binary-only."""
 
+SEED_DIRS: tuple[str, ...] = (
+    CURATED_DIRS
+    + ACTIONABLE_DIRS
+    + ("inbox",)
+    + tuple(f"raw/{subdir}" for subdir in sorted(RAW_SUBDIRS))
+)
+"""Every empty content folder :meth:`Vault.seed` creates so the structure exists.
+
+The four flat content folders (:data:`CURATED_DIRS` + :data:`ACTIONABLE_DIRS`) plus the
+``inbox/`` holding folder and the ``raw/`` subdirectories, so a freshly seeded vault has
+the full browsable skeleton in Obsidian even before any page is filed. Derived from the
+same canonical dir constants rather than restating them, so adding a folder is a
+one-place edit."""
+
 SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 """Slug grammar: lowercase alphanumerics in single-hyphen-separated groups."""
 
@@ -230,6 +244,19 @@ class Page:
     body: str
 
 
+@dataclass(frozen=True, slots=True)
+class SeedResult:
+    """The created/skipped split returned by :meth:`Vault.seed`.
+
+    ``created`` lists the vault-relative spine/dashboard paths written on this run;
+    ``skipped`` lists the ones left untouched because they already existed (and
+    ``force`` was not set). Empty content folders are not reported either way.
+    """
+
+    created: tuple[str, ...]
+    skipped: tuple[str, ...]
+
+
 class Vault:
     """Path-confined read/write facade over one vault, built from a frozen Config."""
 
@@ -256,6 +283,45 @@ class Vault:
         if not path.is_file():
             return None
         return path.read_text(encoding="utf-8")
+
+    # ---- seed the vault spine (idempotent provisioning) --------------------------
+
+    def seed(self, *, force: bool = False) -> SeedResult:
+        """Write the packaged vault spine + dashboards into this vault (idempotent).
+
+        Writes every packaged template (``index.md``, ``SCHEMA.md``, ``log.md``, and
+        ``_bases/*.base``) to its path under the vault root and creates the canonical
+        empty content folders (:data:`SEED_DIRS`: ``entities/``, ``notes/``,
+        ``memories/``, ``actions/``, ``inbox/`` and the ``raw/`` subdirs) so the
+        structure exists for Obsidian browsing. Existing spine files are left untouched
+        unless ``force`` is set, so re-running over a live vault never clobbers an
+        edited spine page; the empty-folder creation is always ``exist_ok``.
+
+        Args:
+            force: Overwrite existing spine/dashboard files with the packaged text.
+
+        Returns:
+            A :class:`SeedResult` splitting the vault-relative template paths into the
+            ones ``created`` on this run and the ones ``skipped`` (already present and
+            ``force`` not set).
+        """
+        from .templates import iter_templates
+
+        created: list[str] = []
+        skipped: list[str] = []
+        for name, text in iter_templates():
+            absolute = self.resolve(name)
+            if absolute.exists() and not force:
+                skipped.append(name)
+                continue
+            absolute.parent.mkdir(parents=True, exist_ok=True)
+            absolute.write_text(text, encoding="utf-8")
+            created.append(name)
+
+        for folder in SEED_DIRS:
+            (self._root / folder).mkdir(parents=True, exist_ok=True)
+
+        return SeedResult(created=tuple(created), skipped=tuple(skipped))
 
     # ---- path confinement (the security core) -----------------------------------
 
