@@ -275,6 +275,82 @@ def test_live_reindex_incremental_runs(live_config: Config) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# 8. Budget guard -- a real Anthropic call is charged, the next is blocked (issue #16)
+# --------------------------------------------------------------------------------------
+
+
+class _RecordingAlerter:
+    """Captures the one-per-day budget alert without touching Slack (issue #16)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def alert_budget_exceeded(
+        self, *, day: str, limit: int, breakdown: dict[str, int]
+    ) -> bool:
+        """Record the cap-reached alert and report success."""
+        self.calls.append((day, limit))
+        return True
+
+
+def test_live_budget_guard_blocks_real_anthropic_call(
+    live_config: Config, tmp_path: Path
+) -> None:
+    """The daily guard charges a *real* Anthropic call, then blocks the next (#16).
+
+    The single live risk the unit tests cannot cover is that wrapping the real Anthropic
+    SDK call with the budget charge still works end to end. With a budget of 1 over a
+    throwaway state DB (``thoth_home`` redirected into ``tmp_path``), the first
+    ``LLM.complete`` reaches Claude and returns text; the second is blocked *before* the
+    SDK is touched with :class:`~thoth.budget.BudgetExceededError`, and exactly one
+    cap-reached alert is emitted. The real ``~/.thoth/state.db`` is never touched.
+
+    The Hindsight (Gemini) chokepoint is exercised without spending: a guard pre-charged
+    to its cap makes ``retain`` raise before the CLI is ever spawned, so no bank is
+    touched -- proof of the wiring with zero side effects.
+    """
+    import dataclasses
+
+    from thoth.budget import (
+        KIND_HINDSIGHT,
+        BudgetExceededError,
+        make_budget_guard,
+    )
+    from thoth.hindsight import Hindsight
+    from thoth.llm import LLM, Message, extract_text
+
+    live_config.require_anthropic()  # fail fast if ANTHROPIC_API_KEY is unset
+
+    # Budget of 1 over a throwaway state DB (thoth_home -> tmp_path); real keys intact.
+    budget_config = dataclasses.replace(
+        live_config, daily_llm_budget=1, thoth_home=tmp_path
+    )
+    alerter = _RecordingAlerter()
+    guard = make_budget_guard(budget_config, alerter=alerter)
+    llm = LLM(budget_config, guard=guard)
+
+    response = llm.complete(
+        [Message(role="user", content="Reply with the single word OK.")],
+        max_tokens=16,
+    )
+    assert extract_text(response).strip(), "the real Anthropic call returned no text"
+
+    with pytest.raises(BudgetExceededError):
+        llm.complete([Message(role="user", content="this must be blocked")])
+    assert len(alerter.calls) == 1, "the cap-reached alert must fire exactly once"
+
+    # Hindsight chokepoint: a pre-exhausted guard blocks retain before any CLI spawn, so
+    # no Gemini extraction is spent and no bank is touched.
+    hs_guard = make_budget_guard(
+        dataclasses.replace(live_config, daily_llm_budget=1, thoth_home=tmp_path / "hs")
+    )
+    hs_guard.charge(KIND_HINDSIGHT)  # exhaust the single-call budget
+    hindsight = Hindsight(live_config, guard=hs_guard)
+    with pytest.raises(BudgetExceededError):
+        hindsight.retain("concepts/never-spent.md", "this must be blocked")
+
+
+# --------------------------------------------------------------------------------------
 # helpers (only ever reached when the live gate is open)
 # --------------------------------------------------------------------------------------
 

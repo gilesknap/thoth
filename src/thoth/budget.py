@@ -54,7 +54,6 @@ from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from thoth.alerts import Alerter
 from thoth.config import Config
 
 __all__ = [
@@ -339,7 +338,7 @@ class BudgetGuard:
 def make_budget_guard(
     config: Config,
     *,
-    alerter: Alerter | None = None,
+    alerter: BudgetAlerterLike | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> BudgetGuard:
     """Build a :class:`BudgetGuard` over the deployment's state DB and configured cap.
