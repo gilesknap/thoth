@@ -55,11 +55,13 @@ Environment=PKM_VAULT=/opt/pkm-vault
 Environment=OBSIDIAN_VAULT_NAME=pkm-vault
 Environment=THOTH_HOME=/home/pkm/.thoth
 
-# Secrets (ANTHROPIC_API_KEY, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_ALLOWED_USERS,
-# SLACK_SUMMARY_CHANNEL, EXA_API_KEY, FIRECRAWL_API_KEY, GEMINI_API_KEY, ...) come from the
-# chmod-600 .env — never from this tracked unit file. Optional: set SLACK_ALERT_CHANNEL in
-# .env to route errors-to-Slack alerts to a dedicated channel; unset, alerts fall back to the
-# first SLACK_ALLOWED_USERS DM.
+# Secrets (ANTHROPIC_API_KEY, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_CAPTURE_CHANNEL,
+# SLACK_ALLOWED_USERS, SLACK_SUMMARY_CHANNEL, EXA_API_KEY, FIRECRAWL_API_KEY,
+# GEMINI_API_KEY, ...) come from the chmod-600 .env — never from this tracked unit file.
+# SLACK_CAPTURE_CHANNEL is required: the daemon listens/replies only in that one private
+# channel (issue #61) and fails fast at startup if it is unset. Optional: set
+# SLACK_ALERT_CHANNEL in .env to route errors-to-Slack alerts to a dedicated channel; unset,
+# alerts fall back to the first SLACK_ALLOWED_USERS DM.
 EnvironmentFile=/home/pkm/.thoth/.env
 
 WorkingDirectory=/opt/thoth
