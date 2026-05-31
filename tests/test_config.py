@@ -10,6 +10,7 @@ import pytest
 
 from thoth.config import (
     DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_DAILY_LLM_BUDGET,
     DEFAULT_OBSIDIAN_VAULT_NAME,
     Config,
     ConfigError,
@@ -51,6 +52,7 @@ def test_happy_path_minimal() -> None:
     assert cfg.exa_api_key is None
     assert cfg.firecrawl_api_key is None
     assert cfg.gemini_api_key is None
+    assert cfg.daily_llm_budget == DEFAULT_DAILY_LLM_BUDGET == 200
 
 
 def test_all_fields_populated() -> None:
@@ -69,6 +71,7 @@ def test_all_fields_populated() -> None:
         "EXA_API_KEY": FAKE_TOKEN,
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
+        "THOTH_DAILY_LLM_BUDGET": "50",
     }
     cfg = load_config(env)
     assert cfg.vault_path == Path("/opt/pkm-vault")
@@ -84,6 +87,19 @@ def test_all_fields_populated() -> None:
     assert cfg.exa_api_key == FAKE_TOKEN
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
+    assert cfg.daily_llm_budget == 50
+
+
+def test_daily_llm_budget_rejects_non_integer() -> None:
+    """A non-integer THOTH_DAILY_LLM_BUDGET is a clear ConfigError, not a default."""
+    with pytest.raises(ConfigError, match="THOTH_DAILY_LLM_BUDGET"):
+        load_config({"PKM_VAULT": "/x", "THOTH_DAILY_LLM_BUDGET": "lots"})
+
+
+def test_daily_llm_budget_zero_disables(tmp_path: Path) -> None:
+    """A zero/negative budget is honoured verbatim (it disables the guard)."""
+    cfg = load_config({"PKM_VAULT": "/x", "THOTH_DAILY_LLM_BUDGET": "0"})
+    assert cfg.daily_llm_budget == 0
 
 
 def test_require_slack_summary_channel() -> None:

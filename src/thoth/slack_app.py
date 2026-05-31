@@ -54,6 +54,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
@@ -94,6 +95,14 @@ _SAVE_OFFER_TEXT: str = "_Save this answer to the vault? Reply *y* to file it._"
 # unambiguous, deliberate captures.
 _GATE_CAPTURE_HINT: str = (
     "_Filed as a note. If you meant to ask, just send it again as a question._"
+)
+
+# Rendered on the read paths (query/ask) when the daily LLM budget (issue #16) is spent;
+# captures still file durably (curation is deferred), but an answer needs a live model
+# call, so the user is told the cap is reached rather than left without a reply.
+_BUDGET_REACHED_TEXT: str = (
+    ":money_with_wings: Daily LLM budget reached - answering is paused until tomorrow "
+    "(Europe/London). Anything you capture is still saved and will be processed later."
 )
 
 
@@ -704,6 +713,9 @@ class Handlers:
         """Run a vault-only query and reply; render an error fail-loud, never crash."""
         try:
             result = self.query_engine.answer(text)
+        except BudgetExceededError:
+            say(_BUDGET_REACHED_TEXT)
+            return
         except QueryError as exc:
             say(f":x: Could not answer that: {exc}")
             return
@@ -721,6 +733,9 @@ class Handlers:
         assert self.research is not None  # routing guard guarantees this
         try:
             result = self.research.ask(text)
+        except BudgetExceededError:
+            say(_BUDGET_REACHED_TEXT)
+            return
         except ResearchError as exc:
             say(f":x: Could not answer that: {exc}")
             return
@@ -898,10 +913,16 @@ def build_app(
     from slack_bolt import App
 
     from thoth.alerts import make_alerter
+    from thoth.budget import make_budget_guard
     from thoth.intent import DEFAULT_INTENT_MODEL
     from thoth.llm import LLM
 
     bot_token, _ = config.require_slack()
+    # The daily cost guard (issue #16) also caps the intent gate's cheap Haiku calls; it
+    # shares the same state.db counters as the ingest/query/research graph and alerts
+    # once per day via the same errors-to-Slack target the Handlers use.
+    alerter = make_alerter(config)
+    intent_guard = make_budget_guard(config, alerter=alerter)
     handlers = Handlers(
         config=config,
         ingestor=ingestor,
@@ -913,7 +934,7 @@ def build_app(
         # own lazy LLM client (a different, cheaper model than the ask/curate Sonnet);
         # the model is overridable without a redeploy via THOTH_INTENT_MODEL.
         intent_classifier=IntentClassifier(
-            LLM(config),
+            LLM(config, guard=intent_guard),
             model=os.environ.get("THOTH_INTENT_MODEL") or DEFAULT_INTENT_MODEL,
         ),
         # Durable redelivery dedupe so a Slack retry across a daemon restart is still
@@ -922,7 +943,7 @@ def build_app(
         # Errors-to-Slack target + a GitSync for the unpushed-divergence alert (#15);
         # the ingestor already holds a GitSync, so a separate one here is only the
         # divergence probe and need not be the same instance.
-        alerter=make_alerter(config),
+        alerter=alerter,
         git=GitSync(config),
     )
     app = App(token=bot_token)

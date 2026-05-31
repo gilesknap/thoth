@@ -36,6 +36,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from thoth.budget import KIND_ANTHROPIC, BudgetGuardLike
 from thoth.config import Config
 from thoth.vault import (
     FOLDER_TYPE_CONTRACT,
@@ -426,16 +427,29 @@ class LLM:
     ``anthropic`` package.
     """
 
-    def __init__(self, config: Config, client: AnthropicLike | None = None) -> None:
-        """Store the config and an optional pre-built client.
+    def __init__(
+        self,
+        config: Config,
+        client: AnthropicLike | None = None,
+        *,
+        guard: BudgetGuardLike | None = None,
+    ) -> None:
+        """Store the config, an optional pre-built client, and an optional budget guard.
 
         Args:
             config: The frozen runtime config.
             client: An optional injected client; created lazily on first
                 :meth:`complete` when ``None``.
+            guard: An optional daily-spend guard (:class:`thoth.budget.BudgetGuard`);
+                when wired, :meth:`complete` charges one Anthropic call against the
+                daily budget *before* the request and raises
+                :class:`thoth.budget.BudgetExceededError` once the cap is reached.
+                ``None`` (the default) disables the cap, so existing callers are
+                unaffected.
         """
         self._config = config
         self._client = client
+        self._guard = guard
 
     @property
     def config(self) -> Config:
@@ -470,7 +484,16 @@ class LLM:
 
         Returns:
             The raw response object returned by the client.
+
+        Raises:
+            thoth.budget.BudgetExceededError: when a budget guard is wired and the daily
+                call cap has been reached (raised before the request, so nothing is
+                spent; the ingest passes treat it as a deferral).
         """
+        if self._guard is not None:
+            # Charge before the request so a cap-reached day defers rather than spends;
+            # every attempt (including retries) counts against the cap (issue #16).
+            self._guard.charge(KIND_ANTHROPIC)
         kwargs = build_create_kwargs(
             self._config,
             messages,

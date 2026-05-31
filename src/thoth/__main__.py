@@ -159,6 +159,8 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
     errors-to-Slack target before being re-raised so the cron log still shows the
     failure (issue #15). The resulting counts are printed for the cron log.
     """
+    from .alerts import make_alerter
+    from .budget import make_budget_guard
     from .hindsight import Hindsight
     from .reindex_from_vault import Reindexer
     from .state import MarkerStore
@@ -166,7 +168,12 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
 
     with _cron_alerting("cron: reindex", config):
         vault = Vault(config)
-        hindsight = Hindsight(config)
+        # The daily cost guard (issue #16) caps the reindex retain burst; an
+        # accidental --full-rebuild of a large vault stops at the cap (deferring the
+        # rest to the next day) instead of spending unbounded Gemini extraction. It
+        # alerts once per day.
+        guard = make_budget_guard(config, alerter=make_alerter(config))
+        hindsight = Hindsight(config, guard=guard)
         reindexer = Reindexer(
             config, vault, hindsight, markers=MarkerStore(config.state_db_path)
         )
@@ -174,7 +181,7 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
         print(
             f"reindex: changed={result.changed} skipped={result.skipped} "
             f"pruned={result.pruned} live={result.live_pages} "
-            f"full_rebuild={result.full_rebuild}"
+            f"full_rebuild={result.full_rebuild} aborted={result.aborted}"
         )
 
 
@@ -313,6 +320,8 @@ def _build_graph(config: Config) -> _Graph:
     MCP server share one construction shape. All heavy imports are local to this
     function.
     """
+    from .alerts import make_alerter
+    from .budget import make_budget_guard
     from .extract import Extractor
     from .git_sync import GitSync
     from .hindsight import Hindsight
@@ -324,9 +333,14 @@ def _build_graph(config: Config) -> _Graph:
     from .vault import Vault
 
     vault = Vault(config)
-    llm = LLM(config)
+    # The daily cost guard (issue #16): one shared cap over the Anthropic calls (via the
+    # LLM) and the Gemini fact-extraction (via Hindsight retain), persisted in state.db
+    # and keyed by the London day. It alerts once per day through the errors-to-Slack
+    # target. A non-positive THOTH_DAILY_LLM_BUDGET disables it.
+    guard = make_budget_guard(config, alerter=make_alerter(config))
+    llm = LLM(config, guard=guard)
     extractor = Extractor(config)
-    hindsight = Hindsight(config)
+    hindsight = Hindsight(config, guard=guard)
     git = GitSync(config)
     # Liveness markers so a successful capture/push records its time for the daily
     # heartbeat (issue #15); the same disposable state.db backs the dedupe table.

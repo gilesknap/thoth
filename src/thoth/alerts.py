@@ -161,7 +161,43 @@ class Alerter:
             )
         )
 
+    def alert_budget_exceeded(
+        self, *, day: str, limit: int, breakdown: dict[str, int]
+    ) -> bool:
+        """Post the one-per-day "daily LLM budget reached" alert (issue #16).
+
+        Emitted once, by the first model call that the :class:`thoth.budget.BudgetGuard`
+        blocks on a given Europe/London day, so the operator learns the appliance has
+        gone fail-safe (deferring captures, aborting reindex) rather than silently
+        burning the cap. The per-day de-duplication lives in the guard's store; this
+        method just formats and posts.
+
+        Args:
+            day: The Europe/London calendar day the cap was reached on (``YYYY-MM-DD``).
+            limit: The configured combined daily call budget.
+            breakdown: The per-counter call counts (e.g. ``{"anthropic": 198,
+                "hindsight": 2}``) for the alert detail.
+
+        Returns:
+            Whatever :meth:`post` returns.
+        """
+        return self.post(self._format_budget(day=day, limit=limit, breakdown=breakdown))
+
     # ---- formatting (pure, total) ------------------------------------------------
+
+    def _format_budget(self, *, day: str, limit: int, breakdown: dict[str, int]) -> str:
+        """Render the daily-budget alert as a compact ``mrkdwn`` block."""
+        stamp = self._stamp()
+        detail = (
+            ", ".join(f"{count} {kind}" for kind, count in sorted(breakdown.items()))
+            or "no calls recorded"
+        )
+        return (
+            f":money_with_wings: *Daily LLM budget reached* ({day}) at {stamp} - "
+            f"the {limit}-call cap is spent ({detail}). thoth is now fail-safe: "
+            f"captures are held raw and re-curated later, and reindex is deferred "
+            f"until the next Europe/London day."
+        )
 
     def _format_exception(self, where: str, exc: BaseException) -> str:
         """Render an unhandled-exception alert as a compact ``mrkdwn`` block."""

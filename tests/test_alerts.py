@@ -152,6 +152,25 @@ def test_alert_unpushed_divergence_singular_and_unknown_count() -> None:
     assert "one or more commits unpushed" in poster.calls[1][1]
 
 
+def test_alert_budget_exceeded_reports_day_limit_and_breakdown() -> None:
+    """The daily-budget alert names the day, cap, and per-counter split (#16)."""
+    poster = _RecordingPoster()
+    alerter = _alerter(poster)
+    assert (
+        alerter.alert_budget_exceeded(
+            day="2026-06-01", limit=200, breakdown={"anthropic": 198, "hindsight": 2}
+        )
+        is True
+    )
+    channel, text = poster.calls[0]
+    assert channel == "C-ALERT"
+    assert "2026-06-01" in text
+    assert "200-call cap" in text
+    assert "198 anthropic" in text
+    assert "2 hindsight" in text
+    assert "fail-safe" in text
+
+
 # --- make_alerter resolution ------------------------------------------------------
 
 

@@ -24,6 +24,7 @@ from typing import cast
 
 import pytest
 
+from thoth.budget import BudgetExceededError
 from thoth.config import Config, load_config
 from thoth.hindsight import DEFAULT_BANK, Hindsight, HindsightError, base_args
 from thoth.reindex_from_vault import (
@@ -310,6 +311,55 @@ def test_body_hash_invariant_under_updated_frontmatter_bump(
     b = _page("X", "entity", body, updated="2026-06-01")
     assert a != b  # the texts differ (frontmatter)
     assert reindexer.body_hash(a) == reindexer.body_hash(b)
+
+
+class _BudgetTrippingHindsight(RecordingHindsight):
+    """A recorder whose ``retain`` trips the daily budget after ``trip_after`` calls."""
+
+    def __init__(self, *, trip_after: int) -> None:
+        """Record retains until ``trip_after``, then raise BudgetExceededError."""
+        super().__init__()
+        self._trip_after = trip_after
+
+    def retain(self, rel_path: str, facts: str, *, tags: Sequence[str] = ()) -> None:
+        """Retain until the cap, then act like the guarded wrapper (issue #16)."""
+        if len(self.retains) >= self._trip_after:
+            raise BudgetExceededError("daily LLM budget reached")
+        super().retain(rel_path, facts, tags=tags)
+
+
+def test_run_aborts_cleanly_when_budget_trips_mid_walk(
+    config: Config, vault: Vault
+) -> None:
+    """A budget trip stops the rebuild: partial manifest, no prune/marker (issue #16).
+
+    The pages retained before the cap are advanced in the manifest (so a later run does
+    not re-spend on them), but the incomplete walk must NOT prune (unvisited pages are
+    not deletions) and must NOT record the reindex liveness marker.
+    """
+    _seed_vault(vault.root)
+    # Pre-seed a stale manifest entry for a page that no longer exists, so a *completed*
+    # run would prune it; proving the abort skips pruning means this entry survives.
+    hs = _BudgetTrippingHindsight(trip_after=1)
+    markers = MarkerStore(config.state_db_path)
+    reindexer = Reindexer(config, vault, hs, markers=markers)
+    manifest = reindexer.load_manifest()
+    manifest["entities/ghost.md"] = {"sha256": "deadbeef", "retained_at": "2026-05-30"}
+    reindexer.write_manifest(manifest)
+
+    result = reindexer.run()
+
+    assert result.aborted is True
+    assert result.changed == 1  # exactly one page retained before the cap
+    assert result.pruned == 0  # pruning skipped on an incomplete walk
+    assert len(hs.retains) == 1
+    # The retained page is persisted; the ghost entry is NOT pruned (still present).
+    persisted = reindexer.load_manifest()
+    assert len(hs.retains[0]) == 3
+    assert hs.retains[0][0] in persisted
+    assert "entities/ghost.md" in persisted
+    # No liveness marker: a budget-aborted reindex is not a healthy "alive" signal.
+    assert markers.get(MARKER_REINDEX) is None
 
 
 # --------------------------------------------------------------------------- #

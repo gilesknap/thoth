@@ -431,9 +431,10 @@ def _build_ingestor(
     extractor: FakeExtractor,
     hindsight: FakeHindsight,
     markers: MarkerStore | None = None,
+    guard: Any = None,
 ) -> Ingestor:
     """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes."""
-    llm = LLM(harness.config, client=client)
+    llm = LLM(harness.config, client=client, guard=guard)
     return Ingestor(
         harness.config,
         harness.vault,
@@ -1360,6 +1361,45 @@ def _inbox_holds(harness: IngestHarness) -> list[str]:
     """Return the inbox/ holding pages currently on disk (vault-relative)."""
     inbox = harness.work / "inbox"
     return [f"inbox/{p.name}" for p in sorted(inbox.glob("*.md"))]
+
+
+def test_ingest_defers_when_daily_budget_exhausted(harness: IngestHarness) -> None:
+    """A budget-exhausted classify defers the capture, never loses it (issue #16).
+
+    The daily LLM guard raises :class:`~thoth.budget.BudgetExceededError` from
+    ``LLM.complete``; the classify pass treats it like any model-availability failure,
+    so the raw is held durably in ``inbox/`` and the report is *deferred* -- the same
+    capture-never-lost path #14 built, now reached by the cost cap not an outage.
+    """
+    from thoth.budget import KIND_ANTHROPIC, BudgetGuard, BudgetStore
+
+    budget = BudgetGuard(store=BudgetStore(harness.work / "budget.db"), limit=1)
+    budget.charge(KIND_ANTHROPIC)  # pre-exhaust today's single-call budget
+
+    class _NeverCalledClient:
+        """A client whose ``messages.create`` must never run (the guard trips first)."""
+
+        class _Messages:
+            def create(self, **_kwargs: Any) -> Any:
+                raise AssertionError("the budget guard should block before the client")
+
+        messages = _Messages()
+
+    ingestor = _build_ingestor(
+        harness,
+        client=_NeverCalledClient(),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        guard=budget,
+    )
+
+    report = ingestor.ingest(Capture(text="a thought worth keeping"))
+
+    assert report.deferred is True
+    assert report.page_paths == []
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1  # the capture is durable on disk, awaiting re-curation
+    assert report.committed is True
 
 
 def test_ingest_persists_raw_then_defers_when_classify_llm_fails(

@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 
+from thoth.budget import BudgetExceededError
 from thoth.config import Config, load_config
 from thoth.git_sync import Divergence, GitSync, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
@@ -818,6 +819,29 @@ def test_handle_message_query_error_is_fail_loud(config: Config) -> None:
     handlers.handle_message({"user": ALLOWED, "text": "anything?", "ts": "6.6"}, say)
     assert len(say.messages) == 1
     assert "index.md missing" in say.messages[0]
+
+
+def test_handle_message_query_budget_exceeded_is_fail_safe(config: Config) -> None:
+    """A budget trip on the vault-query path replies fail-safe, not a crash (#16)."""
+    qry = FakeQueryEngine(error=BudgetExceededError("cap reached"))
+    handlers, _, _ = _handlers(config, query_engine=qry)
+    say = Recorder()
+    handlers.handle_message({"user": ALLOWED, "text": "anything?", "ts": "6.9"}, say)
+    assert len(say.messages) == 1
+    assert "budget" in say.messages[0].lower()
+    assert "still saved" in say.messages[0].lower()
+
+
+def test_handle_message_ask_budget_exceeded_is_fail_safe(config: Config) -> None:
+    """A budget trip on the blended-ask path replies fail-safe, not a crash (#16)."""
+    research = FakeResearch(error=BudgetExceededError("cap reached"))
+    handlers, _, _ = _handlers(config, research=research)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is raft?", "ts": "7.1"}, say
+    )
+    assert len(say.messages) == 1
+    assert "budget" in say.messages[0].lower()
 
 
 def test_handle_message_ingest_error_is_fail_loud(config: Config) -> None:

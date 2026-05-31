@@ -759,15 +759,20 @@ def run(config: Config, ctx: ToolContext | None = None) -> None:
             ``None``.
     """
     if ctx is None:
+        from thoth.budget import make_budget_guard
         from thoth.extract import Extractor
         from thoth.git_sync import GitSync
         from thoth.hindsight import Hindsight
         from thoth.llm import LLM
 
         vault = Vault(config)
-        llm = LLM(config)
+        # The daily cost guard (issue #16): one shared cap over the Anthropic +
+        # Hindsight calls, persisted in state.db. MCP has no Slack target, so it blocks
+        # silently (no alerter); the cap still defers spend once reached.
+        guard = make_budget_guard(config)
+        llm = LLM(config, guard=guard)
         extractor = Extractor(config)
-        hindsight = Hindsight(config)
+        hindsight = Hindsight(config, guard=guard)
         git = GitSync(config)
         # SCHEMA.md as the curate-call system_extra so curated pages match the live
         # per-type schema (mirrors thoth.__main__._build_graph).

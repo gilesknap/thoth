@@ -46,6 +46,14 @@ DEFAULT_ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
 DEFAULT_THOTH_HOME: Path = Path.home() / ".thoth"
 """Default ``~/.thoth`` home, computed at import time (tests monkeypatch ``HOME``)."""
 
+DEFAULT_DAILY_LLM_BUDGET: int = 200
+"""Default combined daily LLM call budget (issue #16), sized for personal use.
+
+The cap on the appliance's own Anthropic calls plus the Gemini fact-extraction triggered
+via Hindsight ``retain``, per Europe/London day; ``THOTH_DAILY_LLM_BUDGET`` overrides it
+and a non-positive value disables the guard. See :mod:`thoth.budget`.
+"""
+
 REQUIRED_VARS: tuple[str, ...] = ("PKM_VAULT",)
 """Environment variables that must be present; only the vault path in Phase 0."""
 
@@ -71,6 +79,7 @@ class Config:
     exa_api_key: str | None
     firecrawl_api_key: str | None
     gemini_api_key: str | None
+    daily_llm_budget: int
 
     @property
     def state_db_path(self) -> Path:
@@ -256,6 +265,11 @@ def load_config(
         exa_api_key=lookup("EXA_API_KEY"),
         firecrawl_api_key=lookup("FIRECRAWL_API_KEY"),
         gemini_api_key=lookup("GEMINI_API_KEY"),
+        daily_llm_budget=_int_opt(
+            lookup("THOTH_DAILY_LLM_BUDGET"),
+            default=DEFAULT_DAILY_LLM_BUDGET,
+            name="THOTH_DAILY_LLM_BUDGET",
+        ),
     )
 
 
@@ -282,6 +296,28 @@ def _resolve_path(value: str) -> Path:
 def _opt(value: str | None) -> str | None:
     """Treat an empty string as unset (shell/.env habit: blank means absent)."""
     return value or None
+
+
+def _int_opt(value: str | None, *, default: int, name: str) -> int:
+    """Parse an optional integer env value, falling back to ``default`` when unset.
+
+    Args:
+        value: The raw string value (already ``None`` when unset/blank via ``lookup``).
+        default: The documented default to use when ``value`` is ``None``.
+        name: The variable name, for a clear :class:`ConfigError` on a non-integer.
+
+    Returns:
+        The parsed integer, or ``default`` when unset.
+
+    Raises:
+        ConfigError: when ``value`` is present but not a base-10 integer.
+    """
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer, got {value!r}") from exc
 
 
 def _strip_user_token(token: str) -> str:
