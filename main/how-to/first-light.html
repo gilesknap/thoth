@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>First-light smoke checklist &#8212; thoth 0.1.dev46+g5b30eb803 documentation</title>
+    <title>First-light smoke checklist &#8212; thoth 0.1.dev49+g925f3d95b documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=a2426268"></script>
+    <script src="../_static/documentation_options.js?v=047479f1"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -539,25 +539,28 @@ suite does the same round-trip through <code class="docutils literal notranslate
 </pre></div>
 </div>
 </section>
-<section id="slack-socket-mode-connects-and-a-dm-round-trips-capture-reply">
-<h2>3. Slack – Socket Mode connects and a DM round-trips capture+reply<a class="headerlink" href="#slack-socket-mode-connects-and-a-dm-round-trips-capture-reply" title="Link to this heading">#</a></h2>
-<p>This step assumes the Slack app already exists and the tokens are in <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code>. If
-you have not created it yet, do <a class="reference internal" href="slack-setup.html"><span class="doc">Set up the Slack app</span></a> first (it creates the app from an
-embedded manifest, turns on Socket Mode, and lists the env vars thoth reads).</p>
-<p>Start the daemon and send a DM from an allow-listed account.</p>
+<section id="slack-socket-mode-connects-and-a-channel-post-round-trips-capture-reply">
+<h2>3. Slack – Socket Mode connects and a channel post round-trips capture+reply<a class="headerlink" href="#slack-socket-mode-connects-and-a-channel-post-round-trips-capture-reply" title="Link to this heading">#</a></h2>
+<p>This step assumes the Slack app already exists, the tokens are in <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code>, and the
+bot has been <code class="docutils literal notranslate"><span class="pre">/invite</span></code>d to the private capture channel (<code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code>). If you
+have not set that up yet, do <a class="reference internal" href="slack-setup.html"><span class="doc">Set up the Slack app</span></a> first (it creates the app from an embedded
+manifest, turns on Socket Mode, creates the channel, and lists the env vars thoth reads).</p>
+<p>Start the daemon, then post in the capture channel from an allow-listed account.</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>thoth<span class="w"> </span>slack
 </pre></div>
 </div>
-<p>Then, in Slack (from a <code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code> account), DM the bot:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] DM &quot;capture: first light test&quot; -&gt; bot replies with an obsidian:// link + [[wikilink]]
+<p>Then, in the capture channel (from a <code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code> account):</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] post &quot;capture: first light test&quot; -&gt; bot replies IN A THREAD with an obsidian:// link
 - [ ] the page lands in the vault (check `git log` in /opt/pkm-vault)
-- [ ] DM &quot;research: what is first light&quot; -&gt; bot replies and offers to save
+- [ ] post &quot;research: what is first light&quot; -&gt; bot replies in-thread and offers to save
+- [ ] reply &quot;y&quot; IN THAT THREAD -&gt; the answer is filed as a notes/ page
 - [ ] logs show &quot;connected&quot; (Socket Mode) and no auth errors
 </pre></div>
 </div>
-<p>Expected: a reply within a few seconds. A <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code> for <code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code> /
-<code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code> means the secrets are missing; silence usually means the app token lacks
-Socket Mode or the bot is not in the DM. Stop with <code class="docutils literal notranslate"><span class="pre">Ctrl-C</span></code> once the round-trip works.</p>
+<p>Expected: a threaded reply within a few seconds. A <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code> for <code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code> /
+<code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code> / <code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code> means that variable is missing; silence usually
+means the app token lacks Socket Mode, the bot was not invited to the channel, or
+<code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code> is not the channel you posted in. Stop with <code class="docutils literal notranslate"><span class="pre">Ctrl-C</span></code> once it works.</p>
 </section>
 <section id="mcp-the-pkm-tools-list-and-one-executes-over-stdio">
 <h2>4. MCP – the pkm_* tools list and one executes over stdio<a class="headerlink" href="#mcp-the-pkm-tools-list-and-one-executes-over-stdio" title="Link to this heading">#</a></h2>
@@ -671,7 +674,7 @@ command in CI (or on a dev box) reports all-skipped and passes. Clean up the thr
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">0. Prerequisites</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#anthropic-a-trivial-classify-returns-valid-json">1. Anthropic – a trivial classify returns valid JSON</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hindsight-retain-then-recall-round-trips-with-tag-provenance-recoverable">2. Hindsight – retain then recall round-trips, with tag-provenance recoverable</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-socket-mode-connects-and-a-dm-round-trips-capture-reply">3. Slack – Socket Mode connects and a DM round-trips capture+reply</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-socket-mode-connects-and-a-channel-post-round-trips-capture-reply">3. Slack – Socket Mode connects and a channel post round-trips capture+reply</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-the-pkm-tools-list-and-one-executes-over-stdio">4. MCP – the pkm_* tools list and one executes over stdio</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exa-firecrawl-one-search-and-one-extract">5. Exa + Firecrawl – one search and one extract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cron-entrypoints-incremental-reindex-and-a-summary-post">6. Cron entrypoints – incremental reindex and a summary post</a></li>
