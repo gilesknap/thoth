@@ -712,10 +712,10 @@ def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
     # save_answer was called once, with the original question and the remembered result.
     assert len(research.saves) == 1
     assert research.saves[0][0] == "explain raft"
-    # The save reply is the one concise shared ref: clickable title + path, no wikilink.
-    assert "notes/explain-raft.md" in say.messages[-1]
+    # The save reply is the one concise shared ref: clickable title only, no wikilink.
     assert "obsidian://" in say.messages[-1]
-    assert "|Explain Raft>: notes/explain-raft.md" in say.messages[-1]
+    assert "|Explain Raft>" in say.messages[-1]
+    assert ">: " not in say.messages[-1]  # title-only, no trailing path (issue #63)
     assert "[[" not in say.messages[-1]
     # A second 'y' has nothing pending and falls through to a fresh ask (not a save).
     handlers.handle_message(
@@ -1213,20 +1213,23 @@ def test_download_without_token_or_helper_is_fail_loud(config: Config) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_render_citation_is_concise_uri_title_path() -> None:
-    """render_citation emits <uri|title>: path with no dead [[wikilink]] (issue #53)."""
+def test_render_citation_is_title_only_clickable_link() -> None:
+    """render_citation emits <uri|title> only: no trailing path, no wikilink (#63)."""
     rendered = render_citation(_citation())
     assert rendered == (
-        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md"
-        "|Exa Search>: concepts/exa-search.md"
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md|Exa Search>"
     )
     assert "[[" not in rendered  # the dead wikilink is gone
+    assert ">: " not in rendered  # the trailing vault path is gone (issue #63)
 
 
 def test_render_citation_falls_back_to_path_label() -> None:
     """When a citation has no title, the path is used as the link label."""
     rendered = render_citation(_citation(title=""))
-    assert "|concepts/exa-search.md>: concepts/exa-search.md" in rendered
+    assert rendered == (
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md"
+        "|concepts/exa-search.md>"
+    )
 
 
 def test_render_query_result_lists_every_citation() -> None:
@@ -1241,9 +1244,12 @@ def test_render_query_result_lists_every_citation() -> None:
     rendered = render_query_result(result)
     assert rendered.startswith("Two engines.")
     assert "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md|Exa>" in rendered
-    assert "concepts/exa.md" in rendered
-    assert "concepts/firecrawl.md" in rendered
+    assert (
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Ffirecrawl.md|Firecrawl>"
+        in rendered
+    )
     assert "[[" not in rendered
+    assert ">: " not in rendered  # title-only, no trailing path (issue #63)
 
 
 def test_render_query_result_no_citations_renders_no_note() -> None:
@@ -1259,11 +1265,15 @@ def test_render_ask_result_combines_vault_and_web_with_offer() -> None:
     result = _ask_result()
     rendered = render_ask_result(result)
     assert rendered.startswith("Raft is a consensus algorithm.")
-    # Vault citation uses the concise <uri|title>: path; web uses <url|title>: url.
-    assert "concepts/exa-search.md" in rendered
-    assert "<https://example.com/raft|Raft>: https://example.com/raft" in rendered
+    # Both vault and web sources are title-only clickable links (issue #63).
+    assert (
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md|Exa Search>"
+        in rendered
+    )
+    assert "<https://example.com/raft|Raft>" in rendered
     assert "Save this answer" in rendered
     assert "[[" not in rendered
+    assert ">: " not in rendered  # no trailing path on any ref (issue #63)
 
 
 def test_render_ask_result_offer_suppressed_when_asked() -> None:
@@ -1307,20 +1317,19 @@ def test_pending_saves_prune_drops_expired_with_injected_clock() -> None:
 
 
 def test_render_ingest_report_is_concise_with_clickable_ref() -> None:
-    """render_ingest_report shows a Filed header + one concise <uri|title>: path ref.
+    """render_ingest_report shows a Filed header + one title-only clickable ref (#63).
 
-    The path is shown once (on the ref line), not duplicated on the header, and no dead
-    [[wikilink]] appears (issue #53).
+    The ref is a single clickable ``<uri|title>`` link with no trailing path and no
+    dead [[wikilink]] (issue #63).
     """
     rendered = render_ingest_report(_report())
     lines = rendered.splitlines()
     assert lines[0] == "Filed 1 page(s):"
     assert lines[1] == (
-        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md"
-        "|Exa Search>: concepts/exa-search.md"
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md|Exa Search>"
     )
     assert "[[" not in rendered
-    assert rendered.count("concepts/exa-search.md") == 1  # path not duplicated
+    assert ">: " not in rendered  # no trailing vault path (issue #63)
 
 
 def test_render_ingest_report_not_committed_marks_header() -> None:
@@ -1364,7 +1373,7 @@ def test_render_ingest_report_deferred_is_partial_success() -> None:
 
 
 def test_render_ingest_report_multi_page_one_ref_each() -> None:
-    """A multi-page report renders one concise ref line per filed page (issue #53)."""
+    """A multi-page report renders one title-only ref line per page (issue #63)."""
     report = _report(
         page_paths=["concepts/a.md", "concepts/b.md"],
         obsidian_links=[
@@ -1377,9 +1386,10 @@ def test_render_ingest_report_multi_page_one_ref_each() -> None:
     rendered = render_ingest_report(report)
     lines = rendered.splitlines()
     assert lines[0] == "Filed 2 page(s):"
-    assert "|Page A>: concepts/a.md" in lines[1]
-    assert "|Page B>: concepts/b.md" in lines[2]
+    assert lines[1] == "<obsidian://open?vault=pkm-vault&file=concepts%2Fa.md|Page A>"
+    assert lines[2] == "<obsidian://open?vault=pkm-vault&file=concepts%2Fb.md|Page B>"
     assert "[[" not in rendered
+    assert ">: " not in rendered  # title-only, no trailing path (issue #63)
 
 
 # --------------------------------------------------------------------------------------

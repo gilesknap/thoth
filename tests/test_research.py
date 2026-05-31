@@ -845,7 +845,9 @@ def test_ask_prompt_carries_clean_prose_instruction(
 
     prompt = _scripted(engine).calls[0]["messages"][0]["content"]
     assert "natural, concise answer" in prompt
-    assert "cleanly in a Slack message" in prompt
+    assert "Slack mrkdwn" in prompt  # mrkdwn, not GitHub markdown (issue #63)
+    assert "*bold*" in prompt  # Slack *bold*, not GitHub **bold** (issue #63)
+    assert "do not mention or list the sources" in prompt  # no source aside (#63)
     assert "by their title" in prompt
     assert "[[wikilinks]]" in prompt  # named as a thing NOT to paste
     assert "![[embeds]]" in prompt
