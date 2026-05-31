@@ -59,6 +59,18 @@ _USED_LINE_RE: re.Pattern[str] = re.compile(
 )
 """Match the model's trailing ``USED: 1, 3`` (or ``USED: none``) selection line."""
 
+_USED_SELECTION_LINE_RE: re.Pattern[str] = re.compile(
+    r"^USED:[ \t]*(?:none|[\d,\s]*)$", re.IGNORECASE | re.MULTILINE
+)
+"""Match a *pure* selection line (``USED:`` then only indices or ``none``).
+
+Used to strip any stray selection-only lines from the displayed prose, while leaving a
+legitimate prose sentence that merely *begins* with ``USED:`` (followed by words)
+untouched. This guards against a misbehaving model that emits more than one ``USED:``
+line: only the last one drives the citation subset, but every selection-only line is
+removed so none leaks into the Slack answer.
+"""
+
 logger = logging.getLogger(__name__)
 
 # Catalog line in index.md: "- [[program-motion-controller]] - central coordinator..."
@@ -603,13 +615,17 @@ def strip_embeds(text: str) -> str:
 def _split_used(raw: str, consulted: list[Citation]) -> tuple[str, list[Citation]]:
     """Split the model reply into displayed prose + the used citations (issue #34).
 
-    Finds the trailing ``USED: 1, 3`` (or ``USED: none``) line, maps its 1-based
-    indices back to ``consulted`` citations, and returns the prose with that line
-    removed plus the matching subset. Robust fallback: a missing/garbled/empty
-    selection keeps **all** consulted citations (the pre-#34 behaviour) so a malformed
-    model reply never crashes and never silently drops every source. ``USED: none``
-    yields an empty subset (the answer cited nothing), so the renderer shows prose
-    alone.
+    Finds the **last** ``USED: 1, 3`` (or ``USED: none``) line (the prompt promises the
+    selection is on the *final* line, with nothing after it), maps its 1-based indices
+    back to ``consulted`` citations, and returns the prose with the selection line(s)
+    removed plus the matching subset. If the model misbehaves and emits more than one
+    selection line, only the last drives the subset, but **every** selection-only line
+    is stripped from the prose so none leaks into the displayed answer. A legitimate
+    prose sentence that merely *begins* with ``USED:`` (followed by words, not indices)
+    is preserved. Robust fallback: a missing/garbled/empty selection keeps **all**
+    consulted citations (the pre-#34 behaviour) so a malformed model reply never crashes
+    and never silently drops every source. ``USED: none`` yields an empty subset (the
+    answer cited nothing), so the renderer shows prose alone.
 
     Args:
         raw: The model's full text reply (may end with a ``USED:`` line).
@@ -619,10 +635,13 @@ def _split_used(raw: str, consulted: list[Citation]) -> tuple[str, list[Citation
         A ``(prose, used)`` pair: the answer with the ``USED:`` line stripped, and the
         used citation subset.
     """
-    match = _USED_LINE_RE.search(raw)
+    matches = list(_USED_LINE_RE.finditer(raw))
+    match = matches[-1] if matches else None
     if match is None:
         return raw.strip(), list(consulted)
-    prose = (raw[: match.start()] + raw[match.end() :]).strip()
+    # The last line drives the subset; strip every selection-only line (a stray earlier
+    # "USED: 1" must not survive in the prose) while keeping any "USED: <words>" prose.
+    prose = _USED_SELECTION_LINE_RE.sub("", raw).strip()
     selection = match.group(1).strip()
     if selection.lower() == "none":
         return prose, []

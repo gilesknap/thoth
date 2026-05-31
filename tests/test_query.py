@@ -663,6 +663,46 @@ def test_answer_garbled_used_line_falls_back_to_all(
     assert len(result.citations) == 2
 
 
+def test_answer_uses_last_used_line_when_model_emits_two(
+    config: Config, vault: Vault
+) -> None:
+    """Two ``USED:`` lines: the LAST wins and NEITHER leaks into the displayed prose.
+
+    The design's prompt promises the selection is on the *final* line; if the model
+    misbehaves and emits two, parsing the first would (a) cite the wrong subset and
+    (b) leave the trailing ``USED: 2`` visible in the Slack answer. The trailing line
+    must drive the selection and the prose must carry no ``USED:`` text at all.
+    """
+    client = _FakeClient("Drive control runs the rail.\nUSED: 1\nUSED: 2")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    # The trailing "USED: 2" wins -> the 2nd consulted page, not the 1st.
+    assert [c.path for c in result.citations] == ["entities/drive-control-module.md"]
+    assert result.answer == "Drive control runs the rail."
+    assert "USED:" not in result.answer
+
+
+def test_answer_keeps_leading_used_prose_line_picks_trailing_selection(
+    config: Config, vault: Vault
+) -> None:
+    """A prose sentence starting ``USED:`` is preserved; the trailing line selects.
+
+    A legitimate answer line that happens to begin with ``USED:`` must NOT be consumed
+    as the selection (which would both garble the choice and leave the real trailing
+    ``USED: 2`` visible). The last match drives selection; the leading prose survives.
+    """
+    client = _FakeClient("USED: the rail drive to position the stage.\nUSED: 2")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+
+    result = engine.answer("program-motion-controller", max_pages=2)
+    # Trailing "USED: 2" selects the 2nd page; the leading prose line is preserved.
+    assert [c.path for c in result.citations] == ["entities/drive-control-module.md"]
+    assert result.answer == "USED: the rail drive to position the stage."
+
+
 def test_answer_sanitises_embeds_from_llm_context(config: Config, vault: Vault) -> None:
     """``![[image.png]]`` embeds are stripped from the prompt fed to the LLM (#34).
 
