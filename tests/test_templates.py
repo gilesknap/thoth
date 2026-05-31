@@ -81,6 +81,32 @@ def test_actions_base_has_a_media_consume_view() -> None:
     assert 'status == "to_consume"' in and_list
 
 
+def test_actions_base_media_views_split_by_consume_status() -> None:
+    """The media views split the queue by status: to_consume / consuming / consumed.
+
+    ADR 0005 folded the old ``media/`` folder into ``actions/`` (a media item is an
+    ``action`` tagged ``media``); the dashboard must still surface consuming vs consumed
+    so the backlog stays visible. Each media view is tag-scoped to ``media`` and pinned
+    to exactly one of the three ``status`` values summary.py's media scan reads.
+    """
+    data: Any = yaml.safe_load(base_text("actions"))
+    media_views = [v for v in data["views"] if "Media" in v["name"]]
+    statuses: set[str] = set()
+    for view in media_views:
+        and_list = view["filters"]["and"]
+        assert 'tags.contains("media")' in and_list, view["name"]
+        status_conds = [
+            c for c in and_list if isinstance(c, str) and c.startswith("status == ")
+        ]
+        assert len(status_conds) == 1, f"{view['name']}: one status condition"
+        statuses.add(status_conds[0])
+    assert statuses == {
+        'status == "to_consume"',
+        'status == "consuming"',
+        'status == "consumed"',
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Spine files: frontmatter / structural anchors used downstream.
 # --------------------------------------------------------------------------- #

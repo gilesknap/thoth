@@ -41,5 +41,21 @@ views:
     order: [file.name, media_type, creator, priority]
     sort: [{ property: priority, direction: ASC }]
   - type: table
+    name: Media — Consuming
+    filters:
+      and:
+        - tags.contains("media")
+        - status == "consuming"
+    order: [file.name, media_type, creator, priority]
+    sort: [{ property: priority, direction: ASC }]
+  - type: table
+    name: Media — Consumed
+    filters:
+      and:
+        - tags.contains("media")
+        - status == "consumed"
+    order: [file.name, media_type, creator, created]
+    sort: [{ property: created, direction: DESC }]
+  - type: table
     name: All Actions
     order: [file.name, due_date, priority, status, project]

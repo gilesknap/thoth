@@ -62,7 +62,7 @@ __all__ = [
     "iter_templates",
 ]
 
-#: The five Bases dashboard names (without the ``.base`` suffix), in the order
+#: The six Bases dashboard names (without the ``.base`` suffix), in the order
 #: ``index.md`` embeds them.
 BASE_NAMES: tuple[str, ...] = (
     "home",
@@ -89,7 +89,7 @@ class TemplateError(Exception):
 
 
 def base_names() -> tuple[str, ...]:
-    """Return the five Bases dashboard names (no ``.base`` suffix)."""
+    """Return the six Bases dashboard names (no ``.base`` suffix)."""
     return BASE_NAMES
 
 
@@ -155,7 +155,7 @@ def base_text(name: str) -> str:
 def iter_templates() -> list[tuple[str, str]]:
     """Return ``(relative-name, text)`` for every packaged template.
 
-    The result lists the three spine files followed by the five ``_bases/*.base``
+    The result lists the three spine files followed by the six ``_bases/*.base``
     dashboards, each paired with its UTF-8 text.
     """
     items: list[tuple[str, str]] = []
