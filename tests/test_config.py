@@ -50,6 +50,7 @@ def test_happy_path_minimal() -> None:
     assert cfg.slack_summary_channel is None
     assert cfg.slack_alert_channel is None
     assert cfg.slack_allowed_users is None
+    assert cfg.slack_capture_channel is None
     assert cfg.exa_api_key is None
     assert cfg.firecrawl_api_key is None
     assert cfg.gemini_api_key is None
@@ -70,6 +71,7 @@ def test_all_fields_populated() -> None:
         "SLACK_SUMMARY_CHANNEL": "D0B61LKA3NV",
         "SLACK_ALERT_CHANNEL": "C-ALERTS",
         "SLACK_ALLOWED_USERS": "U1 U2",
+        "SLACK_CAPTURE_CHANNEL": "C-CAPTURE",
         "EXA_API_KEY": FAKE_TOKEN,
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
@@ -87,6 +89,7 @@ def test_all_fields_populated() -> None:
     assert cfg.slack_summary_channel == "D0B61LKA3NV"
     assert cfg.slack_alert_channel == "C-ALERTS"
     assert cfg.slack_allowed_users == "U1 U2"
+    assert cfg.slack_capture_channel == "C-CAPTURE"
     assert cfg.exa_api_key == FAKE_TOKEN
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
@@ -127,6 +130,16 @@ def test_require_slack_summary_channel() -> None:
     cfg_missing = load_config({"PKM_VAULT": "/x"})
     with pytest.raises(ConfigError, match="SLACK_SUMMARY_CHANNEL"):
         cfg_missing.require_slack_summary_channel()
+
+
+def test_require_slack_capture_channel() -> None:
+    """require_slack_capture_channel returns the id or raises when unset (issue #61)."""
+    cfg = load_config({"PKM_VAULT": "/x", "SLACK_CAPTURE_CHANNEL": "C-CAP"})
+    assert cfg.require_slack_capture_channel() == "C-CAP"
+
+    cfg_missing = load_config({"PKM_VAULT": "/x"})
+    with pytest.raises(ConfigError, match="SLACK_CAPTURE_CHANNEL"):
+        cfg_missing.require_slack_capture_channel()
 
 
 def test_alert_target_resolution() -> None:

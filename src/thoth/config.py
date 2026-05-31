@@ -28,6 +28,10 @@ Documented defaults (the single source of truth):
 * ``SLACK_ALERT_CHANNEL`` is the unattended error/heartbeat alert target (issue #15);
   when unset, :meth:`Config.alert_target` falls back to the first
   ``SLACK_ALLOWED_USERS`` id as a DM target.
+* ``SLACK_CAPTURE_CHANNEL`` is the dedicated private channel the Slack daemon listens
+  and replies in (issue #61); it is required to start ``thoth slack`` (a pure cutover
+  from the old ``message.im`` DM flow, no DM fallback) and is read via
+  :meth:`Config.require_slack_capture_channel`.
 
 Only ``PKM_VAULT`` is hard-required in Phase 0 (see :data:`REQUIRED_VARS`).
 """
@@ -88,6 +92,7 @@ class Config:
     slack_summary_channel: str | None
     slack_alert_channel: str | None
     slack_allowed_users: str | None
+    slack_capture_channel: str | None
     exa_api_key: str | None
     firecrawl_api_key: str | None
     gemini_api_key: str | None
@@ -147,6 +152,22 @@ class Config:
                 "SLACK_SUMMARY_CHANNEL is required to post a summary but is not set"
             )
         return self.slack_summary_channel
+
+    def require_slack_capture_channel(self) -> str:
+        """Return the capture channel id or raise :class:`ConfigError` if unset.
+
+        The Slack surface (issue #61) is a single dedicated **private channel** (you
+        plus the bot): the daemon listens and replies only there, keying each
+        capture/ask to its own thread. The channel id lives in ``SLACK_CAPTURE_CHANNEL``
+        and is **required** to start ``thoth slack`` -- there is no DM fallback (a pure
+        cutover from the old ``message.im`` flow), so the daemon fails fast at startup
+        rather than listen nowhere.
+        """
+        if self.slack_capture_channel is None:
+            raise ConfigError(
+                "SLACK_CAPTURE_CHANNEL is required to run the Slack daemon but is unset"
+            )
+        return self.slack_capture_channel
 
     def alert_target(self) -> str | None:
         """Resolve where unattended error/heartbeat alerts are posted (issue #15).
@@ -275,6 +296,7 @@ def load_config(
         slack_summary_channel=lookup("SLACK_SUMMARY_CHANNEL"),
         slack_alert_channel=lookup("SLACK_ALERT_CHANNEL"),
         slack_allowed_users=lookup("SLACK_ALLOWED_USERS"),
+        slack_capture_channel=lookup("SLACK_CAPTURE_CHANNEL"),
         exa_api_key=lookup("EXA_API_KEY"),
         firecrawl_api_key=lookup("FIRECRAWL_API_KEY"),
         gemini_api_key=lookup("GEMINI_API_KEY"),

@@ -6,18 +6,27 @@ collaborators that are constructed elsewhere and injected here: an
 :class:`~thoth.ingest.Ingestor` (capture), a :class:`~thoth.query.QueryEngine` (fast
 vault-only retrieve), and -- when wired -- a :class:`~thoth.research.ResearchEngine`
 (the blended web+vault Q&A that backs the default free-text path, SPEC section 7.1). The
-daemon listens for ``message.im`` events (a file upload arrives as a ``message`` with
-subtype ``file_share`` carrying the full file objects), gates them through an allow-list
-and a transient redelivery dedupe, routes a bare URL / uploaded file to an ingest and
-sends **bare free text** through a lightweight intent gate
+daemon listens in **one dedicated private channel** (``SLACK_CAPTURE_CHANNEL``, you plus
+the bot) and ignores every other conversation (issue #61): each top-level message starts
+a new capture/ask handled **in its own thread** (the bot replies under the originating
+message's ``ts``), and a reply *inside* that thread continues it -- so per-conversation
+state is keyed by **thread**, not channel, and two interleaved topics never clobber each
+other's pending save. A file upload arrives as a ``message`` with subtype ``file_share``
+carrying the full file objects. The daemon gates each message through an allow-list and
+a transient redelivery dedupe, routes a bare URL / uploaded file to an ingest and sends
+**bare free text** through a lightweight intent gate
 (:class:`~thoth.intent.IntentClassifier`, issue #5) that picks capture / vault-query /
 blended ask -- falling back to the pre-gate default (blended ask, or vault-only query
 when no research engine is injected) when no classifier is wired. It offers to save a
-blended answer as a ``notes/`` page on a follow-up "y", and replies in Slack
-``mrkdwn``. A slow request shows an immediate placeholder (":hourglass_flowing_sand:
-Filing…" / ":mag: Looking…") that is edited in place with the final render via
-``chat.update`` (issue #34, Slice B) so a multi-second capture is not a dead pause; this
-degrades to a single ``say`` on a client-less path.
+blended answer as a ``notes/`` page on a follow-up "y" *in the thread*, and replies in
+Slack ``mrkdwn``. A slow request shows an immediate placeholder
+(":hourglass_flowing_sand: Filing…" / ":mag: Looking…") that is edited in place with the
+final render via ``chat.update`` (issue #34, Slice B) so a multi-second capture is not a
+dead pause; this degrades to a single ``say`` on a client-less path.
+
+This is a pure cutover from the old DM (``message.im``) surface and supersedes the Slack
+Assistant pane (issue #34, Slice C): the manifest subscribes ``message.groups`` with the
+``groups:history`` / ``groups:read`` scopes, and the ``assistant_*`` events are gone.
 
 Design constraints enforced here:
 
@@ -94,8 +103,13 @@ _CONFIRM_WORDS: frozenset[str] = frozenset(
 # The polite refusal sent to a user who is not on the allow-list, if anything at all.
 _REFUSAL_TEXT: str = "Sorry, you are not authorised to use this assistant."
 
-# The offer-to-save line appended to a blended answer (SPEC section 7.1 step 4).
-_SAVE_OFFER_TEXT: str = "_Save this answer to the vault? Reply *y* to file it._"
+# The offer-to-save line appended to a blended answer (SPEC section 7.1 step 4). The
+# confirmation must land *in the thread* the answer was posted to (issue #61): a
+# channel-level "y" is a fresh top-level message keyed to its own thread, so it will not
+# confirm (recoverable -- the user just re-sends "y" as a reply -- never data-loss).
+_SAVE_OFFER_TEXT: str = (
+    "_Save this answer to the vault? Reply *y* in this thread to file it._"
+)
 
 # Appended to a confirmation when the intent gate (issue #5) routed *bare* free text to
 # capture, so a misfile is recoverable in one reply: the user can just re-send it as a
@@ -385,14 +399,19 @@ class EventDedupe:
 
 
 class PendingSaves:
-    """Transient per-channel buffer of the last blended answer awaiting a save reply.
+    """Transient per-thread buffer of the last blended answer awaiting a save reply.
 
     The blended-ask path (SPEC section 7.1) ends by offering to save the answer; a
-    follow-up "y" confirms. This holds the ``(question, AskResult)`` for the most recent
-    answer per channel until it is confirmed, superseded, or expires (the
-    ``ttl_seconds`` window, ~30 min, SPEC section 10). It is **transient working memory
-    only**, never a store -- the in-memory seam the Phase-3 SQLite ``conversations``
-    table would later sit behind. The clock is injectable for deterministic tests.
+    follow-up "y" *in the same thread* confirms. It holds the ``(question, AskResult)``
+    for the most recent answer **per conversation thread** (keyed by ``thread_ts or
+    ts``, issue #61) until it is confirmed, superseded, or expires (the ``ttl_seconds``
+    window, ~30 min, SPEC section 10). Keying by thread -- not channel -- is the
+    load-bearing change of issue #61: in a single shared channel a channel key would be
+    effectively global, so two interleaved topics clobber each other's pending save and
+    a "y" would apply to whatever the most recent answer in the channel was. It is
+    **transient working memory only**, never a store -- the in-memory seam the Phase-3
+    SQLite ``conversations`` table would later sit behind. The clock is injectable for
+    deterministic tests.
     """
 
     def __init__(
@@ -412,20 +431,20 @@ class PendingSaves:
         self._clock = clock if clock is not None else time.monotonic
         self._pending: dict[str, tuple[float, str, AskResult]] = {}
 
-    def remember(self, channel: str, question: str, result: AskResult) -> None:
-        """Record the latest savable answer for ``channel`` (no-op for an empty id)."""
-        if channel:
-            self._pending[channel] = (self._clock(), question, result)
+    def remember(self, key: str, question: str, result: AskResult) -> None:
+        """Record the latest savable answer for thread ``key`` (no-op for empty id)."""
+        if key:
+            self._pending[key] = (self._clock(), question, result)
 
-    def take(self, channel: str) -> tuple[str, AskResult] | None:
-        """Pop and return the live ``(question, result)`` for ``channel``, if any.
+    def take(self, key: str) -> tuple[str, AskResult] | None:
+        """Pop and return the live ``(question, result)`` for thread ``key``, if any.
 
         Prunes expired entries first, then removes and returns the pending answer for
-        ``channel`` (so a single "y" saves it exactly once); returns ``None`` when there
-        is no live offer.
+        the conversation thread ``key`` (so a single "y" saves it exactly once); returns
+        ``None`` when there is no live offer.
         """
         self.prune()
-        entry = self._pending.pop(channel, None)
+        entry = self._pending.pop(key, None)
         if entry is None:
             return None
         _, question, result = entry
@@ -435,9 +454,7 @@ class PendingSaves:
         """Drop every pending offer older than ``ttl_seconds`` from now."""
         cutoff = self._clock() - self._ttl
         self._pending = {
-            channel: entry
-            for channel, entry in self._pending.items()
-            if entry[0] >= cutoff
+            key: entry for key, entry in self._pending.items() if entry[0] >= cutoff
         }
 
 
@@ -475,50 +492,74 @@ class Responder:
     -- so the user sees "Filing…" within ~1s and it resolves to the report, with no
     second message.
 
+    Every reply is posted **in the conversation thread** (issue #61): the placeholder
+    carries ``thread_ts`` and the bare-``say`` fallback threads its reply too, so a
+    reply lands under the originating top-level message, not at channel top level. The
+    in-place edit (``chat.update``) targets the placeholder's own ``ts`` and so stays in
+    the thread automatically.
+
     It degrades cleanly: when no web ``client`` or ``channel`` is available (the
     text-only/test paths that pass only a bare ``say``), :meth:`progress` posts nothing
-    and :meth:`finish` falls back to a single ``say(text)`` -- the exact pre-#34
-    behaviour. So the placeholder+update is best-effort UX layered over the existing
-    single-``say`` contract, never a hard dependency on the client.
+    and :meth:`finish` falls back to a single ``say(text)`` (still threaded) -- the
+    exact pre-#34 behaviour. So the placeholder+update is best-effort UX over the
+    existing single-``say`` contract, never a hard dependency on the client.
     """
 
     def __init__(
         self,
-        say: Callable[[str], None],
+        say: Callable[..., None],
         *,
         client: SlackClientLike | None = None,
         channel: str = "",
+        thread_ts: str = "",
     ) -> None:
         """Build a responder over a ``say`` callable and an optional web client+channel.
 
         Args:
-            say: The Bolt ``say`` callable that posts a reply to the conversation.
+            say: The Bolt ``say`` callable that posts a reply to the conversation; it
+                accepts an optional ``thread_ts`` keyword so a reply can be threaded.
             client: The Slack web client used to post + edit the placeholder; ``None``
                 disables the placeholder (the single-``say`` fallback).
             channel: The conversation id the placeholder is posted to / edited in; an
                 empty id also disables the placeholder.
+            thread_ts: The thread root to post replies under (``thread_ts or ts`` of the
+                originating message, issue #61). Empty means post at channel top level
+                (the test/edge paths); production always supplies it.
         """
         self._say = say
         self._client = client
         self._channel = channel
+        self._thread_ts = thread_ts
         self._ts: str | None = None
 
+    def _emit(self, text: str) -> None:
+        """Post a fresh reply via the bare ``say``, threading it when set."""
+        if self._thread_ts:
+            self._say(text, thread_ts=self._thread_ts)
+        else:
+            self._say(text)
+
+    def _thread_kwargs(self) -> dict[str, str]:
+        """The ``thread_ts`` kwargs for a client post, or ``{}`` at top level."""
+        return {"thread_ts": self._thread_ts} if self._thread_ts else {}
+
     def say(self, text: str) -> None:
-        """Post ``text`` as a plain reply (the early conflict/error/refusal paths)."""
-        self._say(text)
+        """Post ``text`` as a plain threaded reply (early conflict/error/refusal)."""
+        self._emit(text)
 
     def progress(self, placeholder: str) -> None:
         """Post an immediate placeholder (best-effort); remember its ts for the edit.
 
-        With no client/channel, or if the post fails for any reason, this no-ops and a
-        later :meth:`finish` falls back to a single ``say`` -- the placeholder must
-        never be able to swallow the real reply.
+        Posts into the conversation thread (``thread_ts``) so the working signal appears
+        under the originating message. With no client/channel, or if the post fails for
+        any reason, this no-ops and a later :meth:`finish` falls back to a single
+        ``say`` -- the placeholder must never be able to swallow the real reply.
         """
         if self._client is None or not self._channel:
             return
         try:
             response = self._client.chat_postMessage(
-                channel=self._channel, text=placeholder
+                channel=self._channel, text=placeholder, **self._thread_kwargs()
             )
         except Exception:  # noqa: BLE001 - placeholder is best-effort UX, never fatal
             return
@@ -530,18 +571,19 @@ class Responder:
         """Deliver the final reply: edit the placeholder in place, else a fresh ``say``.
 
         When a placeholder ts was captured the message is edited via ``chat.update`` (so
-        the "Filing…" line becomes the report). When there is no placeholder -- no
-        client, the post failed, or a non-DM/client-less path -- it falls back to
-        ``say(text)``, the single-reply pre-#34 behaviour. A failed edit also falls back
-        to ``say`` so the user always gets the reply.
+        the "Filing…" line becomes the report; the edit stays in-thread by targeting
+        that ts). When there is no placeholder -- no client, the post failed, or a
+        client-less path -- it falls back to a threaded ``say(text)``, the single-reply
+        pre-#34 behaviour. A failed edit also falls back to ``say`` so the user always
+        gets the reply.
         """
         if self._client is not None and self._channel and self._ts is not None:
             try:
                 self._client.chat_update(channel=self._channel, ts=self._ts, text=text)
             except Exception:  # noqa: BLE001 - fall back to a fresh post on any edit error
-                self._say(text)
+                self._emit(text)
             return
-        self._say(text)
+        self._emit(text)
 
 
 class AlerterLike(Protocol):
@@ -582,6 +624,7 @@ class Handlers:
     pending_saves: PendingSaves = field(default_factory=PendingSaves)
     alerter: AlerterLike | None = None
     git: GitSync | None = None
+    capture_channel: str = ""
 
     def is_allowed(self, user_id: str) -> bool:
         """Return ``True`` iff ``user_id`` is on the allow-list (fail-closed)."""
@@ -590,22 +633,29 @@ class Handlers:
     def handle_message(
         self,
         event: dict[str, Any],
-        say: Callable[[str], None],
+        say: Callable[..., None],
         client: SlackClientLike | None = None,
     ) -> None:
-        """Gate, route, and reply to a ``message.im`` event.
+        """Gate, route, and reply to a channel ``message`` event (issue #61).
 
-        Ignores bot/own messages and edit/join subtypes so the daemon does not loop on
-        its own replies. Enforces the allow-list (replying with a polite refusal to a
-        known but not-allowed sender) and the redelivery dedupe. Routing (SPEC sections
+        Ignores any message outside the dedicated capture channel
+        (:attr:`capture_channel`) so the bot never reacts in other conversations it has
+        been invited to; an empty :attr:`capture_channel` disables the gate (the daemon
+        enforces the configuration at startup, so this only relaxes the test/library
+        path). Ignores bot/own messages and edit/join subtypes so the daemon does not
+        loop on its own replies. Each reply is posted **in the message's thread**
+        (``thread_ts or ts``) and per-conversation state is keyed by that same thread
+        (issue #61). Enforces the allow-list (replying with a polite refusal to a known
+        but not-allowed sender) and the redelivery dedupe. Routing (SPEC sections
         6, 7.1):
 
         * a **file upload** (a ``message`` with subtype ``file_share``) downloads and
           ingests every attached file via :meth:`_ingest_uploaded_files` -- this event
           carries the full file objects (download URL + name) and a usable ``channel``,
           unlike the bare ``file_shared`` event the appliance ignores;
-        * a bare ``y``/``yes``/``save`` reply confirms a pending "save this answer?"
-          offer and files the last blended answer as a ``notes/`` page;
+        * a bare ``y``/``yes``/``save`` reply **in a thread** confirms that thread's
+          pending "save this answer?" offer and files the last blended answer as a
+          ``notes/`` page;
         * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
           ingest (:meth:`thoth.ingest.Ingestor.ingest`);
         * any other **bare free text** is routed by the intent gate
@@ -621,22 +671,36 @@ class Handlers:
 
         Args:
             event: The Slack event payload.
-            say: A callable that posts a reply string back to the channel.
+            say: A callable that posts a reply string back to the channel; it accepts an
+                optional ``thread_ts`` keyword so the reply can be threaded.
             client: The Slack web client (needed to download an uploaded file's bytes);
                 ``None`` for the text-only paths, which never touch it.
         """
         if not self._should_handle(event):
             return
+        channel = self._channel(event)
+        if self.capture_channel and channel != self.capture_channel:
+            # Not our dedicated capture channel: silently ignore (no refusal, no work).
+            return
+        thread = self._conversation_key(event)
+        responder = Responder(say, client=client, channel=channel, thread_ts=thread)
         user = str(event.get("user", ""))
         if not self.is_allowed(user):
-            say(_REFUSAL_TEXT)
+            # Operator-readable refusal line (issue #52): names the rejected user id and
+            # the allow-list size. A size of 0 means the allow-list is empty -- the
+            # fail-closed deny-everyone case (SLACK_ALLOWED_USERS unset / not reaching
+            # this process), the usual cause of an unexpected "not authorised".
+            logger.info(
+                "slack refused message from user %r (allow-list has %d id(s))",
+                user,
+                len(self.allowed_users),
+            )
+            responder.say(_REFUSAL_TEXT)
             return
         if self.dedupe.seen(self._event_key(event)):
             return
 
-        channel = self._channel(event)
         if event.get("subtype") == "file_share":
-            responder = Responder(say, client=client, channel=channel)
             self._ingest_uploaded_files(event, client, responder)
             return
 
@@ -644,8 +708,7 @@ class Handlers:
         if not text:
             return
         source = self._source_label()
-        responder = Responder(say, client=client, channel=channel)
-        if self._is_confirm_save(text) and self._try_confirm_save(channel, say):
+        if self._is_confirm_save(text) and self._try_confirm_save(thread, responder):
             return
         if self._is_capture_text(text):
             capture = Capture(text=self._strip_capture_prefix(text), source=source)
@@ -654,7 +717,7 @@ class Handlers:
             capture = Capture(url=text, source=source)
             self._do_ingest(capture, responder)
         else:
-            self._route_free_text(text, channel, source, responder)
+            self._route_free_text(text, thread, source, responder)
 
     def _ingest_uploaded_files(
         self,
@@ -716,7 +779,7 @@ class Handlers:
     # ---- internals ---------------------------------------------------------------
 
     def _route_free_text(
-        self, text: str, channel: str, source: str, responder: Responder
+        self, text: str, thread: str, source: str, responder: Responder
     ) -> None:
         """Route bare free text through the intent gate (issue #5).
 
@@ -745,7 +808,7 @@ class Handlers:
         elif route == "query":
             self._do_query(text, responder)
         elif self.research is not None:
-            self._do_ask(text, channel, responder)
+            self._do_ask(text, thread, responder)
         else:
             self._do_query(text, responder)
 
@@ -858,7 +921,7 @@ class Handlers:
             return
         responder.finish(render_query_result(result))
 
-    def _do_ask(self, text: str, channel: str, responder: Responder) -> None:
+    def _do_ask(self, text: str, thread: str, responder: Responder) -> None:
         """Run the blended web+vault ask, reply with the offer-to-save, and remember it.
 
         Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
@@ -868,8 +931,9 @@ class Handlers:
         The (model-decided) web gate lives in :meth:`thoth.research.ResearchEngine.ask`;
         a leading ``research:`` marker / ``force_web`` forces the web on. On success the
         rendered answer carries the "save this answer?" offer and the
-        ``(question, result)`` is stashed in :attr:`pending_saves` so a follow-up "y"
-        files it. A :class:`~thoth.research.ResearchError` is rendered fail-loud.
+        ``(question, result)`` is stashed in :attr:`pending_saves` **keyed by the
+        conversation thread** (issue #61) so a follow-up "y" in that thread files it. A
+        :class:`~thoth.research.ResearchError` is rendered fail-loud.
         """
         assert self.research is not None  # routing guard guarantees this
         responder.progress(_ASK_PLACEHOLDER)
@@ -882,40 +946,44 @@ class Handlers:
             responder.finish(f":x: Could not answer that: {exc}")
             return
         offer = bool(result.answer.strip())
-        self.pending_saves.remember(channel, text, result)
+        self.pending_saves.remember(thread, text, result)
         responder.finish(render_ask_result(result, offer_save=offer))
 
-    def _try_confirm_save(self, channel: str, say: Callable[[str], None]) -> bool:
-        """File the channel's pending answer as a ``notes/`` page on a "y" reply.
+    def _try_confirm_save(self, thread: str, responder: Responder) -> bool:
+        """File the thread's pending answer as a ``notes/`` page on a "y" reply.
 
-        Returns ``True`` once it has handled the confirmation (whether the save
-        succeeded, was rejected, or there was nothing pending so the "y" should fall
-        through to normal routing -- in which case it returns ``False``). A vault
-        rejection is rendered fail-loud. ``research`` is required to save; if it is not
-        wired the reply falls through.
+        ``thread`` is the conversation key (``thread_ts or ts``, issue #61), so a "y"
+        only confirms the offer made *in its own thread* -- a "y" elsewhere finds
+        nothing pending and falls through. Returns ``True`` once it has handled the
+        confirmation (whether the save succeeded, was rejected, or there was nothing
+        pending so the "y" falls through to normal routing -- in which case it returns
+        ``False``). A vault rejection is rendered fail-loud. ``research`` is required to
+        save; if it is not wired the reply falls through.
 
         The success reply uses the one concise shared reference (issue #53): an
         ``<obsidian-uri|title>: path`` line whose title is derived from the saved page's
         slug. When the ``obsidian://`` link cannot be built the plain ``Saved `path```
-        fallback is used.
+        fallback is used. It is posted in the thread via the responder.
         """
         if self.research is None:
             return False
-        pending = self.pending_saves.take(channel)
+        pending = self.pending_saves.take(thread)
         if pending is None:
             return False
         question, result = pending
         try:
             rel = self.research.save_answer(question, result)
         except ResearchError as exc:
-            say(f":x: Could not save that: {exc}")
+            responder.say(f":x: Could not save that: {exc}")
             return True
         uri = self._vault_uri(rel)
         if uri:
             title = Path(rel).stem.replace("-", " ").title()
-            say("Saved " + render_vault_ref(obsidian_uri=uri, title=title, path=rel))
+            responder.say(
+                "Saved " + render_vault_ref(obsidian_uri=uri, title=title, path=rel)
+            )
         else:
-            say(f"Saved `{rel}`")
+            responder.say(f"Saved `{rel}`")
         return True
 
     def _vault_uri(self, rel: str) -> str | None:
@@ -931,9 +999,26 @@ class Handlers:
 
     @staticmethod
     def _channel(event: dict[str, Any]) -> str:
-        """Return the event's channel id (the per-conversation pending-save key)."""
+        """Return the event's channel id (where a reply is posted; the gate target)."""
         value = event.get("channel")
         return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _conversation_key(event: dict[str, Any]) -> str:
+        """Return the conversation thread key for the event: ``thread_ts or ts``.
+
+        The per-conversation state key (issue #61), and the ``thread_ts`` the bot
+        replies under: a reply *inside* a thread carries the thread root's ``thread_ts``
+        (so a follow-up / save "y" keys to the same conversation as the top-level one),
+        while a top-level message has only its own ``ts`` (which becomes the thread root
+        once the bot replies under it). No fallback to the bare channel -- that would
+        reintroduce the cross-topic collision issue #61 exists to remove.
+        """
+        thread_ts = event.get("thread_ts")
+        if isinstance(thread_ts, str) and thread_ts:
+            return thread_ts
+        ts = event.get("ts")
+        return ts if isinstance(ts, str) else ""
 
     @staticmethod
     def _is_confirm_save(text: str) -> bool:
@@ -944,16 +1029,19 @@ class Handlers:
     def _should_handle(event: dict[str, Any]) -> bool:
         """Drop bot messages and echoes, and every subtype EXCEPT ``file_share``.
 
-        A plain user DM has no subtype. Edit/join/delete subtypes (``message_changed`` /
-        ``message_deleted`` / ``channel_join`` ...) are dropped so the daemon never
-        loops on its own replies. The one subtype kept is ``file_share``: a DM file
-        upload
-        arrives as a ``message`` with that subtype carrying the **full** ``files``
-        objects (download URL + name) and a usable ``channel`` -- that is the event
-        :meth:`handle_message` ingests an upload from. Slack also emits a separate
-        ``file_shared`` event, but it embeds only a ``{"id": ...}`` stub (no URL, no
-        conversation ``channel`` to reply in), so the appliance ignores it (see
-        :func:`build_app`) and there is no cross-handler double-processing.
+        A plain top-level message and an in-thread reply both have no subtype, so both
+        are handled. The bot's own in-thread replies carry ``bot_id`` and are dropped
+        here, so the daemon never loops on them. Channel subtypes -- edits/deletes
+        (``message_changed`` / ``message_deleted``), joins/leaves (``channel_join`` when
+        the bot is invited), and the thread-also-to-channel rebroadcast
+        (``thread_broadcast``) -- are all dropped. The one subtype kept is
+        ``file_share``: a channel file upload arrives as a ``message`` with that subtype
+        carrying the **full** ``files`` objects (download URL + name) and a usable
+        ``channel`` -- that is the event :meth:`handle_message` ingests an upload from.
+        Slack also emits a separate ``file_shared`` event, but it embeds only a
+        ``{"id": ...}`` stub (no URL, no conversation ``channel`` to reply in), so the
+        appliance ignores it (see :func:`build_app`) and there is no cross-handler
+        double-processing.
         """
         if event.get("bot_id"):
             return False
@@ -1029,43 +1117,38 @@ class Handlers:
             return bytes(response.read())
 
 
-def build_app(
+def _build_handlers(
     config: Config,
     ingestor: Ingestor,
     query_engine: QueryEngine,
     *,
     research: ResearchEngine | None = None,
-) -> Any:
-    """Lazily import ``slack_bolt``, build the App, and register the handlers.
+) -> tuple[Handlers, str]:
+    """Construct the Slack :class:`Handlers` graph; return it with the bot token.
 
-    ``slack_bolt`` is imported **inside** this function so module import stays CI-safe.
-    The returned app delegates the ``message`` listener (which also carries file
-    uploads, as a ``file_share`` subtype) to a :class:`Handlers` built from the injected
-    collaborators and the allow-list read from ``SLACK_ALLOWED_USERS``; the bare
-    ``file_shared`` event is bound to a no-op (it is a stub the appliance ignores -- see
-    :meth:`Handlers._should_handle`). The app is **not** started -- :func:`run` does
-    that. When ``research`` is provided, free-text questions take the blended web+vault
-    path with the offer-to-save (SPEC section 7.1); otherwise they take the vault-only
-    path.
-
-    Args:
-        config: The frozen runtime config (provides the Slack bot token).
-        ingestor: The constructed ingest pipeline.
-        query_engine: The constructed retrieval engine.
-        research: The optional blended-ask engine for the free-text path.
+    Factored out of :func:`build_app` so the startup wiring -- the fail-fast required-
+    config checks (both Slack tokens and, issue #61, ``SLACK_CAPTURE_CHANNEL``) and the
+    collaborator construction -- is reachable and unit-testable **without** importing
+    the optional ``slack_bolt`` dependency that :func:`build_app` needs for the ``App``
+    itself (absent in CI). The required-config checks run **first**, before any
+    collaborator is
+    built, so a missing token / capture channel raises
+    :class:`~thoth.config.ConfigError` at startup rather than after side effects (e.g.
+    opening the state DB).
 
     Returns:
-        The configured ``slack_bolt.App`` instance (typed ``Any`` to avoid a top-level
-        import of the optional dependency).
+        A ``(handlers, bot_token)`` pair: the wired :class:`Handlers` and the Slack bot
+        token :func:`build_app` passes to the ``App``.
     """
-    from slack_bolt import App
-
     from thoth.alerts import make_alerter
     from thoth.budget import make_budget_guard
     from thoth.intent import DEFAULT_INTENT_MODEL
     from thoth.llm import LLM
 
     bot_token, _ = config.require_slack()
+    # Fail fast at startup if the dedicated capture channel is unset (issue #61): the
+    # daemon has no DM fallback, so without it there is nowhere to listen.
+    capture_channel = config.require_slack_capture_channel()
     # The daily cost guard (issue #16) also caps the intent gate's cheap Haiku calls; it
     # shares the same state.db counters as the ingest/query/research graph and alerts
     # once per day via the same errors-to-Slack target the Handlers use.
@@ -1075,7 +1158,15 @@ def build_app(
         config=config,
         ingestor=ingestor,
         query_engine=query_engine,
-        allowed_users=parse_allowed_users(os.environ.get("SLACK_ALLOWED_USERS")),
+        # Resolve the allow-list from the dotenv-seeded config, NOT os.environ directly:
+        # the value must work whether the daemon was started by systemd (which exports
+        # the .env) or run by hand relying on ~/.thoth/.env (dotenv-only). Reading
+        # os.environ alone would yield an empty -- fail-closed, deny-everyone -- list on
+        # the manual path, unlike the rest of the Slack config (issue #61).
+        allowed_users=parse_allowed_users(config.slack_allowed_users),
+        # The one private channel the daemon listens/replies in; messages elsewhere are
+        # ignored (issue #61).
+        capture_channel=capture_channel,
         research=research,
         # Free-text intent gate (issue #5): one cheap Haiku call routes bare prose to
         # capture / vault-query / blended ask instead of always defaulting to ask. Its
@@ -1094,11 +1185,51 @@ def build_app(
         alerter=alerter,
         git=GitSync(config),
     )
+    return handlers, bot_token
+
+
+def build_app(
+    config: Config,
+    ingestor: Ingestor,
+    query_engine: QueryEngine,
+    *,
+    research: ResearchEngine | None = None,
+) -> Any:
+    """Lazily import ``slack_bolt``, build the App, and register the handlers.
+
+    ``slack_bolt`` is imported **inside** this function so module import stays CI-safe.
+    The :class:`Handlers` graph (and the fail-fast required-config checks, including the
+    dedicated ``SLACK_CAPTURE_CHANNEL`` the daemon listens/replies in, issue #61) is
+    built by :func:`_build_handlers` -- factored out so that wiring is testable without
+    ``slack_bolt``. The returned app delegates the ``message`` listener (which also
+    carries file uploads, as a ``file_share`` subtype) to those handlers. The bare
+    ``file_shared`` event is bound to a no-op (it is a stub the appliance ignores -- see
+    :meth:`Handlers._should_handle`). The app is **not** started -- :func:`run` does
+    that. When ``research`` is provided, free-text questions take the blended web+vault
+    path with the offer-to-save (SPEC section 7.1); otherwise they take the vault-only
+    path.
+
+    Args:
+        config: The frozen runtime config (provides the Slack bot token + capture
+            channel).
+        ingestor: The constructed ingest pipeline.
+        query_engine: The constructed retrieval engine.
+        research: The optional blended-ask engine for the free-text path.
+
+    Returns:
+        The configured ``slack_bolt.App`` instance (typed ``Any`` to avoid a top-level
+        import of the optional dependency).
+    """
+    from slack_bolt import App
+
+    handlers, bot_token = _build_handlers(
+        config, ingestor, query_engine, research=research
+    )
     app = App(token=bot_token)
 
     @app.event("message")
     def _on_message(
-        event: dict[str, Any], client: Any, say: Callable[[str], None]
+        event: dict[str, Any], client: Any, say: Callable[..., None]
     ) -> None:
         handlers.handle_message(event, say, client=client)
 

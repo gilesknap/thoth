@@ -18,7 +18,7 @@ from typing import Any, cast
 import pytest
 
 from thoth.budget import BudgetExceededError
-from thoth.config import Config, load_config
+from thoth.config import Config, ConfigError, load_config
 from thoth.git_sync import Divergence, GitSync, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.intent import IntentClassifier, IntentDecision
@@ -30,6 +30,7 @@ from thoth.slack_app import (
     Handlers,
     PendingSaves,
     Responder,
+    _build_handlers,
     build_app,
     parse_allowed_users,
     render_ask_result,
@@ -202,14 +203,22 @@ class FakeIntentClassifier:
 
 
 class Recorder:
-    """A fake ``say`` callable that captures every reply string."""
+    """A fake ``say`` callable that captures every reply string + its ``thread_ts``.
+
+    Mirrors the Bolt ``say`` contract used after issue #61: a reply may be threaded with
+    a ``thread_ts`` keyword. ``messages`` keeps the text-only list the existing tests
+    assert on; ``thread_ts`` runs parallel to it so a test can also assert a reply
+    landed in the right thread.
+    """
 
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.thread_ts: list[str | None] = []
 
-    def __call__(self, text: str) -> None:
-        """Record one reply."""
+    def __call__(self, text: str, *, thread_ts: str | None = None) -> None:
+        """Record one reply and the thread (if any) it was posted to."""
         self.messages.append(text)
+        self.thread_ts.append(thread_ts)
 
 
 class FakeSlackClient:
@@ -239,8 +248,10 @@ class FakeSlackClient:
     def chat_postMessage(  # noqa: N802 - Slack SDK method name
         self, *, channel: str, text: str, **kwargs: Any
     ) -> dict[str, Any]:
-        """Record the placeholder post and return a canned ``ts`` (or none)."""
-        self.posts.append({"channel": channel, "text": text})
+        """Record the placeholder post (+ any ``thread_ts``) and return a canned ts."""
+        self.posts.append(
+            {"channel": channel, "text": text, "thread_ts": kwargs.get("thread_ts", "")}
+        )
         response: dict[str, Any] = {"ok": True}
         if self._post_ts is not None:
             response["ts"] = self._post_ts
@@ -309,13 +320,16 @@ def _handlers(
     pending_saves: PendingSaves | None = None,
     alerter: FakeAlerter | None = None,
     git: FakeGitSync | None = None,
+    capture_channel: str = "",
 ) -> tuple[Handlers, FakeIngestor, FakeQueryEngine]:
     """Construct Handlers wired to fakes, returning the fakes for assertions.
 
     When ``research`` is given the free-text path takes the blended ask; otherwise it is
     ``None`` and the free-text path stays vault-only (the existing behaviour). The
     research fake is reachable on the returned ``Handlers.research`` for assertions. An
-    ``alerter`` + ``git`` enable the unpushed-divergence alert (issue #15).
+    ``alerter`` + ``git`` enable the unpushed-divergence alert (issue #15). An empty
+    ``capture_channel`` leaves the channel gate off (issue #61), so an event with any
+    channel id is handled -- set it to exercise the gate.
     """
     ing = ingestor if ingestor is not None else FakeIngestor()
     qry = query_engine if query_engine is not None else FakeQueryEngine()
@@ -324,6 +338,7 @@ def _handlers(
         "ingestor": cast(Ingestor, ing),
         "query_engine": cast(QueryEngine, qry),
         "allowed_users": allowed,
+        "capture_channel": capture_channel,
     }
     if research is not None:
         kwargs["research"] = cast(ResearchEngine, research)
@@ -379,15 +394,27 @@ def test_is_allowed_only_for_listed_ids(config: Config) -> None:
     assert handlers.is_allowed("") is False
 
 
-def test_denied_user_neither_ingests_nor_queries(config: Config) -> None:
-    """A non-allowed sender triggers no ingest/query; a refusal is sent."""
+def test_denied_user_neither_ingests_nor_queries(
+    config: Config, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-allowed sender triggers no ingest/query; a refusal is sent in-thread."""
     handlers, ing, qry = _handlers(config)
     say = Recorder()
-    handlers.handle_message({"user": DENIED, "text": "what are my todos"}, say)
+    with caplog.at_level("INFO", logger="thoth.slack_app"):
+        handlers.handle_message(
+            {"user": DENIED, "text": "todos?", "channel": "D1", "ts": "7.1"}, say
+        )
     assert ing.captures == []
     assert qry.queries == []
     assert len(say.messages) == 1
     assert "not authorised" in say.messages[0].lower()
+    # The refusal is threaded under the offending message (issue #61), like every reply.
+    assert say.thread_ts[0] == "7.1"
+    # An operator-readable line names the rejected user + allow-list size (issue #52) so
+    # an unexpected "not authorised" is diagnosable from the logs.
+    refusals = [r for r in caplog.records if "slack refused message" in r.getMessage()]
+    assert len(refusals) == 1
+    assert DENIED in refusals[0].getMessage()
 
 
 # --------------------------------------------------------------------------------------
@@ -718,7 +745,12 @@ def test_free_text_without_gate_preserves_pre_gate_default(config: Config) -> No
 
 
 def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
-    """A follow-up 'y' files the previous blended answer as a notes/ page."""
+    """A follow-up 'y' *in the answer's thread* files the blended answer (issue #61).
+
+    The top-level "explain raft" message keys (and the bot replies in) thread ``10.1``;
+    the confirming "y" is a reply inside that thread (``thread_ts == "10.1"``), so it
+    confirms the offer made there.
+    """
     research = FakeResearch(saved_path="notes/explain-raft.md")
     handlers, _, _ = _handlers(config, research=research)
     say = Recorder()
@@ -726,7 +758,14 @@ def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
         {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "10.1"}, say
     )
     handlers.handle_message(
-        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "10.2"}, say
+        {
+            "user": ALLOWED,
+            "text": "y",
+            "channel": "D1",
+            "thread_ts": "10.1",
+            "ts": "10.2",
+        },
+        say,
     )
     # save_answer was called once, with the original question and the remembered result.
     assert len(research.saves) == 1
@@ -736,28 +775,69 @@ def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
     assert "|Explain Raft>" in say.messages[-1]
     assert ">: " not in say.messages[-1]  # title-only, no trailing path (issue #63)
     assert "[[" not in say.messages[-1]
-    # A second 'y' has nothing pending and falls through to a fresh ask (not a save).
+    # The save confirmation was posted back into the same thread.
+    assert say.thread_ts[-1] == "10.1"
+    # A second 'y' in-thread has nothing pending and falls through to a fresh ask.
     handlers.handle_message(
-        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "10.3"}, say
+        {
+            "user": ALLOWED,
+            "text": "y",
+            "channel": "D1",
+            "thread_ts": "10.1",
+            "ts": "10.3",
+        },
+        say,
     )
     assert len(research.saves) == 1
     assert research.asks == ["explain raft", "y"]
 
 
-def test_handle_message_confirm_save_is_per_channel(config: Config) -> None:
-    """A 'y' in a channel with no pending answer does not save another channel's."""
+def test_handle_message_confirm_save_is_per_thread(config: Config) -> None:
+    """A 'y' in a different thread does not save another thread's answer (issue #61).
+
+    This is the load-bearing fix: in one shared channel, channel-keying made a 'y' apply
+    to whatever the most recent answer was; thread-keying scopes it to its own topic.
+    """
     research = FakeResearch()
     handlers, _, _ = _handlers(config, research=research)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "11.1"}, say
     )
-    # 'y' arrives in a DIFFERENT channel: no pending answer there -> falls through.
+    # 'y' arrives in a DIFFERENT thread of the SAME channel: no pending there -> falls
+    # through (the wart the issue removes: it no longer clobbers thread 11.1's save).
     handlers.handle_message(
-        {"user": ALLOWED, "text": "y", "channel": "D2", "ts": "11.2"}, say
+        {
+            "user": ALLOWED,
+            "text": "y",
+            "channel": "D1",
+            "thread_ts": "99.9",
+            "ts": "11.2",
+        },
+        say,
     )
     assert research.saves == []
-    # D2's 'y' was treated as a fresh question instead.
+    # The stray 'y' was treated as a fresh question instead.
+    assert research.asks == ["explain raft", "y"]
+
+
+def test_handle_message_channel_level_y_does_not_confirm(config: Config) -> None:
+    """A channel-level 'y' (a new top-level message) does not confirm (issue #61).
+
+    The offer says reply *in this thread*; a top-level 'y' keys to its own ts, finds no
+    pending offer, and falls through to a fresh ask -- recoverable, never data-loss.
+    """
+    research = FakeResearch()
+    handlers, _, _ = _handlers(config, research=research)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "40.1"}, say
+    )
+    # A bare top-level 'y' (no thread_ts) keys by its own ts -> nothing pending there.
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "40.2"}, say
+    )
+    assert research.saves == []
     assert research.asks == ["explain raft", "y"]
 
 
@@ -770,7 +850,14 @@ def test_handle_message_save_rejection_is_fail_loud(config: Config) -> None:
         {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "12.1"}, say
     )
     handlers.handle_message(
-        {"user": ALLOWED, "text": "yes", "channel": "D1", "ts": "12.2"}, say
+        {
+            "user": ALLOWED,
+            "text": "yes",
+            "channel": "D1",
+            "thread_ts": "12.1",
+            "ts": "12.2",
+        },
+        say,
     )
     assert ":x:" in say.messages[-1]
     assert "invalid slug" in say.messages[-1]
@@ -806,18 +893,171 @@ def test_handle_message_ignores_bot_and_subtype(config: Config) -> None:
     handlers.handle_message(
         {"subtype": "message_changed", "text": "hi", "user": ALLOWED}, say
     )
+    # The thread-also-to-channel rebroadcast is a subtype too -> dropped.
+    handlers.handle_message(
+        {"subtype": "thread_broadcast", "text": "hi", "user": ALLOWED, "ts": "1.1"}, say
+    )
     assert ing.captures == []
     assert qry.queries == []
     assert say.messages == []
 
 
+# --------------------------------------------------------------------------------------
+# channel gate + thread-keyed replies (issue #61)
+# --------------------------------------------------------------------------------------
+
+
+def test_handle_message_ignores_other_channel(config: Config) -> None:
+    """A message outside SLACK_CAPTURE_CHANNEL is silently ignored (issue #61).
+
+    The bot may be invited to other channels (e.g. the alert channel); it must do no
+    work and send no reply -- not even a refusal -- for a message that is not in its one
+    dedicated capture channel.
+    """
+    handlers, ing, qry = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "channel": "C-OTHER", "ts": "1.1"},
+        say,
+    )
+    assert ing.captures == []
+    assert qry.queries == []
+    assert say.messages == []
+
+
+def test_handle_message_handles_the_capture_channel(config: Config) -> None:
+    """A message in the configured capture channel is routed normally (issue #61)."""
+    handlers, _, qry = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "channel": "C-CAP", "ts": "2.1"},
+        say,
+    )
+    assert qry.queries == ["what is exa?"]
+
+
+def test_denied_user_in_capture_channel_still_refused(config: Config) -> None:
+    """The allow-list still gates inside the capture channel (issue #61)."""
+    handlers, ing, qry = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        {"user": DENIED, "text": "what are my todos", "channel": "C-CAP", "ts": "3.1"},
+        say,
+    )
+    assert ing.captures == []
+    assert qry.queries == []
+    assert len(say.messages) == 1
+    assert "not authorised" in say.messages[0].lower()
+
+
+def test_top_level_reply_threads_under_the_message(config: Config) -> None:
+    """A top-level message's reply is threaded under its own ts (issue #61).
+
+    The placeholder posts with thread_ts == the message ts, so the whole capture/answer
+    exchange lives in a thread rooted at the originating message.
+    """
+    client = FakeSlackClient()
+    handlers, _, qry = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what is exa?", "channel": "C-CAP", "ts": "55.1"},
+        say,
+        client,
+    )
+    assert qry.queries == ["what is exa?"]
+    assert len(client.posts) == 1
+    assert client.posts[0]["channel"] == "C-CAP"
+    assert client.posts[0]["thread_ts"] == "55.1"  # rooted at the message ts
+
+
+def test_in_thread_reply_threads_under_the_root(config: Config) -> None:
+    """A reply inside a thread is answered in that same thread (issue #61)."""
+    client = FakeSlackClient()
+    handlers, _, qry = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        {
+            "user": ALLOWED,
+            "text": "and what about firecrawl?",
+            "channel": "C-CAP",
+            "thread_ts": "55.1",
+            "ts": "55.7",
+        },
+        say,
+        client,
+    )
+    assert qry.queries == ["and what about firecrawl?"]
+    assert client.posts[0]["thread_ts"] == "55.1"  # the thread root, not the reply ts
+
+
+def test_denied_user_in_other_channel_is_silently_ignored(config: Config) -> None:
+    """The channel gate fires BEFORE the allow-list (issue #61).
+
+    A non-allowed sender in a channel that is NOT the capture channel gets total silence
+    -- no refusal -- so the bot never leaks its presence/policy to outsiders in foreign
+    channels. If the allow-list were moved above the gate, the refusal text would leak.
+    """
+    handlers, ing, qry = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        {"user": DENIED, "text": "todos?", "channel": "C-OTHER", "ts": "9.1"}, say
+    )
+    assert ing.captures == []
+    assert qry.queries == []
+    assert say.messages == []  # no refusal -- the gate ran first
+
+
+def test_file_upload_outside_capture_channel_is_ignored(config: Config) -> None:
+    """A file_share outside the capture channel is dropped (gate sits above file_share).
+
+    The channel gate must precede the file_share dispatch (issue #61), so an upload in a
+    channel the bot was merely invited to is neither downloaded nor ingested.
+    """
+    client = FakeSlackClient(payload=b"PNGDATA")
+    handlers, ing, _ = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {"name": "x.png", "url_private_download": "https://files.slack.com/x.png"},
+            channel="C-OTHER",
+        ),
+        say,
+        client,
+    )
+    assert client.downloaded == []
+    assert ing.captures == []
+    assert say.messages == []
+
+
+def test_file_upload_in_capture_channel_ingests(config: Config) -> None:
+    """A file_share inside the capture channel still downloads + ingests (gate on)."""
+    client = FakeSlackClient(payload=b"PNGDATA")
+    handlers, ing, _ = _handlers(config, capture_channel="C-CAP")
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {
+                "name": "ok.png",
+                "url_private_download": "https://files.slack.com/ok.png",
+            },
+            channel="C-CAP",
+        ),
+        say,
+        client,
+    )
+    assert client.downloaded == ["https://files.slack.com/ok.png"]
+    assert len(ing.captures) == 1
+    assert ing.captures[0].path is not None
+    ing.captures[0].path.unlink()
+
+
 def test_captioned_upload_ingests_the_file_and_ignores_caption(config: Config) -> None:
     """A captioned image upload ingests the FILE once; the caption is ignored.
 
-    A DM file upload arrives as a ``message`` with subtype ``file_share`` carrying the
-    full ``files`` objects. handle_message downloads + ingests each file by path (never
-    base64) and never runs the caption as a query/ingest -- even a caption that looks
-    like a bare URL (which guards the cross-handler double-processing the SPEC
+    A channel file upload arrives as a ``message`` with subtype ``file_share`` carrying
+    the full ``files`` objects. handle_message downloads + ingests each file by path
+    (never base64) and never runs the caption as a query/ingest -- even a caption that
+    looks like a bare URL (which guards the cross-handler double-processing the SPEC
     closed-surface review flagged; the bare ``file_shared`` event is now a no-op).
     """
     handlers, ing, qry = _handlers(config)
@@ -1291,6 +1531,9 @@ def test_render_ask_result_combines_vault_and_web_with_offer() -> None:
     )
     assert "<https://example.com/raft|Raft>" in rendered
     assert "Save this answer" in rendered
+    # The offer directs the user to confirm IN THE THREAD (issue #61): a channel-level
+    # 'y' is a new top-level message and would not confirm.
+    assert "in this thread" in rendered
     assert "[[" not in rendered
     assert ">: " not in rendered  # no trailing path on any ref (issue #63)
 
@@ -1432,9 +1675,10 @@ def test_query_posts_placeholder_then_updates_it(config: Config) -> None:
         client,
     )
     assert qry.queries == ["what is exa?"]
-    # An immediate placeholder was posted to the channel...
+    # An immediate placeholder was posted to the channel, in the message's thread...
     assert len(client.posts) == 1
     assert client.posts[0]["channel"] == "D1"
+    assert client.posts[0]["thread_ts"] == "2.2"  # threaded under the message (#61)
     assert "Looking" in client.posts[0]["text"]
     # ...and the SAME message was edited in place with the final render (no 2nd post).
     assert len(client.updates) == 1
@@ -1476,6 +1720,9 @@ def test_feedback_falls_back_to_single_say_without_client(config: Config) -> Non
     assert qry.queries == ["what is exa?"]
     assert len(say.messages) == 1
     assert "Exa is a semantic search engine." in say.messages[0]
+    # The client-less final reply still threads under the message ts (issue #61): the
+    # bare-say fallback is the path production takes when no placeholder ts is captured.
+    assert say.thread_ts == ["2.2"]
 
 
 def test_feedback_falls_back_when_post_returns_no_ts(config: Config) -> None:
@@ -1491,9 +1738,10 @@ def test_feedback_falls_back_when_post_returns_no_ts(config: Config) -> None:
     # The placeholder still posted, but with no ts there is nothing to edit...
     assert len(client.posts) == 1
     assert client.updates == []
-    # ...so the answer came through the single-say fallback instead.
+    # ...so the answer came through the single-say fallback instead, still threaded.
     assert len(say.messages) == 1
     assert "Exa is a semantic search engine." in say.messages[0]
+    assert say.thread_ts == ["2.2"]
 
 
 def test_responder_finish_falls_back_when_update_raises() -> None:
@@ -1588,3 +1836,78 @@ def test_build_app_raises_clearly_without_slack_bolt(config: Config) -> None:
     )
     with pytest.raises(ImportError):
         build_app(cfg_with_tokens, ing, qry)
+
+
+def test_build_handlers_requires_capture_channel(config: Config) -> None:
+    """The Slack daemon fails fast at startup when SLACK_CAPTURE_CHANNEL is unset (#61).
+
+    The required-config checks run first in ``_build_handlers`` (before any collaborator
+    is built), so a missing capture channel raises ``ConfigError`` -- the wiring of the
+    pure cutover (no DM fallback), reachable in CI without ``slack_bolt``.
+    """
+    ing = cast(Ingestor, FakeIngestor())
+    qry = cast(QueryEngine, FakeQueryEngine())
+    # tokens present, SLACK_CAPTURE_CHANNEL deliberately unset
+    cfg = load_config(
+        {
+            "PKM_VAULT": "/x",
+            "SLACK_BOT_TOKEN": FAKE_TOKEN,
+            "SLACK_APP_TOKEN": FAKE_TOKEN,
+        }
+    )
+    with pytest.raises(ConfigError, match="SLACK_CAPTURE_CHANNEL"):
+        _build_handlers(cfg, ing, qry)
+
+
+def test_build_handlers_passes_capture_channel_through(tmp_path: Any) -> None:
+    """build_app's wiring forwards SLACK_CAPTURE_CHANNEL onto Handlers (issue #61).
+
+    Guards the load-bearing pass-through: if the ``capture_channel=`` argument were
+    dropped from the ``Handlers(...)`` construction the gate would silently default off
+    (listen everywhere). A tmp ``THOTH_HOME`` keeps the state DB out of the real home,
+    and an unset alert target keeps ``make_alerter`` from importing ``slack_sdk``.
+    """
+    ing = cast(Ingestor, FakeIngestor())
+    qry = cast(QueryEngine, FakeQueryEngine())
+    # No SLACK_ALLOWED_USERS / SLACK_ALERT_CHANNEL: alert_target() stays None, so
+    # make_alerter never builds a (slack_sdk) web client -- keeping this CI-safe.
+    cfg = load_config(
+        {
+            "PKM_VAULT": str(tmp_path / "vault"),
+            "THOTH_HOME": str(tmp_path / "home"),
+            "SLACK_BOT_TOKEN": FAKE_TOKEN,
+            "SLACK_APP_TOKEN": FAKE_TOKEN,
+            "SLACK_CAPTURE_CHANNEL": "C-CAP",
+        }
+    )
+    handlers, bot_token = _build_handlers(cfg, ing, qry)
+    assert handlers.capture_channel == "C-CAP"
+    assert bot_token == FAKE_TOKEN
+
+
+def test_build_handlers_allow_list_reads_config_not_environ(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The allow-list resolves from config even when SLACK_ALLOWED_USERS is unexported.
+
+    The dotenv-only / manual-launch path: a value present in ``~/.thoth/.env`` (hence in
+    the Config) but absent from ``os.environ`` must still populate the allow-list -- a
+    missing export must not silently empty it and deny everyone (issue #61). The web
+    client factory is stubbed so resolving an alert target skips the slack_sdk import.
+    """
+    monkeypatch.delenv("SLACK_ALLOWED_USERS", raising=False)
+    monkeypatch.setattr("thoth.alerts._make_web_client", lambda config: object())
+    ing = cast(Ingestor, FakeIngestor())
+    qry = cast(QueryEngine, FakeQueryEngine())
+    cfg = load_config(
+        {
+            "PKM_VAULT": str(tmp_path / "vault"),
+            "THOTH_HOME": str(tmp_path / "home"),
+            "SLACK_BOT_TOKEN": FAKE_TOKEN,
+            "SLACK_APP_TOKEN": FAKE_TOKEN,
+            "SLACK_CAPTURE_CHANNEL": "C-CAP",
+            "SLACK_ALLOWED_USERS": "U7",  # in config (as if from .env), not in environ
+        }
+    )
+    handlers, _ = _build_handlers(cfg, ing, qry)
+    assert handlers.allowed_users == frozenset({"U7"})

@@ -59,30 +59,33 @@ suite does the same round-trip through `thoth.hindsight.Hindsight`:
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k hindsight
 ```
 
-## 3. Slack -- Socket Mode connects and a DM round-trips capture+reply
+## 3. Slack -- Socket Mode connects and a channel post round-trips capture+reply
 
-This step assumes the Slack app already exists and the tokens are in `~/.thoth/.env`. If
-you have not created it yet, do {doc}`slack-setup` first (it creates the app from an
-embedded manifest, turns on Socket Mode, and lists the env vars thoth reads).
+This step assumes the Slack app already exists, the tokens are in `~/.thoth/.env`, and the
+bot has been `/invite`d to the private capture channel (`SLACK_CAPTURE_CHANNEL`). If you
+have not set that up yet, do {doc}`slack-setup` first (it creates the app from an embedded
+manifest, turns on Socket Mode, creates the channel, and lists the env vars thoth reads).
 
-Start the daemon and send a DM from an allow-listed account.
+Start the daemon, then post in the capture channel from an allow-listed account.
 
 ```console
 $ thoth slack
 ```
 
-Then, in Slack (from a `SLACK_ALLOWED_USERS` account), DM the bot:
+Then, in the capture channel (from a `SLACK_ALLOWED_USERS` account):
 
 ```text
-- [ ] DM "capture: first light test" -> bot replies with an obsidian:// link + [[wikilink]]
+- [ ] post "capture: first light test" -> bot replies IN A THREAD with an obsidian:// link
 - [ ] the page lands in the vault (check `git log` in /opt/pkm-vault)
-- [ ] DM "research: what is first light" -> bot replies and offers to save
+- [ ] post "research: what is first light" -> bot replies in-thread and offers to save
+- [ ] reply "y" IN THAT THREAD -> the answer is filed as a notes/ page
 - [ ] logs show "connected" (Socket Mode) and no auth errors
 ```
 
-Expected: a reply within a few seconds. A `ConfigError` for `SLACK_BOT_TOKEN` /
-`SLACK_APP_TOKEN` means the secrets are missing; silence usually means the app token lacks
-Socket Mode or the bot is not in the DM. Stop with `Ctrl-C` once the round-trip works.
+Expected: a threaded reply within a few seconds. A `ConfigError` for `SLACK_BOT_TOKEN` /
+`SLACK_APP_TOKEN` / `SLACK_CAPTURE_CHANNEL` means that variable is missing; silence usually
+means the app token lacks Socket Mode, the bot was not invited to the channel, or
+`SLACK_CAPTURE_CHANNEL` is not the channel you posted in. Stop with `Ctrl-C` once it works.
 
 ## 4. MCP -- the pkm_* tools list and one executes over stdio
 
