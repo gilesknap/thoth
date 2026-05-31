@@ -63,6 +63,7 @@ import frontmatter
 import yaml
 
 from thoth.config import Config
+from thoth.render import render_vault_ref
 from thoth.state import HEARTBEAT_MARKERS, MarkerStore
 from thoth.vault import CURATED_DIRS, Vault
 
@@ -161,7 +162,9 @@ class ActionItem:
     due_date: date | None
     """The parsed ``due_date``, or ``None`` when absent / malformed."""
     wikilink: str
-    """The ``[[actions/<slug>]]`` handle for the page."""
+    """The ``[[actions/<slug>]]`` handle (vault body content, not the Slack line)."""
+    obsidian_uri: str = ""
+    """The ``obsidian://`` deep link for the Slack digest line (issue #53)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +180,9 @@ class MediaItem:
     added: date | None
     """The date the item entered the backlog (``created``), or ``None`` if unknown."""
     wikilink: str
-    """The ``[[media/<slug>]]`` handle for the page."""
+    """The ``[[media/<slug>]]`` handle for the page (vault body content, not Slack)."""
+    obsidian_uri: str = ""
+    """The ``obsidian://`` deep link for the Slack digest line (issue #53)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +198,9 @@ class PageRef:
     updated: date | None
     """The newest of ``updated`` / ``created``, or ``None`` when both are absent."""
     wikilink: str
-    """The ``[[<slug>]]`` handle for the page (bare slug, Obsidian-resolved)."""
+    """The ``[[<slug>]]`` handle (bare slug, Obsidian-resolved; vault body content)."""
+    obsidian_uri: str = ""
+    """The ``obsidian://`` deep link for the Slack digest line (issue #53)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,6 +574,7 @@ class SummaryEngine:
                     priority=_str_field(meta.get("priority")),
                     due_date=_parse_date(meta.get("due_date")),
                     wikilink=f"[[{rel.removesuffix('.md')}]]",
+                    obsidian_uri=self._vault.obsidian_uri(rel),
                 )
             )
         return items
@@ -592,6 +600,7 @@ class SummaryEngine:
                 media_type=_str_field(meta.get("media_type")),
                 added=_parse_date(meta.get("created")),
                 wikilink=f"[[{rel.removesuffix('.md')}]]",
+                obsidian_uri=self._vault.obsidian_uri(rel),
             )
             pairs.append((item, _str_field(meta.get("status")) or ""))
         return pairs
@@ -616,6 +625,7 @@ class SummaryEngine:
                                 meta.get("updated") or meta.get("created")
                             ),
                             wikilink=f"[[{slug}]]",
+                            obsidian_uri=self._vault.obsidian_uri(rel),
                         ),
                         meta,
                     )
@@ -673,15 +683,23 @@ class SummaryEngine:
         return sorted(counts.items())
 
     def _grouped_recent_lines(self, refs: Sequence[PageRef]) -> list[str]:
-        """Render recent pages as one line per page, grouped (sorted) by type."""
+        """Render recent pages as one concise shared ref per page, grouped by type.
+
+        Each line is ``type: <obsidian-uri|title>: path`` via the one shared
+        :func:`thoth.render.render_vault_ref` helper (#53) -- a clickable title, no dead
+        ``[[wikilink]]``.
+        """
         lines: list[str] = []
         for ref in sorted(refs, key=lambda r: (r.page_type, r.path)):
             label = ref.page_type or "page"
-            lines.append(f"{label}: {ref.title} {ref.wikilink}")
+            shared = render_vault_ref(
+                obsidian_uri=ref.obsidian_uri, title=ref.title, path=ref.path
+            )
+            lines.append(f"{label}: {shared}")
         return lines
 
     def _action_line(self, item: ActionItem, bucket: str) -> str:
-        """Render one action line with its bucket flag and due/priority detail."""
+        """Render one action line: bucket flag + due/priority + the shared ref (#53)."""
         flag = {"Overdue": "[overdue]", "Today": "[today]"}.get(bucket, f"[{bucket}]")
         due = (
             "due today"
@@ -691,19 +709,27 @@ class SummaryEngine:
             else "no due date"
         )
         prio = f", {item.priority}" if item.priority else ""
-        return f"{flag} {item.title} ({due}{prio}) {item.wikilink}"
+        ref = render_vault_ref(
+            obsidian_uri=item.obsidian_uri, title=item.title, path=item.path
+        )
+        return f"{flag} ({due}{prio}) {ref}"
 
     @staticmethod
     def _media_line(item: MediaItem) -> str:
-        """Render one media-backlog nudge line."""
+        """Render one media-backlog nudge line with the shared ref (issue #53)."""
         kind = f" ({item.media_type})" if item.media_type else ""
         added = f" - added {item.added.isoformat()}" if item.added is not None else ""
-        return f"{item.title}{kind}{added} {item.wikilink}"
+        ref = render_vault_ref(
+            obsidian_uri=item.obsidian_uri, title=item.title, path=item.path
+        )
+        return f"{ref}{kind}{added}"
 
     @staticmethod
     def _review_line(ref: PageRef) -> str:
-        """Render one review-flagged page line."""
-        return f"{ref.title} {ref.wikilink}"
+        """Render one review-flagged page line as the shared ref (issue #53)."""
+        return render_vault_ref(
+            obsidian_uri=ref.obsidian_uri, title=ref.title, path=ref.path
+        )
 
     @staticmethod
     def _section(heading: str, lines: Sequence[str]) -> str:

@@ -558,6 +558,8 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
         harness.vault.obsidian_uri("notes/transformer-models.md")
     ]
     assert report.wikilinks == ["[[transformer-models]]"]
+    # Per-page title plumbed through for the concise Slack ref (issue #53).
+    assert report.titles == ["Transformer Models"]
 
     # Committed to the local origin.
     assert report.committed is True
