@@ -80,7 +80,7 @@ TOOL_NAMES: tuple[str, ...] = (
 """The exact tools :func:`build_server` registers (one per ``pkm_*`` function)."""
 
 # The offer-to-save affordance appended to a blended answer (SPEC section 7.1 step 4):
-# the model/host can call pkm_save_answer to file the answer as a queries/ page.
+# the model/host can call pkm_save_answer to file the answer as a notes/ page.
 _SAVE_OFFER_TEXT: str = (
     "_To keep this, call pkm_save_answer with the question and this answer "
     "(plus any web source URLs)._"
@@ -174,7 +174,7 @@ def _render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
 
     When ``offer_save`` is set (and the answer is non-empty) the offer-to-save line is
     appended, surfacing the :func:`pkm_save_answer` affordance (SPEC section 7.1 step 4)
-    so the host can file the answer as a ``queries/`` page on confirmation.
+    so the host can file the answer as a ``notes/`` page on confirmation.
     """
     lines = [result.answer.strip()]
     if result.vault_citations or result.web_citations:
@@ -413,7 +413,7 @@ def pkm_save_answer(
     vault_paths: list[str] | None = None,
     slug: str | None = None,
 ) -> ToolResult:
-    """File a previously-given blended answer as a ``queries/<slug>.md`` page.
+    """File a previously-given blended answer as a ``notes/<slug>.md`` page.
 
     This closes the offer-to-save loop (SPEC section 7.1 step 4): the host calls it
     after a :func:`pkm_ask` answer the user wants to keep. It reconstructs an
@@ -422,7 +422,7 @@ def pkm_save_answer(
     :class:`~thoth.query.Citation` via the query engine -- a path that does not resolve
     is silently dropped, never fabricated), then writes the page through the validated
     :meth:`~thoth.research.ResearchEngine.save_answer` (which confines the path to
-    ``queries/`` and validates the slug). A :class:`~thoth.research.ResearchError` (bad
+    ``notes/`` and validates the slug). A :class:`~thoth.research.ResearchError` (bad
     slug or vault rejection) is surfaced as ``ToolResult(ok=False, ...)``; nothing is
     written on rejection.
 
@@ -708,7 +708,7 @@ def build_server(ctx: ToolContext) -> Any:
         vault_paths: list[str] | None = None,
         slug: str | None = None,
     ) -> ToolResult:
-        """File a previously-given blended answer as a queries/ page."""
+        """File a previously-given blended answer as a notes/ page."""
         return pkm_save_answer(
             ctx,
             question=question,

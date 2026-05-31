@@ -96,7 +96,8 @@ the real note in their own Obsidian.
 2. Pull the vault first (pull --rebase).
 3. Immutable sources (uploaded articles/papers/transcripts/images) go to `raw/`
    (images to `raw/assets/`). Write the curated, cross-linked page in the right
-   layer (entities / concepts / comparisons / queries) per SCHEMA.md.
+   flat folder (`notes/`, `actions/`, `memories/`, or `raw/`) per SCHEMA.md;
+   curated knowledge — including saved answers — lands in `notes/`.
 4. Life-admin items (Actions/TODOs, media backlog, memories) are wiki pages with a
    frontmatter `type:` — never a rival folder tree. Set due/recurrence/priority on
    Actions from natural language.
