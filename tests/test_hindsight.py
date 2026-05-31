@@ -250,6 +250,28 @@ def test_parse_recall_prefers_the_rel_tag_over_the_sentinel() -> None:
     assert all(isinstance(h, RecallHit) for h in hits)
 
 
+def test_parse_recall_recovers_the_page_type_tag() -> None:
+    """Each hit carries its page-type tag (the non-path tag) for scoping (#40)."""
+    stdout = _json_recall(
+        {"text": "Foo.", "tags": ["entity", "entities/foo.md"]},
+        {"text": "A memory.", "tags": ["memory", "memories/wifi.md"]},
+        {"text": "typed.", "tags": ["type:concept", "concepts/bar.md"]},
+    )
+    hits = parse_recall(stdout)
+    assert [(h.path, h.page_type) for h in hits] == [
+        ("entities/foo.md", "entity"),
+        ("memories/wifi.md", "memory"),
+        ("concepts/bar.md", "concept"),
+    ]
+
+
+def test_parse_recall_page_type_is_empty_when_only_a_path_tag() -> None:
+    """A hit with no bare type token leaves page_type empty (no spurious match)."""
+    stdout = _json_recall({"text": "x", "tags": ["entities/foo.md"]})
+    hits = parse_recall(stdout)
+    assert hits[0].page_type == ""
+
+
 def test_parse_recall_accepts_rel_prefixed_tags_and_dict_tags() -> None:
     """Both `rel:<path>` string tags and a {'rel': <path>} mapping are honoured."""
     prefixed = _json_recall({"text": "fact", "tags": ["entity", "rel:entities/foo.md"]})
@@ -453,6 +475,45 @@ def test_recall_caps_results_client_side_to_limit(config: Config) -> None:
     # Three hits parsed, but the client-side cap keeps only the first two (in order).
     assert "--limit" not in runner.last
     assert [h.path for h in hits] == ["entities/a.md", "concepts/b.md"]
+
+
+def test_recall_scopes_by_page_type_when_types_given(config: Config) -> None:
+    """``types`` keeps only hits whose page_type tag is in the set (ADR 0004, #40)."""
+    runner = RecordingRunner(
+        stdout=_json_recall(
+            {"text": "a", "tags": ["entity", "entities/a.md"]},
+            {"text": "m", "tags": ["memory", "memories/m.md"]},
+            {"text": "c", "tags": ["concept", "concepts/c.md"]},
+        )
+    )
+    hs = _make(config, runner)
+
+    knowledge = hs.recall("q", types=frozenset({"entity", "concept"}))
+    assert [h.path for h in knowledge] == ["entities/a.md", "concepts/c.md"]
+
+    memories = hs.recall("q", types=frozenset({"memory"}))
+    assert [h.path for h in memories] == ["memories/m.md"]
+
+    # No filter -> every hit, regardless of type (the "search everything" default).
+    assert [h.path for h in hs.recall("q")] == [
+        "entities/a.md",
+        "memories/m.md",
+        "concepts/c.md",
+    ]
+
+
+def test_recall_filters_by_type_before_the_limit_cap(config: Config) -> None:
+    """The type scope is applied before truncation, so the cap counts kept hits only."""
+    runner = RecordingRunner(
+        stdout=_json_recall(
+            {"text": "m1", "tags": ["memory", "memories/m1.md"]},
+            {"text": "e", "tags": ["entity", "entities/e.md"]},
+            {"text": "m2", "tags": ["memory", "memories/m2.md"]},
+        )
+    )
+    hs = _make(config, runner)
+    hits = hs.recall("q", limit=2, types=frozenset({"memory"}))
+    assert [h.path for h in hits] == ["memories/m1.md", "memories/m2.md"]
 
 
 def test_recall_empty_json_returns_empty_and_does_not_raise(config: Config) -> None:

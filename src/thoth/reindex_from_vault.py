@@ -60,7 +60,7 @@ from thoth.hindsight import (
 )
 from thoth.hindsight import base_args as default_base_args
 from thoth.state import MARKER_REINDEX, MarkerStore
-from thoth.vault import KNOWLEDGE_DIRS, Vault
+from thoth.vault import KNOWLEDGE_DIRS, LIFE_ADMIN_DIRS, Vault
 
 __all__ = [
     "INDEXED_DIRS",
@@ -74,16 +74,29 @@ __all__ = [
     "page_type",
 ]
 
-INDEXED_DIRS: tuple[str, ...] = KNOWLEDGE_DIRS
-"""The curated knowledge folders the reindex walks (SPEC section 8).
+# ADR 0004: ``inbox/`` is the transient deferred-capture holding area -- uncurated,
+# churny, and removed once curation succeeds -- so it stays out of the index like
+# ``raw/``; embedding either is a separate chunking-strategy question (issue #40).
+_UNINDEXED_LIFE_ADMIN_DIRS: frozenset[str] = frozenset({"inbox"})
 
-Derived from the single canonical :data:`thoth.vault.KNOWLEDGE_DIRS` (issue #19) so the
-fact-bearing folder vocabulary lives in exactly one place; this is an alias, never a
-restated copy.
+INDEXED_DIRS: tuple[str, ...] = (
+    *KNOWLEDGE_DIRS,
+    *(d for d in LIFE_ADMIN_DIRS if d not in _UNINDEXED_LIFE_ADMIN_DIRS),
+)
+"""The curated folders the reindex walks (SPEC section 8; ADR 0004).
 
-``raw/`` is immutable source bytes; navigational/meta files are structure, not facts;
-the underscore directories (``_bases/``, ``_meta/``, ``_archive/``) are excluded from
-the index. Only these four fact-bearing folders are scoped in.
+Per ADR 0004, the index covers **both** the fact-bearing knowledge folders
+(:data:`thoth.vault.KNOWLEDGE_DIRS`) **and** the life-admin folders
+(:data:`thoth.vault.LIFE_ADMIN_DIRS`: ``actions``/``media``/``memories``/``people``), so
+"have I ever noted anything about X?" reaches memories and actions too. Recall precision
+for knowledge Q&A is preserved by **scoping recall on the ``page_type`` tag** at query
+time (see :meth:`thoth.query.QueryEngine.recall_paths`), not by excluding folders here.
+Both lists stay canonical in :mod:`thoth.vault` so the vocabulary lives in one place.
+
+``inbox/`` (transient deferred-capture holding) and ``raw/`` (immutable, often-long
+source bytes needing a chunking strategy Hindsight does not do) remain excluded;
+navigational/meta and the underscore directories (``_bases/``/``_meta/``/``_archive/``)
+are structure, not facts, and are never walked.
 """
 
 SKIP_FILES: frozenset[str] = frozenset({"SCHEMA.md", "index.md", "log.md"})

@@ -36,7 +36,7 @@ from pathlib import Path, PurePosixPath
 from thoth.config import Config
 from thoth.hindsight import Hindsight
 from thoth.llm import LLM, Message, extract_text
-from thoth.vault import Vault, VaultError
+from thoth.vault import KNOWLEDGE_TYPES, Vault, VaultError
 
 __all__ = [
     "SEARCHED_DIRS",
@@ -349,7 +349,13 @@ class QueryEngine:
 
     # ---- pass 4: semantic recall ------------------------------------------------
 
-    def recall_paths(self, query: str, *, limit: int = 10) -> list[str]:
+    def recall_paths(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        types: frozenset[str] | None = KNOWLEDGE_TYPES,
+    ) -> list[str]:
         """Semantic recall via Hindsight, keeping only hits that resolve to real pages.
 
         Calls :meth:`Hindsight.recall` and returns the ``RecallHit.path`` values, but
@@ -358,9 +364,18 @@ class QueryEngine:
         exists (or a path that would escape the vault): such hits are dropped rather
         than fabricated into a citation. Order is preserved, duplicates removed.
 
+        Recall is **scoped to knowledge types by default** (ADR 0004): the index now
+        also holds life-admin pages (memories, actions, ...), so knowledge Q&A filters
+        to :data:`~thoth.vault.KNOWLEDGE_TYPES` to keep the precision it had when only
+        knowledge was indexed. A caller wanting life-admin recall (e.g. "search my
+        memories", idea-mining #37) passes a different ``types`` set, or ``None`` to
+        search everything.
+
         Args:
             query: The natural-language query passed to Hindsight.
             limit: Maximum number of recall hits to request.
+            types: The page-type domain scope forwarded to :meth:`Hindsight.recall`;
+                defaults to knowledge types, ``None`` searches all indexed content.
 
         Returns:
             Vault-relative paths from recall that exist on disk, ordered and deduped.
@@ -369,7 +384,7 @@ class QueryEngine:
             return []
         kept: list[str] = []
         seen: set[str] = set()
-        for hit in self._hindsight.recall(query, limit=limit):
+        for hit in self._hindsight.recall(query, limit=limit, types=types):
             path = hit.path
             if path in seen:
                 continue

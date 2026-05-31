@@ -178,10 +178,15 @@ class _FakeHindsight(Hindsight):
         self.hits: list[RecallHit] = [] if hits is None else hits
         self.recall_calls: list[tuple[str, int]] = []
 
-    def recall(self, query: str, *, limit: int = 10) -> list[RecallHit]:
-        """Record the call and return the canned hits (truncated to ``limit``)."""
+    def recall(
+        self, query: str, *, limit: int = 10, types: frozenset[str] | None = None
+    ) -> list[RecallHit]:
+        """Record the call and return the canned hits (type-scoped, truncated)."""
         self.recall_calls.append((query, limit))
-        return self.hits[:limit]
+        hits = self.hits
+        if types is not None:
+            hits = [hit for hit in hits if hit.page_type in types]
+        return hits[:limit]
 
 
 class _FakeMessages:
@@ -416,8 +421,16 @@ def test_follow_wikilinks_respects_limit(engine: QueryEngine) -> None:
 def test_recall_paths_keeps_only_real_pages(config: Config, vault: Vault) -> None:
     """Recall hits whose SOURCE path does not resolve to a real page are dropped."""
     hits = [
-        RecallHit(path="entities/program-motion-controller.md", text="SOURCE: ..."),
-        RecallHit(path="entities/ghost.md", text="SOURCE: entities/ghost.md"),
+        RecallHit(
+            path="entities/program-motion-controller.md",
+            text="SOURCE: ...",
+            page_type="entity",
+        ),
+        RecallHit(
+            path="entities/ghost.md",
+            text="SOURCE: entities/ghost.md",
+            page_type="entity",
+        ),
     ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
@@ -428,9 +441,17 @@ def test_recall_paths_keeps_only_real_pages(config: Config, vault: Vault) -> Non
 def test_recall_paths_drops_paths_outside_vault(config: Config, vault: Vault) -> None:
     """A poisoned SOURCE path escaping the vault is dropped before it can be cited."""
     hits = [
-        RecallHit(path="../../etc/passwd", text="SOURCE: ../../etc/passwd"),
-        RecallHit(path="/etc/passwd", text="SOURCE: /etc/passwd"),
-        RecallHit(path="concepts/distributed-systems.md", text="SOURCE: ok"),
+        RecallHit(
+            path="../../etc/passwd",
+            text="SOURCE: ../../etc/passwd",
+            page_type="entity",
+        ),
+        RecallHit(path="/etc/passwd", text="SOURCE: /etc/passwd", page_type="entity"),
+        RecallHit(
+            path="concepts/distributed-systems.md",
+            text="SOURCE: ok",
+            page_type="concept",
+        ),
     ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
@@ -441,13 +462,48 @@ def test_recall_paths_dedupes_preserving_order(config: Config, vault: Vault) -> 
     """Duplicate recall hits collapse to the first occurrence."""
     page = "concepts/distributed-systems.md"
     hits = [
-        RecallHit(path=page, text="a"),
-        RecallHit(path="entities/drive-control-module.md", text="b"),
-        RecallHit(path=page, text="c"),
+        RecallHit(path=page, text="a", page_type="concept"),
+        RecallHit(
+            path="entities/drive-control-module.md", text="b", page_type="entity"
+        ),
+        RecallHit(path=page, text="c", page_type="concept"),
     ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
     assert engine.recall_paths("x") == [page, "entities/drive-control-module.md"]
+
+
+def test_recall_paths_scopes_to_knowledge_by_default(
+    config: Config, vault: Vault
+) -> None:
+    """Recall is knowledge-scoped by default; life-admin needs an explicit scope (#40).
+
+    The index now holds life-admin pages too (ADR 0004), so knowledge Q&A must filter to
+    knowledge types to keep its precision. A caller can widen the scope explicitly.
+    """
+    (vault.root / "memories" / "wifi-password.md").write_text(
+        _page(title="Wifi", page_type="memory", body="hunter2", tags="[secret]"),
+        encoding="utf-8",
+    )
+    hits = [
+        RecallHit(
+            path="concepts/distributed-systems.md", text="x", page_type="concept"
+        ),
+        RecallHit(path="memories/wifi-password.md", text="y", page_type="memory"),
+    ]
+    engine = QueryEngine(config, vault, _FakeHindsight(config, hits=hits))
+
+    # Default: only the knowledge hit survives (the memory is filtered out).
+    assert engine.recall_paths("q") == ["concepts/distributed-systems.md"]
+    # Explicit life-admin scope returns the memory page.
+    assert engine.recall_paths("q", types=frozenset({"memory"})) == [
+        "memories/wifi-password.md"
+    ]
+    # No scope ("search everything") returns both, in order.
+    assert engine.recall_paths("q", types=None) == [
+        "concepts/distributed-systems.md",
+        "memories/wifi-password.md",
+    ]
 
 
 def test_recall_paths_empty_limit(engine: QueryEngine) -> None:
@@ -482,7 +538,9 @@ def test_answer_use_recall_false_never_calls_hindsight(
     config: Config, vault: Vault
 ) -> None:
     """use_recall=False keeps the path structural-only: recall is never consulted."""
-    hits = [RecallHit(path="concepts/distributed-systems.md", text="x")]
+    hits = [
+        RecallHit(path="concepts/distributed-systems.md", text="x", page_type="concept")
+    ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
     # A query that grep cannot satisfy would normally fall through to recall.
@@ -495,7 +553,9 @@ def test_answer_falls_back_to_recall_and_sets_flag(
     config: Config, vault: Vault
 ) -> None:
     """A phrasing-independent query with no lexical hit is answered via recall."""
-    hits = [RecallHit(path="concepts/distributed-systems.md", text="x")]
+    hits = [
+        RecallHit(path="concepts/distributed-systems.md", text="x", page_type="concept")
+    ]
     hindsight = _FakeHindsight(config, hits=hits)
     engine = QueryEngine(config, vault, hindsight)
     result = engine.answer("zzzznolexicalmatch", max_pages=3)

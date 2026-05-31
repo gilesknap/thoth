@@ -240,9 +240,14 @@ class _FakeHindsight(Hindsight):
         super().__init__(config)
         self._hits = hits if hits is not None else []
 
-    def recall(self, query: str, *, limit: int = 10) -> list[RecallHit]:
-        """Return the canned hits (truncated to ``limit``)."""
-        return self._hits[:limit]
+    def recall(
+        self, query: str, *, limit: int = 10, types: frozenset[str] | None = None
+    ) -> list[RecallHit]:
+        """Return the canned hits (type-scoped, truncated to ``limit``)."""
+        hits = self._hits
+        if types is not None:
+            hits = [hit for hit in hits if hit.page_type in types]
+        return hits[:limit]
 
 
 # --- fixtures ----------------------------------------------------------------------
