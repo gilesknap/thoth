@@ -383,8 +383,13 @@ def test_recent_pages_grouped_and_counted_by_type_in_daily(
     engine = _engine(vault, config)
     daily = engine.daily_digest()
     assert "INGESTED YESTERDAY (3)" in daily.text
-    assert "note: Concept A" in daily.text
-    assert "entity: Entity C" in daily.text
+    assert "note: <obsidian://open?vault=pkm-vault&file=notes%2Fa.md|Concept A>" in (
+        daily.text
+    )
+    assert (
+        "entity: <obsidian://open?vault=pkm-vault&file=entities%2Fc.md|Entity C>"
+        in (daily.text)
+    )
     # type grouping: the two notes are adjacent (grouped under one type) in the block.
     assert daily.text.index("Concept A") < daily.text.index("Concept B")
 
@@ -423,8 +428,8 @@ def test_media_backlog_only_to_consume_oldest_first(
     assert "actions/consumed.md" not in {m.path for m in backlog}
 
 
-def test_daily_surfaces_media_nudge_with_wikilink(vault: Vault, config: Config) -> None:
-    """The daily MEDIA BACKLOG carries an [[actions/...]] wikilink, capped at 2."""
+def test_daily_surfaces_media_nudge_with_link(vault: Vault, config: Config) -> None:
+    """The daily MEDIA BACKLOG carries a clickable obsidian link, capped at 2 (#53)."""
     _media(
         vault,
         "ddia",
@@ -437,9 +442,12 @@ def test_daily_surfaces_media_nudge_with_wikilink(vault: Vault, config: Config) 
     engine = _engine(vault, config)
     daily = engine.daily_digest()
     assert "MEDIA BACKLOG" in daily.text
-    assert "[[actions/ddia]]" in daily.text
+    # The nudge is a clickable obsidian link, not a dead wikilink.
+    assert "actions%2Fddia.md" in daily.text
+    assert "Designing Data-Intensive Applications" in daily.text
+    assert "[[" not in daily.text
     # capped at two nudges
-    assert "[[actions/third]]" not in daily.text
+    assert "Third" not in daily.text
 
 
 def test_media_item_dataclass_has_no_status_field() -> None:
@@ -499,7 +507,10 @@ def test_review_flagged_appears_in_daily(vault: Vault, config: Config) -> None:
     engine = _engine(vault, config)
     daily = engine.daily_digest()
     assert "FLAGGED FOR REVIEW" in daily.text
-    assert "[[distributed]]" in daily.text
+    # The flagged page is a clickable obsidian link, not a dead wikilink (issue #53).
+    assert "notes%2Fdistributed.md" in daily.text
+    assert "Distributed Systems" in daily.text
+    assert "[[" not in daily.text
 
 
 # --------------------------------------------------------------------------------------
@@ -541,7 +552,9 @@ def test_weekly_counts_status_deadlines_and_review(
     assert "Soon" in weekly.text
     assert "Far" not in weekly.text  # outside 7-day window
     assert "SUGGESTED REVIEW" in weekly.text
-    assert "[[flag]]" in weekly.text
+    # Review suggestion is a clickable obsidian link, not a dead wikilink (issue #53).
+    assert "notes%2Fflag.md" in weekly.text
+    assert "[[" not in weekly.text
 
 
 def test_weekly_next_week_includes_seven_day_edge(vault: Vault, config: Config) -> None:
@@ -848,6 +861,17 @@ def test_dataclasses_are_frozen() -> None:
         ref.title = "Y"  # type: ignore[misc]
     with pytest.raises(AttributeError):
         digest.text = "z"  # type: ignore[misc]
+
+
+def test_digests_emit_no_dead_wikilinks(vault: Vault, config: Config) -> None:
+    """No Slack digest line leaks an un-clickable [[wikilink]] (issue #53)."""
+    _curated(vault, "notes", "c1", title="C1", page_type="note", updated="2026-05-29")
+    _action(vault, "soon", title="Soon", due_date="2026-06-02")
+    _media(vault, "ddia", title="DDIA", created="2026-05-20")
+    _curated(vault, "notes", "flag", title="Flag", page_type="note", review="true")
+    engine = _engine(vault, config)
+    assert "[[" not in engine.daily_digest().text
+    assert "[[" not in engine.weekly_digest().text
 
 
 def test_summary_error_is_exception() -> None:

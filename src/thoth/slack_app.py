@@ -13,7 +13,7 @@ sends **bare free text** through a lightweight intent gate
 (:class:`~thoth.intent.IntentClassifier`, issue #5) that picks capture / vault-query /
 blended ask -- falling back to the pre-gate default (blended ask, or vault-only query
 when no research engine is injected) when no classifier is wired. It offers to save a
-blended answer as a ``queries/`` page on a follow-up "y", and replies in Slack
+blended answer as a ``notes/`` page on a follow-up "y", and replies in Slack
 ``mrkdwn``.
 
 Design constraints enforced here:
@@ -26,9 +26,10 @@ Design constraints enforced here:
 * This module **never builds an** ``obsidian://`` **link itself**. Links are built by
   the harness (``Vault.obsidian_uri`` via the query/ingest layers) and arrive already
   formed on :class:`~thoth.query.Citation` and :class:`~thoth.ingest.IngestReport`; the
-  renderers here only format those unfabricable values. Per the SPEC Appendix, every
-  citation also carries the plain vault-relative path and ``[[wikilink]]`` so a host
-  that will not make the custom scheme clickable still shows a usable reference.
+  renderers here only format those unfabricable values. Every Slack reference is
+  rendered through the one shared :func:`thoth.render.render_vault_ref` helper (#53) as
+  a clickable ``<obsidian-uri|title>`` link plus the plain vault-relative path; the dead
+  ``[[wikilink]]`` (un-clickable in Slack) is deliberately dropped from Slack output.
 * File uploads are downloaded **server-side** to a temporary file and handed to the
   ingestor as :class:`~thoth.ingest.Capture` with a ``path`` -- never as base64
   (SPEC section 6 capture note). A non-allowed user is rejected before any download.
@@ -60,6 +61,7 @@ from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.intent import IntentClassifier
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
+from thoth.render import render_vault_ref
 from thoth.research import (
     AskResult,
     ResearchEngine,
@@ -147,13 +149,14 @@ def _strip_user_wrapper(token: str) -> str:
 
 
 def render_citation(citation: Citation) -> str:
-    """Render one citation as ``mrkdwn``: link, plain path, and ``[[wikilink]]``.
+    """Render one citation as the concise shared Slack reference (issue #53).
 
-    Emits ``<obsidian-uri|title>`` (the Slack link form), then the plain vault-relative
-    path and the ``[[wikilink]]`` on the same line so the reference is still usable when
-    a host will not make the custom scheme clickable (SPEC Appendix). The link target
-    is taken verbatim from the harness-built :class:`~thoth.query.Citation`; this
-    function never constructs an ``obsidian://`` URI itself.
+    Delegates to :func:`thoth.render.render_vault_ref`, emitting
+    ``<obsidian-uri|title>: path`` -- a clickable title over the harness-built
+    ``obsidian://`` link, then the plain vault-relative path. The link target is taken
+    verbatim from the :class:`~thoth.query.Citation`; this function never constructs an
+    ``obsidian://`` URI itself, and the dead ``[[wikilink]]`` is no longer shown (it is
+    un-clickable in Slack).
 
     Args:
         citation: A harness-built citation handle.
@@ -161,8 +164,11 @@ def render_citation(citation: Citation) -> str:
     Returns:
         A single ``mrkdwn`` line for the citation.
     """
-    label = citation.title or citation.path
-    return f"<{citation.obsidian_uri}|{label}> - `{citation.path}` {citation.wikilink}"
+    return render_vault_ref(
+        obsidian_uri=citation.obsidian_uri,
+        title=citation.title or citation.path,
+        path=citation.path,
+    )
 
 
 def render_query_result(result: QueryResult) -> str:
@@ -170,8 +176,8 @@ def render_query_result(result: QueryResult) -> str:
 
     The answer prose comes first, followed by a ``Sources:`` list with one
     :func:`render_citation` line per cited page (SPEC Appendix worked example). When the
-    answer has no citations a short "no sources" note is appended so the reply never
-    silently implies a fabricated source.
+    answer has no citations the prose stands alone -- no trailing note is added (issue
+    #53).
 
     Args:
         result: The query result to render.
@@ -184,9 +190,6 @@ def render_query_result(result: QueryResult) -> str:
         lines.append("")
         lines.append("*Sources:*")
         lines.extend(f"- {render_citation(c)}" for c in result.citations)
-    else:
-        lines.append("")
-        lines.append("_No vault sources cited._")
     return "\n".join(lines)
 
 
@@ -196,9 +199,9 @@ def render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
     The prose answer comes first, then a ``Sources:`` list combining the harness-built
     vault citations (:func:`render_citation`) and the web URLs the model actually read.
     When ``offer_save`` is set (and the answer is non-empty), the offer-to-save line is
-    appended so the user can file the answer as a ``queries/`` page with a one-word
-    reply. Web citations are plain URLs; vault citations carry the unfabricable
-    ``obsidian://`` link, plain path, and ``[[wikilink]]``.
+    appended so the user can file the answer as a ``notes/`` page with a one-word reply.
+    Both vault and web citations use the one concise shared shape (issue #53): a vault
+    citation is ``<obsidian-uri|title>: path`` and a web citation ``<url|title>: url``.
 
     Args:
         result: The blended answer to render.
@@ -213,8 +216,10 @@ def render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
         lines.append("*Sources:*")
         lines.extend(f"- {render_citation(c)}" for c in result.vault_citations)
         for web in result.web_citations:
-            label = web.title or web.url
-            lines.append(f"- <{web.url}|{label}> - {web.url}")
+            ref = render_vault_ref(
+                obsidian_uri=web.url, title=web.title or web.url, path=web.url
+            )
+            lines.append(f"- {ref}")
     if offer_save:
         lines.append("")
         lines.append(_SAVE_OFFER_TEXT)
@@ -224,10 +229,12 @@ def render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
 def render_ingest_report(report: IngestReport) -> str:
     """Render a one-to-two-line capture confirmation in ``mrkdwn``.
 
-    Names what was filed (the page paths, or raw/asset paths when no curated page was
-    written) and lists every harness-built ``obsidian://`` link and ``[[wikilink]]`` the
-    report carries (SPEC step 8). A :attr:`~thoth.ingest.IngestReport.conflict` is
-    surfaced fail-loud (SPEC section 10) with the conflicting path, never swallowed. A
+    Names what was filed and renders one concise shared reference per curated page
+    (issue #53): a ``Filed N page(s):`` header followed by an ``<obsidian-uri|title>:
+    path`` line per page (so the path is shown once, not twice). When no curated page
+    was written the header names the raw/asset paths directly. A
+    :attr:`~thoth.ingest.IngestReport.conflict` is surfaced fail-loud (SPEC section 10)
+    with the conflicting path, never swallowed. A
     :attr:`~thoth.ingest.IngestReport.deferred` capture (raw persisted but the LLM was
     unavailable for curation) is surfaced as a partial-success note naming the held raw
     page, so the user knows the item is safe and will be re-curated (SPEC section 6).
@@ -248,25 +255,33 @@ def render_ingest_report(report: IngestReport) -> str:
         note = report.message or "curation deferred -- LLM unavailable"
         return f":hourglass_flowing_sand: Saved raw to {where}. {note}"
 
-    filed = report.page_paths or report.raw_paths or report.asset_paths
-    if filed:
-        head = "Filed " + ", ".join(f"`{path}`" for path in filed)
+    parts: list[str] = []
+    if report.page_paths:
+        count = len(report.page_paths)
+        head = f"Filed {count} page(s):"
+        if not report.committed:
+            head += " (not yet committed)"
+        parts.append(head)
+        # One concise <uri|title>: path ref per curated page; the path is shown here,
+        # not duplicated on the header. ``titles`` runs parallel to page_paths /
+        # obsidian_links (the slug-derived title is filled in upstream when missing).
+        for path, uri, title in zip(
+            report.page_paths,
+            report.obsidian_links,
+            report.titles,
+            strict=False,
+        ):
+            parts.append(render_vault_ref(obsidian_uri=uri, title=title, path=path))
     else:
-        head = "Nothing new to file"
-    if not report.committed:
-        head += " (not yet committed)"
+        filed = report.raw_paths or report.asset_paths
+        if filed:
+            head = "Filed " + ", ".join(f"`{path}`" for path in filed)
+        else:
+            head = "Nothing new to file"
+        if not report.committed:
+            head += " (not yet committed)"
+        parts.append(head)
 
-    parts = [head]
-    refs: list[str] = []
-    for uri, wikilink in zip(report.obsidian_links, report.wikilinks, strict=False):
-        refs.append(f"<{uri}|open> {wikilink}")
-    # Surface any remaining links/wikilinks if the two lists are uneven.
-    for uri in report.obsidian_links[len(report.wikilinks) :]:
-        refs.append(f"<{uri}|open>")
-    for wikilink in report.wikilinks[len(report.obsidian_links) :]:
-        refs.append(wikilink)
-    if refs:
-        parts.append(" - ".join(refs))
     if report.message and not report.conflict:
         parts.append(report.message)
     return "\n".join(parts)
@@ -488,7 +503,7 @@ class Handlers:
           carries the full file objects (download URL + name) and a usable ``channel``,
           unlike the bare ``file_shared`` event the appliance ignores;
         * a bare ``y``/``yes``/``save`` reply confirms a pending "save this answer?"
-          offer and files the last blended answer as a ``queries/`` page;
+          offer and files the last blended answer as a ``notes/`` page;
         * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
           ingest (:meth:`thoth.ingest.Ingestor.ingest`);
         * any other **bare free text** is routed by the intent gate
@@ -744,13 +759,18 @@ class Handlers:
         say(render_ask_result(result, offer_save=offer))
 
     def _try_confirm_save(self, channel: str, say: Callable[[str], None]) -> bool:
-        """File the channel's pending answer as a ``queries/`` page on a "y" reply.
+        """File the channel's pending answer as a ``notes/`` page on a "y" reply.
 
         Returns ``True`` once it has handled the confirmation (whether the save
         succeeded, was rejected, or there was nothing pending so the "y" should fall
         through to normal routing -- in which case it returns ``False``). A vault
         rejection is rendered fail-loud. ``research`` is required to save; if it is not
         wired the reply falls through.
+
+        The success reply uses the one concise shared reference (issue #53): an
+        ``<obsidian-uri|title>: path`` line whose title is derived from the saved page's
+        slug. When the ``obsidian://`` link cannot be built the plain ``Saved `path```
+        fallback is used.
         """
         if self.research is None:
             return False
@@ -765,7 +785,8 @@ class Handlers:
             return True
         uri = self._vault_uri(rel)
         if uri:
-            say(f"Saved <{uri}|{rel}> - `{rel}`")
+            title = Path(rel).stem.replace("-", " ").title()
+            say("Saved " + render_vault_ref(obsidian_uri=uri, title=title, path=rel))
         else:
             say(f"Saved `{rel}`")
         return True

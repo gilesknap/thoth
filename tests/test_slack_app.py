@@ -65,6 +65,7 @@ def _report(**overrides: Any) -> IngestReport:
         "asset_paths": [],
         "obsidian_links": ["obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md"],
         "wikilinks": ["[[exa-search]]"],
+        "titles": ["Exa Search"],
         "committed": True,
         "conflict": False,
         "message": "",
@@ -491,7 +492,8 @@ def test_handle_message_routes_free_text_to_query(config: Config) -> None:
     assert ing.captures == []
     assert qry.queries == ["what is exa search?"]
     assert "Exa is a semantic search engine." in say.messages[0]
-    assert "[[exa-search]]" in say.messages[0]
+    assert "obsidian://" in say.messages[0]
+    assert "[[" not in say.messages[0]
 
 
 def test_handle_message_capture_prefix_routes_to_text_ingest(config: Config) -> None:
@@ -675,8 +677,8 @@ def test_free_text_without_gate_preserves_pre_gate_default(config: Config) -> No
 
 
 def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
-    """A follow-up 'y' files the previous blended answer as a queries/ page."""
-    research = FakeResearch(saved_path="queries/explain-raft.md")
+    """A follow-up 'y' files the previous blended answer as a notes/ page."""
+    research = FakeResearch(saved_path="notes/explain-raft.md")
     handlers, _, _ = _handlers(config, research=research)
     say = Recorder()
     handlers.handle_message(
@@ -688,7 +690,11 @@ def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
     # save_answer was called once, with the original question and the remembered result.
     assert len(research.saves) == 1
     assert research.saves[0][0] == "explain raft"
-    assert "queries/explain-raft.md" in say.messages[-1]
+    # The save reply is the one concise shared ref: clickable title + path, no wikilink.
+    assert "notes/explain-raft.md" in say.messages[-1]
+    assert "obsidian://" in say.messages[-1]
+    assert "|Explain Raft>: notes/explain-raft.md" in say.messages[-1]
+    assert "[[" not in say.messages[-1]
     # A second 'y' has nothing pending and falls through to a fresh ask (not a save).
     handlers.handle_message(
         {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "10.3"}, say
@@ -1185,23 +1191,24 @@ def test_download_without_token_or_helper_is_fail_loud(config: Config) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_render_citation_has_link_path_and_wikilink() -> None:
-    """render_citation emits <uri|label>, the plain path, and the [[wikilink]]."""
+def test_render_citation_is_concise_uri_title_path() -> None:
+    """render_citation emits <uri|title>: path with no dead [[wikilink]] (issue #53)."""
     rendered = render_citation(_citation())
-    assert "obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md" in rendered
-    assert "Exa Search" in rendered  # the label
-    assert "`concepts/exa-search.md`" in rendered  # scheme-independent plain path
-    assert "[[exa-search]]" in rendered  # scheme-independent wikilink
+    assert rendered == (
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md"
+        "|Exa Search>: concepts/exa-search.md"
+    )
+    assert "[[" not in rendered  # the dead wikilink is gone
 
 
 def test_render_citation_falls_back_to_path_label() -> None:
     """When a citation has no title, the path is used as the link label."""
     rendered = render_citation(_citation(title=""))
-    assert "|concepts/exa-search.md>" in rendered
+    assert "|concepts/exa-search.md>: concepts/exa-search.md" in rendered
 
 
 def test_render_query_result_lists_every_citation() -> None:
-    """render_query_result shows the answer then one line per citation."""
+    """render_query_result shows the answer then one concise line per citation."""
     result = _result(
         answer="Two engines.",
         citations=[
@@ -1211,34 +1218,48 @@ def test_render_query_result_lists_every_citation() -> None:
     )
     rendered = render_query_result(result)
     assert rendered.startswith("Two engines.")
-    assert "[[exa]]" in rendered
-    assert "[[fc]]" in rendered
-    assert "`concepts/exa.md`" in rendered
-    assert "`concepts/firecrawl.md`" in rendered
+    assert "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md|Exa>" in rendered
+    assert "concepts/exa.md" in rendered
+    assert "concepts/firecrawl.md" in rendered
+    assert "[[" not in rendered
 
 
-def test_render_query_result_no_citations_notes_it() -> None:
-    """A citation-less answer renders a 'no sources' note (never a fabricated link)."""
-    rendered = render_query_result(_result(citations=[]))
+def test_render_query_result_no_citations_renders_no_note() -> None:
+    """A citation-less answer is the prose alone -- no trailing note (issue #53)."""
+    rendered = render_query_result(_result(answer="No idea.", citations=[]))
+    assert rendered == "No idea."
     assert "obsidian://" not in rendered
-    assert "no vault sources" in rendered.lower()
+    assert "no vault sources" not in rendered.lower()
 
 
 def test_render_ask_result_combines_vault_and_web_with_offer() -> None:
-    """render_ask_result lists vault + web sources and the offer-to-save line."""
+    """render_ask_result lists vault + web sources (concise) and the offer line."""
     result = _ask_result()
     rendered = render_ask_result(result)
     assert rendered.startswith("Raft is a consensus algorithm.")
-    # Vault citation (unfabricable link + wikilink) and web URL both appear.
-    assert "[[exa-search]]" in rendered
-    assert "https://example.com/raft" in rendered
+    # Vault citation uses the concise <uri|title>: path; web uses <url|title>: url.
+    assert "concepts/exa-search.md" in rendered
+    assert "<https://example.com/raft|Raft>: https://example.com/raft" in rendered
     assert "Save this answer" in rendered
+    assert "[[" not in rendered
 
 
 def test_render_ask_result_offer_suppressed_when_asked() -> None:
     """offer_save=False omits the save line (used for an empty/edge answer)."""
     rendered = render_ask_result(_ask_result(), offer_save=False)
     assert "Save this answer" not in rendered
+
+
+def test_no_slack_renderer_emits_dead_wikilinks() -> None:
+    """No Slack-facing renderer leaks an un-clickable [[wikilink]] (issue #53)."""
+    outputs = [
+        render_citation(_citation()),
+        render_query_result(_result()),
+        render_ask_result(_ask_result()),
+        render_ingest_report(_report()),
+    ]
+    for rendered in outputs:
+        assert "[[" not in rendered
 
 
 def test_pending_saves_remember_take_is_one_shot() -> None:
@@ -1263,13 +1284,27 @@ def test_pending_saves_prune_drops_expired_with_injected_clock() -> None:
     assert pending.take("D1") is None
 
 
-def test_render_ingest_report_one_to_two_lines_with_links() -> None:
-    """render_ingest_report names the filed page and includes link + wikilink."""
+def test_render_ingest_report_is_concise_with_clickable_ref() -> None:
+    """render_ingest_report shows a Filed header + one concise <uri|title>: path ref.
+
+    The path is shown once (on the ref line), not duplicated on the header, and no dead
+    [[wikilink]] appears (issue #53).
+    """
     rendered = render_ingest_report(_report())
-    assert "concepts/exa-search.md" in rendered
-    assert "obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md" in rendered
-    assert "[[exa-search]]" in rendered
-    assert len(rendered.splitlines()) <= 3  # head + refs (+ optional message)
+    lines = rendered.splitlines()
+    assert lines[0] == "Filed 1 page(s):"
+    assert lines[1] == (
+        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa.md"
+        "|Exa Search>: concepts/exa-search.md"
+    )
+    assert "[[" not in rendered
+    assert rendered.count("concepts/exa-search.md") == 1  # path not duplicated
+
+
+def test_render_ingest_report_not_committed_marks_header() -> None:
+    """An un-committed filed report flags '(not yet committed)' on the header."""
+    rendered = render_ingest_report(_report(committed=False))
+    assert rendered.splitlines()[0] == "Filed 1 page(s): (not yet committed)"
 
 
 def test_render_ingest_report_conflict_is_fail_loud() -> None:
@@ -1306,19 +1341,23 @@ def test_render_ingest_report_deferred_is_partial_success() -> None:
     assert "saved raw" in rendered.lower()
 
 
-def test_render_ingest_report_uneven_links_and_wikilinks() -> None:
-    """Mismatched link/wikilink counts still surface every reference."""
+def test_render_ingest_report_multi_page_one_ref_each() -> None:
+    """A multi-page report renders one concise ref line per filed page (issue #53)."""
     report = _report(
+        page_paths=["concepts/a.md", "concepts/b.md"],
         obsidian_links=[
-            "obsidian://open?vault=pkm-vault&file=a.md",
-            "obsidian://open?vault=pkm-vault&file=b.md",
+            "obsidian://open?vault=pkm-vault&file=concepts%2Fa.md",
+            "obsidian://open?vault=pkm-vault&file=concepts%2Fb.md",
         ],
-        wikilinks=["[[a]]"],
+        wikilinks=["[[a]]", "[[b]]"],
+        titles=["Page A", "Page B"],
     )
     rendered = render_ingest_report(report)
-    assert "file=a.md" in rendered
-    assert "file=b.md" in rendered
-    assert "[[a]]" in rendered
+    lines = rendered.splitlines()
+    assert lines[0] == "Filed 2 page(s):"
+    assert "|Page A>: concepts/a.md" in lines[1]
+    assert "|Page B>: concepts/b.md" in lines[2]
+    assert "[[" not in rendered
 
 
 # --------------------------------------------------------------------------------------

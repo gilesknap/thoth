@@ -277,6 +277,9 @@ class IngestReport:
         obsidian_links: ``obsidian://`` deep links built by the harness via
             :meth:`thoth.vault.Vault.obsidian_uri` (one per curated page; unfabricable).
         wikilinks: ``[[slug]]`` handles for the curated pages.
+        titles: Human-readable page titles, one per curated page (parallel to
+            ``page_paths`` / ``obsidian_links``), so the Slack renderer can label each
+            link; falls back to the slug-derived title when frontmatter has none.
         committed: Whether :meth:`thoth.git_sync.GitSync.commit` made a commit.
         conflict: Whether a :class:`~thoth.git_sync.VaultConflictError` was surfaced.
         deferred: ``True`` when the inbound item was persisted durably but the
@@ -290,7 +293,8 @@ class IngestReport:
     asset_paths: list[str]
     obsidian_links: list[str]
     wikilinks: list[str]
-    committed: bool
+    titles: list[str] = field(default_factory=list)
+    committed: bool = False
     conflict: bool = False
     deferred: bool = False
     message: str = ""
@@ -420,7 +424,7 @@ class Ingestor:
         self._apply_navigation(plan, page_paths)
         self._retain_pages(page_paths, classification)
 
-        report = self._build_report(capture, classification, raw, page_paths)
+        report = self._build_report(capture, classification, raw, page_paths, plan)
         committed = self._commit(report, classification)
         # Record the capture liveness marker only on a clean (non-conflict) ingest, so a
         # wedged sync leaves BOTH the capture and push markers stale -- silence is then
@@ -1509,14 +1513,20 @@ class Ingestor:
         cls: Classification,
         raw: RawCaptureResult,
         page_paths: list[str],
+        plan: dict[str, Any],
     ) -> IngestReport:
         """Assemble the report with harness-built ``obsidian://`` links and wikilinks.
 
         Every link is built by :meth:`thoth.vault.Vault.obsidian_uri` from a confined
-        path, so the model cannot fabricate a link to a page that does not exist.
+        path, so the model cannot fabricate a link to a page that does not exist. The
+        per-page ``titles`` run parallel to ``page_paths`` (both are ordered from
+        ``plan["pages"]``, whose ``_written`` paths are ``page_paths``): each title is
+        the page's ``frontmatter.title``, falling back to the slug-derived title when
+        absent or empty, so the Slack renderer can label every link (issue #53).
         """
         links = [self._vault.obsidian_uri(rel) for rel in page_paths]
         wikilinks = [f"[[{PurePosixPath(rel).stem}]]" for rel in page_paths]
+        titles = self._page_titles(plan, page_paths)
         raw_paths = [raw.raw_path] if raw.raw_path is not None else []
         return IngestReport(
             page_paths=list(page_paths),
@@ -1524,10 +1534,37 @@ class Ingestor:
             asset_paths=list(raw.asset_paths),
             obsidian_links=links,
             wikilinks=wikilinks,
+            titles=titles,
             committed=False,
             conflict=False,
             message="",
         )
+
+    @staticmethod
+    def _page_titles(plan: dict[str, Any], page_paths: list[str]) -> list[str]:
+        """Build a per-page title list parallel to ``page_paths`` (issue #53).
+
+        Reads ``frontmatter.title`` from each ``plan["pages"]`` entry (ordered the same
+        as ``page_paths``), falling back to the slug-derived title from the written path
+        when a plan title is missing or blank. Pages without a matching plan entry
+        (uneven lengths) still get a slug-derived title so the renderer never indexes
+        off the end.
+        """
+        pages = plan.get("pages")
+        plan_pages = pages if isinstance(pages, list) else []
+        titles: list[str] = []
+        for index, rel in enumerate(page_paths):
+            title = ""
+            if index < len(plan_pages):
+                page = plan_pages[index]
+                if isinstance(page, dict):
+                    frontmatter = page.get("frontmatter")
+                    if isinstance(frontmatter, dict):
+                        title = str(frontmatter.get("title") or "").strip()
+            if not title:
+                title = PurePosixPath(rel).stem.replace("-", " ").title()
+            titles.append(title)
+        return titles
 
     # ---- prompt builders ---------------------------------------------------------
 
@@ -1745,6 +1782,7 @@ def _replace_report(
         asset_paths=report.asset_paths,
         obsidian_links=report.obsidian_links,
         wikilinks=report.wikilinks,
+        titles=report.titles,
         committed=committed,
         conflict=conflict,
         deferred=report.deferred,
