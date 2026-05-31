@@ -769,7 +769,11 @@ def run(config: Config, ctx: ToolContext | None = None) -> None:
         extractor = Extractor(config)
         hindsight = Hindsight(config)
         git = GitSync(config)
-        ingestor = Ingestor(config, vault, llm, extractor, hindsight, git)
+        # SCHEMA.md as the curate-call system_extra so curated pages match the live
+        # per-type schema (mirrors thoth.__main__._build_graph).
+        ingestor = Ingestor(
+            config, vault, llm, extractor, hindsight, git, schema_md=vault.schema_md()
+        )
         query_engine = QueryEngine(config, vault, hindsight, llm)
         research = ResearchEngine(config, vault, query_engine, extractor, llm)
         ctx = ToolContext(

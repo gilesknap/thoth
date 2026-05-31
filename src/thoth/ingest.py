@@ -68,6 +68,8 @@ from thoth.llm import (
     LLMError,
     Message,
     SchemaValidationError,
+    extract_text,
+    file_plan_contract_text,
     parse_json_block,
     validate_file_plan,
 )
@@ -112,6 +114,13 @@ _INDEX_SECTION_BY_TYPE: dict[str, str] = {
     "comparison": "Comparisons",
     "query": "Queries",
 }
+
+# How many curate LLM attempts before giving up: one initial call plus one corrective
+# retry that feeds the validation errors back to the model. A model that returns a
+# slightly malformed plan (the failure mode that left the vault empty) is recovered
+# rather than aborting the whole capture; a persistently invalid plan still raises so
+# the validation gate is preserved.
+_CURATE_ATTEMPTS: int = 2
 
 
 class IngestError(Exception):
@@ -613,26 +622,54 @@ class Ingestor:
                 or a vault write rejects a page.
         """
         prompt = self._curate_prompt(capture, cls, raw, candidates)
-        try:
-            response = self._llm.complete(
-                [Message(role="user", content=prompt)],
-                system_extra=self._schema_md,
-            )
-        except Exception as exc:  # noqa: BLE001 - any client failure aborts curate
-            # Transport/availability failure -> deferrable (raw is already durable).
-            raise LLMUnavailableError(f"curate LLM call failed: {exc}") from exc
+        messages: list[Message] = [Message(role="user", content=prompt)]
+        problems = ""
+        for attempt in range(_CURATE_ATTEMPTS):
+            try:
+                response = self._llm.complete(messages, system_extra=self._schema_md)
+            except Exception as exc:  # noqa: BLE001 - any client failure aborts curate
+                # Transport/availability failure -> deferrable (raw is already durable).
+                raise LLMUnavailableError(f"curate LLM call failed: {exc}") from exc
+            try:
+                plan = self._parse_and_validate_plan(response)
+            except IngestError as exc:
+                # A parse/validation failure is recoverable: feed the exact problems
+                # back to the model once before giving up. The last attempt re-raises,
+                # so a persistently invalid plan still aborts (validation gate kept).
+                problems = str(exc)
+                if attempt + 1 >= _CURATE_ATTEMPTS:
+                    raise
+                messages = [
+                    Message(role="user", content=prompt),
+                    Message(role="assistant", content=extract_text(response)),
+                    Message(role="user", content=_curate_repair_prompt(problems)),
+                ]
+                continue
+
+            written: list[str] = []
+            pages = plan.get("pages")
+            assert isinstance(pages, list)  # guaranteed by validate_file_plan
+            for page in pages:
+                written.append(self._write_planned_page(page, capture.source, raw))
+            plan["_written"] = written
+            return plan
+        # Unreachable: the loop either returns a written plan or re-raises on the last
+        # attempt, but keep a definite terminator for the type checker.
+        raise IngestError(f"file plan rejected after retries: {problems}")
+
+    def _parse_and_validate_plan(self, response: Any) -> dict[str, Any]:
+        """Parse the curate response and validate it against the file-plan contract.
+
+        Raises:
+            IngestError: if the output is unparseable or the plan fails validation; the
+                message names every offending field so :meth:`curate` can feed it back
+                to the model on the corrective retry.
+        """
         plan = self._parse_block(response, "file plan")
         try:
             validate_file_plan(plan)
         except SchemaValidationError as exc:
             raise IngestError(f"file plan rejected: {exc}") from exc
-
-        written: list[str] = []
-        pages = plan.get("pages")
-        assert isinstance(pages, list)  # guaranteed by validate_file_plan
-        for page in pages:
-            written.append(self._write_planned_page(page, capture.source, raw))
-        plan["_written"] = written
         return plan
 
     # ---- read-only create-vs-update helper --------------------------------------
@@ -1014,6 +1051,7 @@ class Ingestor:
         by Bases views and get no index entry (SPEC step 5).
         """
         entries = plan.get("index_entries")
+        applied = 0
         if isinstance(entries, list) and entries:
             for entry in entries:
                 if not isinstance(entry, dict):
@@ -1024,9 +1062,18 @@ class Ingestor:
                 if isinstance(section, str) and isinstance(wikilink, str):
                     try:
                         self._vault.append_index(section, wikilink, str(summary))
+                    except SchemaError:
+                        # The model named an unknown catalog section. index_entries is
+                        # optional navigation metadata and the curated page is ALREADY
+                        # written, so skip this entry (and fall back to a derived
+                        # default below) rather than aborting and losing the capture.
+                        continue
                     except VaultError as exc:
                         raise IngestError(f"index update failed: {exc}") from exc
-        else:
+                    applied += 1
+        # No usable explicit entry (none supplied, or every section was invalid): derive
+        # the catalog entries deterministically from the written pages' types instead.
+        if applied == 0:
             self._default_index_entries(plan, page_paths)
 
         try:
@@ -1268,15 +1315,21 @@ class Ingestor:
         raw: RawCaptureResult,
         candidates: list[str],
     ) -> str:
-        """Build the curate-call prompt (classification + raw + candidates)."""
+        """Build the curate-call prompt (the file-plan contract + classification + raw).
+
+        The exact file-plan contract is embedded verbatim from
+        :func:`thoth.llm.file_plan_contract_text` (rendered from the same constants the
+        validator enforces). Spelling out the JSON shape and enums here is what makes
+        the model return a *valid* plan: with only a vague "return a file plan"
+        instruction the model guessed the envelope and every capture was rejected.
+        """
         candidate_block = "\n".join(f"- {path}" for path in candidates) or "(none)"
         raw_block = raw.raw_path or "(no raw page)"
         asset_block = ", ".join(raw.asset_paths) or "(none)"
         return (
-            "Given the SCHEMA and the captured item, return ONLY a JSON file plan "
-            "(see the file-plan schema): a 'pages' list of create/update pages with "
-            "full frontmatter, body, and >=2 wikilinks each, optional 'index_entries', "
-            "and a 'log' block.\n\n"
+            "Given the SCHEMA (in the system prompt) and the captured item below, file "
+            "it into the vault.\n\n"
+            f"{file_plan_contract_text()}\n\n"
             f"Classification: type={cls.page_type} slug={cls.slug} title={cls.title}\n"
             f"Raw source page: {raw_block}\n"
             f"Saved assets (embed with ![[name]]): {asset_block}\n"
@@ -1360,6 +1413,21 @@ def _require(value: Any, field_name: str) -> Any:
     if value is None:
         raise IngestError(f"capture is missing required field {field_name!r}")
     return value
+
+
+def _curate_repair_prompt(problems: str) -> str:
+    """Build the corrective retry prompt that feeds validation errors back to the model.
+
+    Sent as the follow-up user turn after a rejected plan (the prior assistant turn
+    carries the model's bad output), so the model sees exactly which fields failed and
+    fixes them rather than the capture aborting.
+    """
+    return (
+        "Your previous file plan was REJECTED by validation:\n"
+        f"{problems}\n\n"
+        "Return a corrected file plan as a single JSON object that fixes EVERY problem "
+        "above and matches the required shape exactly. Output only the JSON."
+    )
 
 
 def _replace_report(

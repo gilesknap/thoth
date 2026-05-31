@@ -331,7 +331,19 @@ def _build_graph(config: Config) -> _Graph:
     # Liveness markers so a successful capture/push records its time for the daily
     # heartbeat (issue #15); the same disposable state.db backs the dedupe table.
     markers = MarkerStore(config.state_db_path)
-    ingestor = Ingestor(config, vault, llm, extractor, hindsight, git, markers=markers)
+    # Pass SCHEMA.md as the curate-call system_extra so curated pages are filed to the
+    # live per-type schema; without it the curate model files blind (this wiring used to
+    # drop schema_md, leaving the vault empty when paired with a schema-less prompt).
+    ingestor = Ingestor(
+        config,
+        vault,
+        llm,
+        extractor,
+        hindsight,
+        git,
+        schema_md=vault.schema_md(),
+        markers=markers,
+    )
     query_engine = QueryEngine(config, vault, hindsight, llm)
     research = ResearchEngine(config, vault, query_engine, extractor, llm)
     return _Graph(ingestor=ingestor, query_engine=query_engine, research=research)

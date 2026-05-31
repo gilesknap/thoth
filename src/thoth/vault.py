@@ -148,9 +148,15 @@ _AUTHOR_REQUIRED_FIELDS: tuple[str, ...] = tuple(
 )
 
 # Headings under "## Knowledge catalog" in index.md that append_index may target.
-_INDEX_SECTIONS: frozenset[str] = frozenset(
+INDEX_SECTIONS: frozenset[str] = frozenset(
     {"Entities", "Concepts", "Comparisons", "Queries", "People"}
 )
+"""Valid ``index.md`` catalog section headings :meth:`Vault.append_index` may target.
+
+Public so the curate prompt (:func:`thoth.llm.file_plan_contract_text`) can offer the
+exact section names to the model, and the contract the model is given cannot drift from
+the one :meth:`Vault.append_index` enforces.
+"""
 
 # Actions accepted by append_log (SPEC log.md seed template).
 _LOG_ACTIONS: frozenset[str] = frozenset(
@@ -229,6 +235,20 @@ class Vault:
     def root(self) -> Path:
         """Resolved absolute vault root (equals ``config.vault_path``)."""
         return self._root
+
+    def schema_md(self) -> str | None:
+        """Return the vault's ``SCHEMA.md`` text, or ``None`` when it is absent.
+
+        The curate pass passes this to the model as ``system_extra`` so curated pages
+        are filed to the *live* per-type schema (see :class:`thoth.ingest.Ingestor`'s
+        ``schema_md``). A missing ``SCHEMA.md`` is a valid state (a bare/unseeded
+        vault), so this returns ``None`` rather than raising; the contract enforced by
+        :func:`thoth.llm.validate_file_plan` does not depend on it.
+        """
+        path = self._root / "SCHEMA.md"
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8")
 
     # ---- path confinement (the security core) -----------------------------------
 
@@ -636,10 +656,10 @@ class Vault:
             SchemaError: if ``section`` is not a known knowledge-catalog section.
             VaultError: if ``index.md`` is missing or lacks the named heading.
         """
-        if section not in _INDEX_SECTIONS:
+        if section not in INDEX_SECTIONS:
             raise SchemaError(
                 f"unknown index section {section!r}; expected one of "
-                f"{sorted(_INDEX_SECTIONS)}"
+                f"{sorted(INDEX_SECTIONS)}"
             )
         absolute = self.resolve("index.md")
         if not absolute.is_file():
