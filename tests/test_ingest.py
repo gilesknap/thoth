@@ -22,6 +22,8 @@ from typing import Any, cast
 
 import pytest
 
+from thoth.analyse import Analysis
+from thoth.budget import BudgetExceededError
 from thoth.config import Config, load_config
 from thoth.extract import ExtractedDoc, FetchedBinary, FetchError, SsrfError
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
@@ -203,6 +205,43 @@ class FakeHindsight:
     def recall(self, query: str, *, limit: int = 10) -> list[RecallHit]:
         """Unused by ingest; present for interface completeness."""
         return []
+
+
+class FakeAnalyser:
+    """A fake :class:`thoth.analyse.Analyser` returning a canned analysis or raising.
+
+    The default returns an *empty* :class:`Analysis`, so a binary capture's analyse pass
+    makes no model call and leaves routing/body exactly as before -- the existing binary
+    tests are unaffected. A test that drives the vision/PDF behaviour supplies an
+    ``analysis`` (real OCR text + a knowledge ``suggested_type``) or an ``error`` (a
+    transport/budget failure that must defer).
+    """
+
+    def __init__(
+        self,
+        *,
+        analysis: Analysis | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """Configure the canned analysis or the error to raise."""
+        self._analysis = analysis if analysis is not None else Analysis()
+        self._error = error
+        self.image_calls: list[tuple[bytes, str]] = []
+        self.pdf_calls: list[bytes] = []
+
+    def analyse_image(self, image_bytes: bytes, *, ext: str) -> Analysis:
+        """Record the call and return the canned analysis (or raise the error)."""
+        self.image_calls.append((image_bytes, ext))
+        if self._error is not None:
+            raise self._error
+        return self._analysis
+
+    def analyse_pdf(self, pdf_bytes: bytes) -> Analysis:
+        """Record the call and return the canned analysis (or raise the error)."""
+        self.pdf_calls.append(pdf_bytes)
+        if self._error is not None:
+            raise self._error
+        return self._analysis
 
 
 # --------------------------------------------------------------------------- #
@@ -422,8 +461,14 @@ def _build_ingestor(
     hindsight: FakeHindsight,
     markers: MarkerStore | None = None,
     guard: Any = None,
+    analyser: Any = None,
 ) -> Ingestor:
-    """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes."""
+    """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes.
+
+    ``analyser`` defaults to a :class:`FakeAnalyser` returning an empty analysis, so a
+    binary capture's analyse pass (issue #42) makes no scripted-LLM call and leaves
+    routing/body unchanged unless a test supplies a richer fake.
+    """
     llm = LLM(harness.config, client=client, guard=guard)
     return Ingestor(
         harness.config,
@@ -433,6 +478,7 @@ def _build_ingestor(
         hindsight,  # type: ignore[arg-type]  # structural fake
         harness.git,
         markers=markers,
+        analyser=analyser if analyser is not None else FakeAnalyser(),  # type: ignore[arg-type]  # structural fake
     )
 
 
@@ -1900,3 +1946,282 @@ def test_curate_passes_schema_md_as_system_extra(harness: IngestHarness) -> None
     create_kwargs = client.messages.calls[-1]
     system_texts = [block["text"] for block in create_kwargs["system"]]
     assert any("rules here" in text for text in system_texts)
+
+
+# --------------------------------------------------------------------------- #
+# Issue #42: OCR/vision/PDF analyse pass -- route by content + enrich the body.
+# --------------------------------------------------------------------------- #
+
+
+def _whiteboard_analysis() -> Analysis:
+    """A canned analysis as the vision call would return for a whiteboard photo."""
+    return Analysis(
+        text="Sprint goals\n- ship vision pass\n- write ADR 0006",
+        description="A photo of a whiteboard listing sprint goals.",
+        summary="Sprint planning whiteboard",
+        suggested_type="note",
+        entities=["Giles"],
+        concepts=["sprint-planning"],
+    )
+
+
+def test_image_analysis_routes_whiteboard_to_notes_with_ocr_in_body(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A whiteboard photo is routed to notes/ (NOT memories/) with its OCR'd text in the
+    body (issue #42).
+
+    The blind classifier defaults a binary capture to ``memory``; the analyse pass OCRs
+    the whiteboard and suggests ``note``, so the capture is routed by its content into a
+    knowledge folder, and the curated body holds the real extracted text -- not a
+    generic "an image captured and stored" stub.
+    """
+    src = tmp_path / "whiteboard.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"whiteboard-bytes")
+    # The classify model, seeing the analysis, still returns the blind memory default
+    # here -- the analyse routing must PROMOTE it to the suggested knowledge type.
+    classify = _classify_json(
+        page_type="memory", slug="sprint-whiteboard", title="Whiteboard", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="sprint-whiteboard",
+        page_type="note",
+        title="Sprint Planning Whiteboard",
+        body="Notes from the sprint planning session.",
+    )
+    analyser = FakeAnalyser(analysis=_whiteboard_analysis())
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),  # local path: no web fetch
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="whiteboard.png"))
+
+    # Routed into a knowledge folder, not the memories/ default.
+    assert report.page_paths == ["notes/sprint-whiteboard.md"]
+    assert not harness.vault.page_exists("memories/sprint-whiteboard.md")
+    # The asset is still saved as a real binary and embedded (analysis only enriches).
+    assert report.asset_paths == ["raw/assets/sprint-whiteboard.png"]
+    page_text = (harness.work / "notes/sprint-whiteboard.md").read_text(
+        encoding="utf-8"
+    )
+    assert "![[sprint-whiteboard.png]]" in page_text
+    # The OCR'd text is in the body -- the page is searchable on real content.
+    assert "ship vision pass" in page_text
+    assert "write ADR 0006" in page_text
+    # Never base64.
+    assert "base64" not in page_text.lower()
+    # The vision seam saw the real image bytes (not base64), exactly once.
+    assert analyser.image_calls == [(src.read_bytes(), "png")]
+
+
+def test_image_analysis_routing_drives_classification(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """classify() promotes the blind memory default to the analysed knowledge type and
+    unions the analysed entities/concepts (issue #42)."""
+    src = tmp_path / "whiteboard.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"wb")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(
+            _classify_json(page_type="memory", slug="wb", title="WB", concepts=[])
+        ),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(analysis=_whiteboard_analysis()),
+    )
+    capture = Capture(path=src, filename="whiteboard.png")
+    analysis = ingestor.analyse(capture)
+    cls = ingestor.classify(capture, analysis=analysis)
+    assert cls.page_type == "note"  # promoted from the blind memory default
+    assert "sprint-planning" in cls.concepts
+    assert "Giles" in cls.entities
+
+
+def test_pdf_analysis_routes_by_content_with_extracted_text(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A PDF is analysed (document block), routed by content, and its extracted text
+    fills the body (issue #42)."""
+    src = tmp_path / "spec.pdf"
+    src.write_bytes(b"%PDF-1.7\n" + b"spec-bytes")
+    analysis = Analysis(
+        text="Section 1. The appliance files captures into a vault.",
+        description="A design spec for a personal knowledge appliance.",
+        summary="PKM appliance spec",
+        suggested_type="note",
+        concepts=["pkm-appliance"],
+    )
+    classify = _classify_json(
+        page_type="memory", slug="pkm-spec", title="Spec", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="pkm-spec",
+        page_type="note",
+        title="PKM Appliance Spec",
+        body="A spec for the appliance.",
+    )
+    analyser = FakeAnalyser(analysis=analysis)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="spec.pdf"))
+
+    assert report.page_paths == ["notes/pkm-spec.md"]
+    # The PDF binary is kept and a raw/papers page written (unchanged behaviour).
+    assert "raw/assets/pkm-spec.pdf" in report.asset_paths
+    page_text = (harness.work / "notes/pkm-spec.md").read_text(encoding="utf-8")
+    assert "files captures into a vault" in page_text
+    assert analyser.pdf_calls == [src.read_bytes()]
+
+
+def test_image_analysis_defers_when_analyse_call_unavailable(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An analyse transport failure DEFERS the capture (raw held), never loses it.
+
+    Reuses the decoupled-durability pattern: the raw asset/inbox hold is durable before
+    any model call, so a failed analyse call is a deferral (re-analysed on a later
+    sweep) exactly like a failed classify/curate call.
+    """
+    src = tmp_path / "whiteboard.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"wb")
+    ingestor = _build_ingestor(
+        harness,
+        # classify/curate would succeed, but analyse fails first -> defer.
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(error=RuntimeError("vision API down")),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="whiteboard.png"))
+
+    assert report.deferred is True
+    assert report.page_paths == []
+    # The inbound item is held durably in inbox/ for a later sweep.
+    assert len(report.raw_paths) == 1
+    assert report.raw_paths[0].startswith("inbox/")
+    assert harness.vault.page_exists(report.raw_paths[0])
+    assert "deferred" in report.message.lower()
+
+
+def test_image_analysis_defers_when_budget_cap_reached(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A budget-cap trip on the analyse call defers the capture (issue #16 + #42)."""
+    src = tmp_path / "wb.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"wb")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(error=BudgetExceededError("daily cap reached")),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="wb.png"))
+
+    assert report.deferred is True
+    assert report.page_paths == []
+    assert report.raw_paths[0].startswith("inbox/")
+
+
+def test_unparseable_analysis_files_binary_without_enrichment(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An unparseable analysis is non-fatal: the binary is filed blind, not lost."""
+    from thoth.analyse import AnalyseError
+
+    src = tmp_path / "pic.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"pic")
+    classify = _classify_json(
+        page_type="memory", slug="beach-day", title="Beach Day", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="memories", slug="beach-day", page_type="memory", title="Beach Day"
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(error=AnalyseError("garbled JSON")),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="pic.png"))
+
+    # Filed blind (memories/), capture not lost, no deferral.
+    assert report.page_paths == ["memories/beach-day.md"]
+    assert report.deferred is False
+
+
+def test_text_capture_runs_no_analyse_pass(harness: IngestHarness) -> None:
+    """A plain-text capture is never analysed (existing text path unchanged, #42)."""
+    analyser = FakeAnalyser(analysis=_whiteboard_analysis())
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(text="just some notes about transformers"))
+
+    assert report.page_paths == ["notes/transformer-models.md"]
+    # The analyse seam was never touched for a text capture.
+    assert analyser.image_calls == []
+    assert analyser.pdf_calls == []
+
+
+def test_url_article_capture_runs_no_analyse_pass(harness: IngestHarness) -> None:
+    """A web-article URL capture is never analysed (URL path unchanged, #42)."""
+    doc = ExtractedDoc(
+        source_url="https://example.com/x", title="X", markdown="article body"
+    )
+    analyser = FakeAnalyser(analysis=_whiteboard_analysis())
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    ingestor.ingest(Capture(url="https://example.com/x"))
+
+    assert analyser.image_calls == []
+    assert analyser.pdf_calls == []
+
+
+def test_audio_capture_runs_no_analyse_pass(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An audio capture transcribes as before and is never vision-analysed (#42)."""
+    audio = tmp_path / "memo.mp3"
+    audio.write_bytes(b"ID3fake-audio")
+    analyser = FakeAnalyser(analysis=_whiteboard_analysis())
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(transcript="spoken notes about transformers"),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    ingestor.ingest(Capture(path=audio, filename="memo.mp3"))
+
+    assert analyser.image_calls == []
+    assert analyser.pdf_calls == []
