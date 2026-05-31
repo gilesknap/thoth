@@ -61,6 +61,12 @@ the preferred replacement: pure Python library, no server, local files, supports
 similarity and raw vector iteration. That decision is deferred until a concrete use case
 cannot be satisfied by LLM comparison.
 
+**Implementation deferred (2026-05-31).** This ADR settles *how* #37 and #38 would be
+built (LLM comparison on Hindsight); it does not commit to building them now. There is no
+strong present need, so both issues are closed as won't-fix **for now** (`wontfix`) rather
+than scheduled. A future Hindsight → LanceDB conversion is the natural point to revisit
+them; until a felt need or that migration arises, neither is built.
+
 ## Consequences
 
 - No new infrastructure, no second index to maintain, no additional dependency.
