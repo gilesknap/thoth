@@ -89,7 +89,15 @@ addopts = """
     --tb=native -vv --doctest-modules --doctest-glob="*.rst"
     """
 # https://iscinumpy.gitlab.io/post/bound-version-constraints/#watch-for-warnings
-filterwarnings = "error"
+# Warnings are errors, EXCEPT a pydantic UserWarning emitted by firecrawl-py 4.x's
+# own models (``MonitorPageDiff``/``MonitorPageSnapshot`` declare a ``json`` field
+# that shadows ``BaseModel.json``). It fires when the real SDK is imported in the
+# live firecrawl smoke (never in CI, which has no runtime deps), and we cannot fix a
+# third-party model -- so ignore that one message rather than let it mask the test.
+filterwarnings = [
+    "error",
+    'ignore:Field name "json" in ".*" shadows an attribute in parent "BaseModel":UserWarning',
+]
 # Doctest python code in docs, python code in src docstrings, test functions in tests
 testpaths = "docs src tests"
 # Custom markers (registered so filterwarnings=error does not trip PytestUnknownMarkWarning)

@@ -72,14 +72,14 @@ class _ExaResponse:
 
 
 class _FakeExa:
-    """Records the query and returns canned results for :meth:`search_and_contents`."""
+    """Records the query and returns canned results for :meth:`search`."""
 
     def __init__(self, results: list[Any]) -> None:
         self.results_payload = results
         self.calls: list[tuple[str, int]] = []
 
-    def search_and_contents(self, query: str, *, num_results: int = 5) -> Any:
-        """Record the call and return an object exposing ``.results``."""
+    def search(self, query: str, *, num_results: int = 5) -> Any:
+        """Record the call and return an object exposing ``.results`` (exa_py 2.x)."""
         self.calls.append((query, num_results))
         return _ExaResponse(self.results_payload)
 
@@ -93,10 +93,12 @@ class _FakeFirecrawl:
         self.result = result
         self.error = error
         self.urls: list[str] = []
+        self.formats: list[list[str] | None] = []
 
-    def scrape_url(self, url: str, *, params: dict[str, Any] | None = None) -> Any:
-        """Record the URL and return the canned result, or raise the canned error."""
+    def scrape(self, url: str, *, formats: list[str] | None = None) -> Any:
+        """Record URL/formats, return the canned result or raise (firecrawl 4.x)."""
         self.urls.append(url)
+        self.formats.append(formats)
         if self.error is not None:
             raise self.error
         return self.result
@@ -278,6 +280,28 @@ def test_web_extract_returns_doc(
     assert doc.title == "Hello Page"
     assert doc.markdown == "# Hello\n\nbody"
     assert fake.urls == ["https://pub.example/article"]
+    assert fake.formats == [["markdown"]]
+
+
+def test_web_extract_reads_document_object_metadata(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A firecrawl 4.x ``Document``: object ``.markdown`` + object ``.metadata``."""
+    _force_resolver(monkeypatch, {"pub.example": ["8.8.8.8"]})
+
+    class _Metadata:
+        title = "Doc Title"
+
+    class _Document:
+        markdown = "# Doc\n\nbody"
+        metadata = _Metadata()
+
+    extractor = Extractor(config, firecrawl=_FakeFirecrawl(_Document()))
+
+    doc = extractor.web_extract("https://pub.example/article")
+
+    assert doc.title == "Doc Title"
+    assert doc.markdown == "# Doc\n\nbody"
 
 
 def test_web_extract_runs_ssrf_guard_before_firecrawl(
