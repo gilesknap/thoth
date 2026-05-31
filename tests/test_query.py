@@ -514,6 +514,20 @@ def test_answer_acronym_hits_grep_and_cites_real_page(engine: QueryEngine) -> No
         assert engine.build_citation(citation.path).path == citation.path
 
 
+def test_answer_logs_success_line(
+    engine: QueryEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """answer() emits one concise INFO line with consulted/cited counts + ms (#52)."""
+    with caplog.at_level("INFO", logger="thoth.query"):
+        engine.answer("program-motion-controller", max_pages=2)
+    records = [r for r in caplog.records if "query answered:" in r.getMessage()]
+    assert len(records) == 1
+    msg = records[0].getMessage()
+    assert "consulted=" in msg
+    assert "cited=" in msg
+    assert "ms" in msg
+
+
 def test_answer_structural_path_does_not_use_recall(
     engine: QueryEngine, hindsight: _FakeHindsight
 ) -> None:
@@ -729,8 +743,11 @@ def test_answer_feeds_full_body_and_prompt_enforces_clean_prose(
     # The model SEES the embed (so it can answer about the image) and nearby prose.
     assert embed in prompt
     assert "More prose after the embed." in prompt
-    # Clean output is the prompt's responsibility, not a pre-processor's.
-    assert "cleanly in a Slack message" in prompt
+    # Clean output is the prompt's responsibility, not a pre-processor's: Slack mrkdwn
+    # (issue #63), no narrated source list, embeds named as a thing NOT to paste.
+    assert "Slack mrkdwn" in prompt
+    assert "*bold*" in prompt  # Slack mrkdwn, not GitHub **bold** (issue #63)
+    assert "do not mention or list the sources" in prompt  # no source-list aside (#63)
     assert "![[embeds]]" in prompt  # named as a thing NOT to paste
     # The vault page itself is untouched.
     assert embed in (vault.root / "notes" / "embed-page.md").read_text(encoding="utf-8")

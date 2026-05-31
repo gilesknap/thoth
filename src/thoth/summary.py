@@ -685,9 +685,9 @@ class SummaryEngine:
     def _grouped_recent_lines(self, refs: Sequence[PageRef]) -> list[str]:
         """Render recent pages as one concise shared ref per page, grouped by type.
 
-        Each line is ``type: <obsidian-uri|title>: path`` via the one shared
-        :func:`thoth.render.render_vault_ref` helper (#53) -- a clickable title, no dead
-        ``[[wikilink]]``.
+        Each line is ``type: <obsidian-uri|title>`` via the one shared
+        :func:`thoth.render.render_vault_ref` helper -- a title-only clickable link with
+        no trailing path and no dead ``[[wikilink]]`` (issue #63).
         """
         lines: list[str] = []
         for ref in sorted(refs, key=lambda r: (r.page_type, r.path)):

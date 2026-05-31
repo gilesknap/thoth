@@ -53,7 +53,9 @@ collection is always safe (the heavy clients live behind the injected seams).
 from __future__ import annotations
 
 import hashlib
+import logging
 import tempfile
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -96,12 +98,20 @@ __all__ = [
     "RawCaptureResult",
 ]
 
+logger = logging.getLogger(__name__)
+
 # Folders scanned by the read-only create-vs-update candidate search (reference layer).
 _CANDIDATE_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
 
-# File extensions (no dot) that select a binary/audio capture kind.
+# File extensions (no dot) that select a binary/audio/text capture kind.
 _IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 _AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
+# Plain-text uploads (markdown/notes/data dumps) whose bytes ARE the text body: read
+# the file rather than misclassifying it as an image binary and dropping its text
+# (issue #57). Checked before the image default in :func:`_ext_kind`.
+_TEXT_EXTS: frozenset[str] = frozenset(
+    {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
+)
 
 # Reference ``type`` -> the index.md catalog section append_index targets (ADR 0005).
 # Only the lifecycle-free reference types earn a catalog entry; ``action`` pages are
@@ -392,6 +402,7 @@ class Ingestor:
             IngestError: on an extraction, validation, or non-conflict git failure (an
                 LLM-availability failure is reported as deferred, not raised).
         """
+        started = time.monotonic()
         self._orient()
         holding = self.persist_inbound(capture)
         analysed = _Analysed(analysis=None)
@@ -414,6 +425,16 @@ class Ingestor:
             # consumed the analyse-pass binary, so clean up its temp file here rather
             # than leak it (the inbound item is already durable in inbox/).
             _cleanup_fetched(analysed.fetched)
+            # Concise operator-readable line (issue #52): a deferral is a partial
+            # success (the raw item is durable in inbox/), so say so clearly rather than
+            # leaving the degraded path silent. Grep-friendly prefix.
+            held = holding.result.raw_path or "inbox"
+            logger.info(
+                "ingest deferred: held %s (LLM unavailable: %s) in %.0fms",
+                held,
+                exc,
+                (time.monotonic() - started) * 1000,
+            )
             return self._commit_deferred(holding, exc)
 
         # Curation succeeded: the holding page is superseded by the curated/raw pages.
@@ -432,6 +453,18 @@ class Ingestor:
         # _commit on an actual push.
         if not committed.conflict:
             self._record_marker(MARKER_CAPTURE)
+        # Concise operator-readable success line (issue #52): one terse, grep-friendly
+        # "ingest filed:" naming the curated path(s), the routed page_type, the page
+        # tags, and the wall-clock duration, so a successful capture is no longer silent
+        # on the happy path. A conflict is already surfaced via the report.
+        logger.info(
+            "ingest filed: %s type=%s tags=%s in %.0fms%s",
+            ", ".join(page_paths) or "(no curated page)",
+            classification.page_type,
+            self._page_tags(page_paths),
+            (time.monotonic() - started) * 1000,
+            " [CONFLICT: unpushed]" if committed.conflict else "",
+        )
         return committed
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
@@ -734,9 +767,9 @@ class Ingestor:
                 transcript = self._extractor.transcribe(_require(capture.path, "path"))
                 return self._write_raw_doc("transcripts", cls, transcript, None)
             # TEXT
-            text = prefetched.body if prefetched is not None else None
-            if text is None:
-                text = _require(capture.text, "text")
+            text = (
+                prefetched.body if prefetched is not None else self._text_body(capture)
+            )
             return self._write_raw_doc("articles", cls, text, None)
         except ExtractError as exc:
             raise IngestError(f"capture failed during extraction: {exc}") from exc
@@ -905,12 +938,15 @@ class Ingestor:
         """Extract the text body for a text-bearing capture (no LLM), else ``None``.
 
         Runs the single network/IO step per kind -- web-extract a URL, transcribe audio,
-        or take inline text verbatim -- and returns the body plus any provenance URL.
-        Binary kinds (image/PDF) have no text body yet, so ``None`` is returned and the
-        caller holds a provenance stub instead.
+        read an uploaded text file (issue #57), or take inline text verbatim -- and
+        returns the body plus any provenance URL. Binary kinds (image/PDF) have no text
+        body yet, so ``None`` is returned and the caller holds a provenance stub
+        instead.
 
         Raises:
             ExtractError: on a web-extract / transcribe failure (raised to the caller).
+            IngestError: when a text capture supplies neither inline text nor a readable
+                file path.
         """
         if kind is CaptureKind.URL:
             doc = self._extractor.web_extract(_require(capture.url, "url"))
@@ -919,23 +955,47 @@ class Ingestor:
             transcript = self._extractor.transcribe(_require(capture.path, "path"))
             return _Prefetched(body=transcript, source_url=None)
         if kind is CaptureKind.TEXT:
-            return _Prefetched(body=_require(capture.text, "text"), source_url=None)
+            return _Prefetched(body=self._text_body(capture), source_url=None)
         return None
 
     @staticmethod
-    def _binary_stub_body(capture: Capture) -> str:
-        """Build the holding-page body for a binary capture awaiting curation.
+    def _text_body(capture: Capture) -> str:
+        """Return the body for a TEXT capture: inline text, else the uploaded file.
 
-        Records the source URL / filename so a later reindex/sweep can re-fetch and
-        curate the binary; carries no base64 (the bytes are fetched server-side when the
-        item is curated).
+        An uploaded ``.md``/``.txt``/... file (issue #57) carries its body as the file
+        itself, so when no inline ``text`` is supplied the server-resolvable ``path`` is
+        read. Decoding uses ``errors="replace"`` so a stray non-UTF-8 byte in a log/CSV
+        dump never aborts the capture (the text is still filed, with the offending byte
+        shown as the replacement char).
+
+        Raises:
+            IngestError: if the capture has neither inline text nor a readable path.
+        """
+        if capture.text is not None:
+            return capture.text
+        path = _require(capture.path, "text")
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise IngestError(f"capture failed reading text file: {exc}") from exc
+
+    @staticmethod
+    def _binary_stub_body(capture: Capture) -> str:
+        """Build the holding-page body for a binary capture with no extracted text yet.
+
+        Reached only for a binary upload (image/PDF) whose bytes have not yet been
+        analysed/extracted, so the held page records the source URL / filename for a
+        later reindex/sweep to re-fetch and curate; it carries no base64 (the bytes are
+        fetched server-side when the item is curated). The deferral reason is the
+        *unsupported binary content*, not LLM availability (issue #57): a text upload is
+        read directly and never lands here.
         """
         ref = capture.url or capture.filename or "(binary upload)"
         return (
             f"# Held capture\n\n"
             f"Binary source: `{ref}`\n\n"
-            "_LLM unavailable at capture time; held for a later reindex/sweep to "
-            "fetch and curate._"
+            "_Unsupported binary content held at capture time; queued for a later "
+            "reindex/sweep to fetch and curate._"
         )
 
     def _write_inbox_holding(self, body: str, source: str) -> RawCaptureResult:
@@ -981,11 +1041,13 @@ class Ingestor:
     def _capture_kind(self, capture: Capture) -> CaptureKind:
         """Decide the capture kind from the populated fields and any extension hint.
 
-        A server-resolvable ``path`` is always a binary/audio capture (a path with no
-        recognised extension is treated as an image, the common phone-upload case). A
-        ``url`` is web-extracted unless its own extension or the ``filename`` hint marks
-        it as a PDF or image (a direct binary the server downloads). Plain ``text`` is
-        the fallback.
+        A server-resolvable ``path`` is read by its extension: a text upload
+        (``.md``/``.txt``/... per :data:`_TEXT_EXTS`, issue #57) is a TEXT capture whose
+        bytes are read as the body, audio is transcribed, and anything else -- including
+        a path with no recognised extension -- is treated as an image binary (the common
+        phone-upload case). A ``url`` is web-extracted unless its own extension or the
+        ``filename`` hint marks it as a PDF or image (a direct binary the server
+        downloads). Plain ``text`` is the fallback.
         """
         hint = (capture.filename or "").lower()
         if capture.path is not None:
@@ -1277,6 +1339,27 @@ class Ingestor:
         """Return the page paths written by :meth:`curate` (the ``_written`` key)."""
         written = plan.get("_written")
         return list(written) if isinstance(written, list) else []
+
+    def _page_tags(self, page_paths: list[str]) -> list[str]:
+        """Collect the curated pages' frontmatter tags for the success log (issue #52).
+
+        Reads each curated page's ``tags`` and returns the de-duplicated,
+        order-preserving union; an unreadable page or a missing/ill-typed ``tags`` value
+        is skipped so the observability line never raises or blocks a good ingest.
+        """
+        seen: list[str] = []
+        for path in page_paths:
+            try:
+                page = self._vault.read_page(path)
+            except VaultError:
+                continue
+            tags = page.frontmatter.get("tags")
+            if not isinstance(tags, list):
+                continue
+            for tag in tags:
+                if isinstance(tag, str) and tag and tag not in seen:
+                    seen.append(tag)
+        return seen
 
     # ---- pass 5: navigation ------------------------------------------------------
 
@@ -1684,12 +1767,14 @@ def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
         default: The kind to return when the extension is unrecognised.
 
     Returns:
-        :attr:`CaptureKind.PDF`/``IMAGE``/``AUDIO`` for a known extension, else
-        ``default``.
+        :attr:`CaptureKind.PDF`/``IMAGE``/``AUDIO``/``TEXT`` for a known extension,
+        else ``default``.
     """
     if name.endswith(".pdf"):
         return CaptureKind.PDF
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    if ext in _TEXT_EXTS:
+        return CaptureKind.TEXT
     if ext in _IMAGE_EXTS:
         return CaptureKind.IMAGE
     if ext in _AUDIO_EXTS:

@@ -30,9 +30,9 @@ Design constraints enforced here:
   the harness (``Vault.obsidian_uri`` via the query/ingest layers) and arrive already
   formed on :class:`~thoth.query.Citation` and :class:`~thoth.ingest.IngestReport`; the
   renderers here only format those unfabricable values. Every Slack reference is
-  rendered through the one shared :func:`thoth.render.render_vault_ref` helper (#53) as
-  a clickable ``<obsidian-uri|title>`` link plus the plain vault-relative path; the dead
-  ``[[wikilink]]`` (un-clickable in Slack) is deliberately dropped from Slack output.
+  rendered through the one shared :func:`thoth.render.render_vault_ref` helper as a
+  title-only clickable ``<obsidian-uri|title>`` link (issue #63); the trailing path and
+  the dead ``[[wikilink]]`` (un-clickable in Slack) are deliberately dropped.
 * File uploads are downloaded **server-side** to a temporary file and handed to the
   ingestor as :class:`~thoth.ingest.Capture` with a ``path`` -- never as base64
   (SPEC section 6 capture note). A non-allowed user is rejected before any download.
@@ -48,6 +48,7 @@ module is always import-safe under pytest collection.
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import time
@@ -72,6 +73,8 @@ from thoth.research import (
     force_web_requested,
 )
 from thoth.state import EventStore
+
+logger = logging.getLogger(__name__)
 
 DEDUPE_TTL_SECONDS: float = 3600.0
 """Prune processed-event ids older than one hour (SPEC section 10)."""
@@ -154,12 +157,12 @@ def _strip_user_wrapper(token: str) -> str:
 def render_citation(citation: Citation) -> str:
     """Render one citation as the concise shared Slack reference (issue #53).
 
-    Delegates to :func:`thoth.render.render_vault_ref`, emitting
-    ``<obsidian-uri|title>: path`` -- a clickable title over the harness-built
-    ``obsidian://`` link, then the plain vault-relative path. The link target is taken
-    verbatim from the :class:`~thoth.query.Citation`; this function never constructs an
-    ``obsidian://`` URI itself, and the dead ``[[wikilink]]`` is no longer shown (it is
-    un-clickable in Slack).
+    Delegates to :func:`thoth.render.render_vault_ref`, emitting a title-only clickable
+    ``<obsidian-uri|title>`` link over the harness-built ``obsidian://`` link, with no
+    trailing path (issue #63). The link target is taken verbatim from the
+    :class:`~thoth.query.Citation`; this function never constructs an ``obsidian://``
+    URI itself, and the dead ``[[wikilink]]`` is no longer shown (it is un-clickable in
+    Slack).
 
     Args:
         citation: A harness-built citation handle.
@@ -205,8 +208,9 @@ def render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
     vault citations (:func:`render_citation`) and the web URLs the model actually read.
     When ``offer_save`` is set (and the answer is non-empty), the offer-to-save line is
     appended so the user can file the answer as a ``notes/`` page with a one-word reply.
-    Both vault and web citations use the one concise shared shape (issue #53): a vault
-    citation is ``<obsidian-uri|title>: path`` and a web citation ``<url|title>: url``.
+    Both vault and web citations use the one concise shared shape (issue #63): a
+    title-only clickable ``<obsidian-uri|title>`` link (web citations use the URL as the
+    link target).
 
     Args:
         result: The blended answer to render.
@@ -235,9 +239,9 @@ def render_ingest_report(report: IngestReport) -> str:
     """Render a one-to-two-line capture confirmation in ``mrkdwn``.
 
     Names what was filed and renders one concise shared reference per curated page
-    (issue #53): a ``Filed N page(s):`` header followed by an ``<obsidian-uri|title>:
-    path`` line per page (so the path is shown once, not twice). When no curated page
-    was written the header names the raw/asset paths directly. A
+    (issue #63): a ``Filed N page(s):`` header followed by a title-only clickable
+    ``<obsidian-uri|title>`` line per page (no trailing path). When no curated page was
+    written the header names the raw/asset paths directly. A
     :attr:`~thoth.ingest.IngestReport.conflict` is surfaced fail-loud (SPEC section 10)
     with the conflicting path, never swallowed. A
     :attr:`~thoth.ingest.IngestReport.deferred` capture (raw persisted but the LLM was
@@ -267,9 +271,9 @@ def render_ingest_report(report: IngestReport) -> str:
         if not report.committed:
             head += " (not yet committed)"
         parts.append(head)
-        # One concise <uri|title>: path ref per curated page; the path is shown here,
-        # not duplicated on the header. ``titles`` runs parallel to page_paths /
-        # obsidian_links (the slug-derived title is filled in upstream when missing).
+        # One title-only <uri|title> ref per curated page (issue #63: no trailing path).
+        # ``titles`` runs parallel to page_paths / obsidian_links (the slug-derived
+        # title is filled in upstream when missing).
         for path, uri, title in zip(
             report.page_paths,
             report.obsidian_links,
@@ -732,6 +736,9 @@ class Handlers:
         otherwise.
         """
         route = self._free_text_route(text)
+        # Concise operator-readable line (issue #52): the engine bare free text was
+        # routed to (capture / query / ask), so a misroute is visible in the log.
+        logger.info("slack routed free text to %s", route)
         if route == "capture":
             capture = Capture(text=text, source=source)
             self._do_ingest(capture, responder, hint=_GATE_CAPTURE_HINT)

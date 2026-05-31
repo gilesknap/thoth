@@ -33,6 +33,7 @@ import-safe under pytest collection and never pulls in the ``anthropic`` SDK by 
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from thoth.llm import LLM, Message, extract_text, parse_json_block
@@ -43,6 +44,8 @@ __all__ = [
     "IntentClassifier",
     "IntentDecision",
 ]
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_INTENT_MODEL: str = "claude-haiku-4-5-20251001"
 """The cheap model the gate uses by default (a dated Haiku id, not a bare alias)."""
@@ -145,8 +148,18 @@ class IntentClassifier:
             )
             obj = parse_json_block(extract_text(response))
         except Exception:  # noqa: BLE001 - the gate is total; fail safe to ask
-            return _DEFAULT_DECISION
-        return _decision_from(obj)
+            decision = _DEFAULT_DECISION
+        else:
+            decision = _decision_from(obj)
+        # Concise operator-readable line (issue #52): the gate's verdict and the engine
+        # it routes to, so a misroute is diagnosable from the log. Grep-friendly prefix.
+        logger.info(
+            "intent routed: %s (confidence=%s) -> %s",
+            decision.intent,
+            decision.confidence,
+            decision.route,
+        )
+        return decision
 
 
 def _decision_from(obj: dict[str, object]) -> IntentDecision:

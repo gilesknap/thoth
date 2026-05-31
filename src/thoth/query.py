@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -204,6 +205,7 @@ class QueryEngine:
         if max_pages < 1:
             raise QueryError("max_pages must be at least 1")
 
+        started = time.monotonic()
         ordered: list[str] = []
         seen: set[str] = set()
         recall_only: set[str] = set()
@@ -242,8 +244,15 @@ class QueryEngine:
         # Recall "contributed" only if a recall-only page is in the *used* subset (so a
         # consulted-but-unused recall page no longer counts as recall having helped).
         used_recall = any(c.path in recall_only for c in used)
+        # Concise operator-readable success line (issue #52): grep-friendly "query
+        # answered:" with the consulted/cited counts, whether the recall pass helped,
+        # and the wall-clock duration so the happy path is no longer silent.
         logger.info(
-            "query consulted %d pages, model used %d", len(consulted), len(used)
+            "query answered: consulted=%d cited=%d recall=%s in %.0fms",
+            len(consulted),
+            len(used),
+            used_recall,
+            (time.monotonic() - started) * 1000,
         )
         return QueryResult(
             answer=answer,
@@ -506,11 +515,14 @@ class QueryEngine:
         Each candidate is labelled with a 1-based index and its full excerpt is handed
         to the model verbatim (image ``![[embeds]]`` and all, so the model can answer
         questions *about* the attachments). Clean Slack output is the prompt's job, not
-        a pre-processor's: the model is told to write natural, concise prose referring
-        to pages by title only -- never pasting paths, ``[[wikilinks]]`` or
-        ``![[embeds]]`` -- and to end with a ``USED: <indices>`` line; that line is
-        parsed back to the consulted citations, stripped from the displayed answer, and
-        the used subset returned. A missing/garbled line falls back to all citations.
+        a pre-processor's: the model is told to write natural, concise prose in Slack
+        ``mrkdwn`` (``*bold*``/``_italic_``/bullets, never GitHub ``**bold**``),
+        referring to pages by title only -- never pasting paths, ``[[wikilinks]]`` or
+        ``![[embeds]]``, and never narrating the source list (the harness attaches it,
+        so the model must not mention it; issue #63). It ends with a ``USED: <indices>``
+        line; that line is parsed back to the consulted citations, stripped from the
+        displayed answer, and the used subset returned. A missing/garbled line falls
+        back to all citations.
         """
         context_parts: list[str] = []
         for index, citation in enumerate(consulted, start=1):
@@ -521,10 +533,12 @@ class QueryEngine:
         context = "\n\n".join(context_parts)
         prompt = (
             "Answer the question using only the numbered vault pages below.\n\n"
-            "Write a natural, concise answer in your own words, formatted to read "
-            "cleanly in a Slack message. Refer to pages by their title -- do not paste "
-            "file paths, [[wikilinks]] or ![[embeds]]; the harness appends a clickable "
-            "source list for you.\n\n"
+            "Write a natural, concise answer in your own words. Format it as Slack "
+            "mrkdwn: *bold* (single asterisks), _italic_ (single underscores) and "
+            "lines starting with a bullet for lists -- never GitHub-style **bold** or "
+            "Markdown # headings. Refer to pages by their title; do not paste file "
+            "paths, [[wikilinks]] or ![[embeds]], and do not mention or list the "
+            "sources -- just answer the question.\n\n"
             "On the final line, list the page numbers that directly support your "
             "answer as `USED: 1, 3` (comma-separated), or `USED: none` if no page "
             "applies. Put nothing after that line.\n\n"
