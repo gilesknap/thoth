@@ -1,0 +1,879 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Architecture review notes &#8212; thoth 0.1.dev28+ge2730211e documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
+
+    <script src="../_static/documentation_options.js?v=808f71b1"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=30646c52"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/architecture-review';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'main';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="icon" href="../_static/dls-logo.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Architectural Decision Records" href="decisions.html" />
+    <link rel="prev" title="Explanations" href="../explanations.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="main" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/dls-logo.svg" class="logo__image only-light" alt=""/>
+    <img src="../_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">thoth</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../tutorials.html">
+    Tutorials
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../how-to.html">
+    How-to Guides
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../explanations.html">
+    Explanations
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../reference.html">
+    Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/gilesknap/thoth" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/thoth" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fas fa-cube fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../tutorials.html">
+    Tutorials
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../how-to.html">
+    How-to Guides
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../explanations.html">
+    Explanations
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../reference.html">
+    Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/gilesknap/thoth" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/thoth" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fas fa-cube fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item pst-sidebar-collapse"><button id="pst-collapse-sidebar-button" aria-expanded="true" aria-controls="pst-primary-sidebar"><svg class="pst-icon svg-inline--fa" role="img" aria-hidden="true" focusable="false" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <path fill="currentColor" d="M3 15.5C2.36232 15.5 1.74874 15.2564 1.28478 14.8189C0.820828 14.3815 0.541576 13.7832 0.504167 13.1467L0.5 13L0.5 3C0.499965 2.36232 0.743605 1.74874 1.18107 1.28478C1.61854 0.820828 2.21676 0.541576 2.85333 0.504167L3 0.5L13 0.5C13.6377 0.499965 14.2513 0.743605 14.7152 1.18107C15.1792 1.61854 15.4584 2.21676 15.4958 2.85333L15.5 3L15.5 13C15.5 13.6377 15.2564 14.2513 14.8189 14.7152C14.3815 15.1792 13.7832 15.4584 13.1467 15.4958L13 15.5L3 15.5ZM3 13.8333L10.5 13.8333L10.5 2.16667L3 2.16667C2.79589 2.16669 2.59889 2.24163 2.44636 2.37726C2.29383 2.5129 2.19638 2.69979 2.1725 2.9025L2.16667 3L2.16667 13C2.16669 13.2041 2.24163 13.4011 2.37726 13.5536C2.5129 13.7062 2.69979 13.8036 2.9025 13.8275L3 13.8333ZM6.65583 10.325L6.5775 10.2558L4.91083 8.58917C4.76735 8.44567 4.68116 8.25476 4.66843 8.05223C4.65569 7.84971 4.71729 7.6495 4.84167 7.48917L4.91083 7.41083L6.5775 5.74417C6.72747 5.59471 6.9287 5.50794 7.14032 5.50148C7.35194 5.49502 7.55809 5.56935 7.7169 5.70937C7.8757 5.8494 7.97525 6.04463 7.99533 6.25539C8.01541 6.46616 7.95451 6.67667 7.825 6.84417L7.75583 6.9225L6.67917 8L7.75583 9.0775C7.89931 9.22099 7.98551 9.41191 7.99824 9.61443C8.01097 9.81695 7.94938 10.0172 7.825 10.1775L7.75583 10.2558C7.61234 10.3993 7.42142 10.4855 7.2189 10.4982C7.01638 10.511 6.81617 10.4494 6.65583 10.325Z"/>
+  </svg>
+  <span class="pst-collapse-sidebar-label">Collapse Sidebar</span>
+  <span class="pst-expand-sidebar-label">Expand Sidebar</span>
+</button></div>
+        <div class="sidebar-primary-item">
+
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Architecture review notes</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="decisions.html">Architectural Decision Records</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
+</ul>
+</details></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../explanations.html" class="nav-link">Explanations</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Architecture review notes</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="architecture-review-notes">
+<h1>Architecture review notes<a class="headerlink" href="#architecture-review-notes" title="Link to this heading">#</a></h1>
+<p>A standing record of an architecture review of thoth carried out during Phase 3
+(2026-05-30), ahead of making the repository public. It captures the reasoning
+behind the design as it stands, the strengths worth preserving, the trade-offs we
+made consciously, and the findings that turned into tracked work. The detailed,
+actionable findings live as GitHub issues (indexed at the end); this page holds
+the narrative and the conclusions that did <strong>not</strong> need a separate issue.</p>
+<p>This is an <em>explanation</em> (in the Diátaxis sense): it is here to help a reader
+understand <em>why</em> thoth is shaped the way it is, not to prescribe API details.</p>
+<section id="the-shape-of-the-system-recap">
+<h2>The shape of the system (recap)<a class="headerlink" href="#the-shape-of-the-system-recap" title="Link to this heading">#</a></h2>
+<p>thoth is a deliberately thin appliance, not a general agent framework. A handful
+of facts drive almost every decision below:</p>
+<ul class="simple">
+<li><p><strong>The vault is canonical.</strong> A git-backed Obsidian vault of plain markdown +
+binary assets is the single source of truth. Everything else is a disposable
+projection of it.</p></li>
+<li><p><strong>Hindsight is a rebuildable index, never the store.</strong> Losing it loses nothing
+permanent — it is re-derived from the vault.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">state.db</span></code> is transient working memory.</strong> Small, single-writer, gitignored,
+TTL-pruned. Never a knowledge store.</p></li>
+<li><p><strong>The general-agent role is external.</strong> Claude Code / claude.ai drive thoth’s
+tools over MCP; the appliance itself is a closed set of capture/retrieve tools,
+not a conversational agent.</p></li>
+<li><p><strong>The tool surface is closed.</strong> The appliance LLM has no shell and no arbitrary
+filesystem access — only its fixed, validated tools.</p></li>
+</ul>
+</section>
+<section id="what-is-working-well">
+<h2>What is working well<a class="headerlink" href="#what-is-working-well" title="Link to this heading">#</a></h2>
+<p>These are strengths the review wanted to name explicitly, so they are preserved
+rather than eroded by later changes.</p>
+<section id="the-closed-surface-bounds-the-prompt-injection-blast-radius">
+<h3>The closed surface bounds the prompt-injection blast radius<a class="headerlink" href="#the-closed-surface-bounds-the-prompt-injection-blast-radius" title="Link to this heading">#</a></h3>
+<p>thoth ingests arbitrary web pages and files and feeds them to an LLM that then
+writes to the vault — a textbook prompt-injection vector. The architecture’s
+answer is structural rather than defensive: because the appliance LLM has no
+shell, no arbitrary filesystem, and no outbound capability beyond its fixed
+tools, a malicious document <strong>cannot</strong> exfiltrate data or execute commands. The
+residual risk is bounded to “a poisoned vault page or a mis-classification,” and
+even that is checked by schema-validated curator output, path confinement, and
+secret redaction. This is the single biggest security property of the design and
+it is a <em>consequence of the closed surface</em>, not an add-on — the same reason the
+SPEC can drop Hermes’ Tirith scanner and command-allowlist entirely.</p>
+</section>
+<section id="zero-data-lock-in-and-graceful-degradation">
+<h3>Zero data lock-in and graceful degradation<a class="headerlink" href="#zero-data-lock-in-and-graceful-degradation" title="Link to this heading">#</a></h3>
+<p>Knowledge lives as plain markdown in git. Lose thoth entirely and you still have
+an Obsidian vault a human can read and edit by hand. The index is disposable and
+<code class="docutils literal notranslate"><span class="pre">state.db</span></code> is transient, so the durable surface area is just “markdown files in a
+git repo.” This reversibility is a genuine architectural virtue and worth
+protecting against future features that would quietly make some other store
+load-bearing.</p>
+</section>
+<section id="lean-well-chosen-foss-reuse">
+<h3>Lean, well-chosen FOSS reuse<a class="headerlink" href="#lean-well-chosen-foss-reuse" title="Link to this heading">#</a></h3>
+<p>The heavy lifting is already delegated to widely used libraries rather than
+reinvented: <code class="docutils literal notranslate"><span class="pre">httpx</span></code>, <code class="docutils literal notranslate"><span class="pre">python-dotenv</span></code>, <code class="docutils literal notranslate"><span class="pre">python-frontmatter</span></code> + <code class="docutils literal notranslate"><span class="pre">pyyaml</span></code>,
+<code class="docutils literal notranslate"><span class="pre">anthropic</span></code>, <code class="docutils literal notranslate"><span class="pre">exa-py</span></code>, <code class="docutils literal notranslate"><span class="pre">firecrawl-py</span></code>, <code class="docutils literal notranslate"><span class="pre">mcp</span></code>/<code class="docutils literal notranslate"><span class="pre">FastMCP</span></code>, <code class="docutils literal notranslate"><span class="pre">slack-bolt</span></code>, plus stdlib
+<code class="docutils literal notranslate"><span class="pre">argparse</span></code>, <code class="docutils literal notranslate"><span class="pre">zoneinfo</span></code>, <code class="docutils literal notranslate"><span class="pre">hashlib</span></code>, and <code class="docutils literal notranslate"><span class="pre">importlib.resources</span></code>. The dependency list
+is small and the right shape. The review looked specifically for re-implemented
+wheels and found only minor ones (see <em>FOSS reuse</em> below) — the reuse discipline
+here is good.</p>
+</section>
+</section>
+<section id="topics-reviewed">
+<h2>Topics reviewed<a class="headerlink" href="#topics-reviewed" title="Link to this heading">#</a></h2>
+<section id="public-release-readiness">
+<h3>Public-release readiness<a class="headerlink" href="#public-release-readiness" title="Link to this heading">#</a></h3>
+<p>The repository is safe to make public. Configuration is entirely environment-
+driven (<code class="docutils literal notranslate"><span class="pre">config.py</span></code> is the single source of truth and reads only env / <code class="docutils literal notranslate"><span class="pre">.env</span></code>);
+no secrets are committed and none appear anywhere in git history (<code class="docutils literal notranslate"><span class="pre">.env</span></code> is
+gitignored and was never tracked). The only personal data is standard author
+metadata (name, email, GitHub org), which is expected for an open-source project.
+Defense-in-depth already exists via <code class="docutils literal notranslate"><span class="pre">.gitleaks.toml</span></code> and a pre-commit hook.</p>
+<p>One ergonomic wrinkle surfaced: the vault git wrappers default the push remote to
+an individual’s personal repo, which is the wrong default for a reusable public
+project. That became a tracked fix rather than a blocker.</p>
+</section>
+<section id="relationship-to-the-hermes-predecessor">
+<h3>Relationship to the Hermes predecessor<a class="headerlink" href="#relationship-to-the-hermes-predecessor" title="Link to this heading">#</a></h3>
+<p>thoth is a deliberate downsizing of Hermes (a general-purpose conversational
+agent: 96 skills, ~29 LLM providers, 15+ chat gateways, shell access, browser
+automation, personalities). The review classified the differences into three
+buckets:</p>
+<ul class="simple">
+<li><p><strong>Intentional descopes</strong> — the conversational loop, persistent session
+knowledge DB, skill ecosystem + curator, multi-provider routing, non-Slack
+gateways, browser automation, the shell + Tirith security layer, personas. All
+of these are the <em>point</em> of the redesign: they are what keep thoth small,
+auditable, and secure. The general-agent role moved to Claude Code / claude.ai.</p></li>
+<li><p><strong>Planned but not yet built</strong> — summaries, MCP server, blended web+vault Q&amp;A,
+full reindex→Hindsight wiring, system cron + systemd, lint, migration script,
+config backup. These are skeletoned on the Phase-3 branch; the real exposure is
+<em>unfinished work</em>, not lost capability.</p></li>
+<li><p><strong>Genuine silent losses</strong> — only a few, and none critical for a single user:
+multi-channel Slack support (allow-lists + per-channel prompts), Hindsight
+recall-budget tuning, and web auto-context during ingest. These are deferrable;
+they are recorded here so the decision to defer them is conscious rather than
+accidental. The remaining Hermes “losses” (LSP, checkpoints, goals, sessions,
+delegation, usage analytics, TTS) are genuinely not PKM concerns — git replaces
+checkpoints, external agents replace delegation, and so on.</p></li>
+</ul>
+<p>The conclusion: there is essentially <strong>no accidental capability loss that
+matters</strong>. The simplification is well-reasoned.</p>
+</section>
+<section id="slack-routing-and-the-intent-gate-enhancement">
+<h3>Slack routing and the intent-gate enhancement<a class="headerlink" href="#slack-routing-and-the-intent-gate-enhancement" title="Link to this heading">#</a></h3>
+<p>Free-text routing over Slack today is a deterministic <code class="docutils literal notranslate"><span class="pre">if/elif</span></code> ladder, not an
+LLM dispatcher: explicit prefixes (<code class="docutils literal notranslate"><span class="pre">note:</span></code> / <code class="docutils literal notranslate"><span class="pre">capture:</span></code> / <code class="docutils literal notranslate"><span class="pre">save:</span></code>), bare URLs,
+and file uploads route to capture; everything else free-text is treated as a
+question. Sonnet <em>does</em> make decisions, but only <em>within</em> a branch (whether the
+ask path reaches out to the web; how to classify content during ingest) — never
+<em>across</em> branches to choose the feature.</p>
+<p>The consequence is a sharp edge: plain prose like “remind me to call the dentist”
+is answered, not filed, unless prefixed. The review judged a natural-language
+<strong>intent gate</strong> a good enhancement — <em>Slack-only</em> (MCP already exposes explicit
+tools, so the calling agent dispatches there). The chosen design keeps the
+explicit prefixes as deterministic overrides and puts a cheap classifier in front
+of the bare free-text branch only, preserving the deliberate separation between
+the read-only ask engine and the write-capable ingest engine.</p>
+</section>
+<section id="hindsight-embedding-chunking-and-provenance">
+<h3>Hindsight: embedding, “chunking”, and provenance<a class="headerlink" href="#hindsight-embedding-chunking-and-provenance" title="Link to this heading">#</a></h3>
+<p>A key clarification from the review: <strong>thoth does no embedding and no chunking
+itself.</strong> Both happen inside the external <code class="docutils literal notranslate"><span class="pre">hindsight</span></code> CLI. More importantly,
+Hindsight does <strong>not</strong> chunk text by tokens at all — its retain pipeline runs an
+LLM to <strong>extract atomic facts</strong>, then embeds each fact. thoth hands over a whole
+curated page per <code class="docutils literal notranslate"><span class="pre">retain()</span></code>; Hindsight decomposes it.</p>
+<p>The review’s take: for a <em>find-my-stuff-and-take-me-to-the-note</em> second brain,
+fact-extraction is a better fit than fixed-size chunking — recall matches at the
+level of meaning, there are no chunk-boundary artifacts, and there is nothing to
+tune. The lossiness is acceptable <em>precisely because</em> the vault is canonical and
+the index disposable; every hit points back to the real note via an
+<code class="docutils literal notranslate"><span class="pre">obsidian://</span></code> link, so imperfect extraction is always recoverable. This would be
+the wrong call if Hindsight were the store of record or if verbatim recall were
+required — but it isn’t.</p>
+<p>That same fact-extraction creates the design’s most important integration risk:
+<strong>per-fact provenance</strong>. thoth needs to recover the owning vault path for every
+recall hit to build citations, but if a page is split into many facts, the
+in-band <code class="docutils literal notranslate"><span class="pre">SOURCE:</span></code> sentinel may not travel with each one. Locating the official
+CLI docs (<a class="reference external" href="https://hindsight.vectorize.io/sdks/cli">https://hindsight.vectorize.io/sdks/cli</a>) during the review showed the
+real surface differs substantially from what the code assumed (different binary
+name, bank as a positional argument, <code class="docutils literal notranslate"><span class="pre">memory</span> <span class="pre">retain</span></code>/<code class="docutils literal notranslate"><span class="pre">memory</span> <span class="pre">recall</span></code>
+subcommands, JSON output, and first-class <code class="docutils literal notranslate"><span class="pre">--tags</span></code> filtering). The likely
+resolution is to use <strong>tags</strong> as the provenance channel rather than the in-band
+sentinel — to be confirmed against the live binary. These corrections, the
+provenance verification, the bank rename away from the <code class="docutils literal notranslate"><span class="pre">hermes</span></code> holdover, retry
+hardening, and an optional index backup are all tracked work.</p>
+<p>On backup specifically: the review endorsed an <em>optional</em> <code class="docutils literal notranslate"><span class="pre">pg_dump</span></code> of the
+Hindsight index after the nightly reindex — strictly subordinate to
+<code class="docutils literal notranslate"><span class="pre">reindex</span> <span class="pre">--full-rebuild</span></code>, which remains the canonical recovery path. The strongest
+argument is not cost but <strong>determinism</strong>: a rebuild re-runs LLM fact-extraction
+and produces a <em>different</em> index, whereas a restored dump reproduces the exact
+prior recall surface.</p>
+</section>
+<section id="foss-reuse-pass">
+<h3>FOSS reuse pass<a class="headerlink" href="#foss-reuse-pass" title="Link to this heading">#</a></h3>
+<p>Beyond the well-chosen libraries already in use, the review found only small
+re-implementations worth addressing: two hand-rolled slugifiers that
+<code class="docutils literal notranslate"><span class="pre">python-slugify</span></code> would unify (and which would also fix Unicode transliteration —
+<code class="docutils literal notranslate"><span class="pre">café</span></code> should slugify to <code class="docutils literal notranslate"><span class="pre">cafe</span></code>, not <code class="docutils literal notranslate"><span class="pre">caf</span></code>), and the absence of retry/backoff
+around the Hindsight subprocess (<code class="docutils literal notranslate"><span class="pre">tenacity</span></code> is the FOSS answer for the daemon
+cold-start case). Several hand-rolled pieces were deliberately <strong>left alone</strong>
+because reuse would be worse or pointless:</p>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">git_sync.py</span></code> shelling to bash scripts</strong> — required for the <code class="docutils literal notranslate"><span class="pre">gh</span></code>
+credential-helper auth dance; GitPython would fight it.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">vault.py</span></code> path confinement + slug grammar</strong> — security-critical; owning and
+auditing it is correct.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">templates.py</span></code></strong> — ships seed files via <code class="docutils literal notranslate"><span class="pre">importlib.resources</span></code>; not a Jinja2
+use case.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">argparse</span></code> CLI</strong>, <strong>strict <code class="docutils literal notranslate"><span class="pre">_looks_like_url</span></code></strong>, <strong>base64/data-URI guards</strong> —
+trivial, zero-dep, and adequate.</p></li>
+</ul>
+</section>
+<section id="new-findings-from-unattended-operation-analysis">
+<h3>New findings from unattended-operation analysis<a class="headerlink" href="#new-findings-from-unattended-operation-analysis" title="Link to this heading">#</a></h3>
+<p>Looking at thoth as an unattended VPS appliance surfaced findings that are not
+about features at all:</p>
+<ul class="simple">
+<li><p><strong>Capture durability is gated on the LLM.</strong> The ingest pass order persists the
+raw source only <em>after</em> a successful <code class="docutils literal notranslate"><span class="pre">classify()</span></code> call, so an Anthropic outage
+loses the capture rather than deferring it. For a “throw it at the box and
+forget” system this is the sharpest failure mode, and it became high-priority
+tracked work (write raw before any LLM call).</p></li>
+<li><p><strong>There is no observability.</strong> If the daemon dies, a push stalls on an
+unresolved rebase conflict, a quota is exhausted, or the Hindsight daemon won’t
+start, the user has no signal beyond a missing daily digest. An
+errors-to-Slack + heartbeat mechanism is tracked.</p></li>
+<li><p><strong>There is no cost circuit-breaker.</strong> Pay-as-you-go keys plus per-page
+fact-extraction mean a runaway loop or an accidental full rebuild has unbounded
+cost. A daily spend guard is tracked.</p></li>
+<li><p><strong>The integration cliff.</strong> CI is mock-only by design (import-safe, offline),
+which is good — but every real boundary is unverified until VPS-time. A
+first-light smoke-test checklist is tracked to make deploy repeatable rather
+than improvised.</p></li>
+<li><p><strong>Smaller items:</strong> the in-memory Slack dedupe loses state across restarts (so a
+redelivery can double-ingest), and the type/tag taxonomy is restated in several
+places that must agree. Both are tracked.</p></li>
+</ul>
+</section>
+</section>
+<section id="conscious-trade-offs-not-requiring-action">
+<h2>Conscious trade-offs not requiring action<a class="headerlink" href="#conscious-trade-offs-not-requiring-action" title="Link to this heading">#</a></h2>
+<p>Recorded here so they are revisited deliberately, not stumbled upon:</p>
+<ul class="simple">
+<li><p><strong>Single-LLM-vendor coupling.</strong> Dropping multi-provider support is the right
+call for cost transparency and simplicity, but it means Anthropic availability
+equals capture-curation availability. The capture-durability work above
+mitigates the worst of it.</p></li>
+<li><p><strong>Manual secret/token rotation.</strong> The Slack app token and a fine-grained PAT
+(the SPEC notes a 90-day expiry) rotate by hand; on an unattended box an
+expired token is silent capture death until noticed. This ties to the
+observability work and to a scheduled rotation reminder.</p></li>
+<li><p><strong>Two-way sync is fail-loud, never-clobber.</strong> <code class="docutils literal notranslate"><span class="pre">vault-commit</span></code> correctly refuses
+to force-push on a rebase conflict, but the agent cannot resolve it — so
+ingestion can quietly stall until a human resolves the conflict in Obsidian.
+Acceptable given the safety guarantee, <em>provided</em> observability makes the stall
+visible.</p></li>
+</ul>
+</section>
+<section id="review-record-tracked-issues">
+<h2>Review record — tracked issues<a class="headerlink" href="#review-record-tracked-issues" title="Link to this heading">#</a></h2>
+<p>The full set of actionable findings from this review, as GitHub issues:</p>
+<p><strong>Public release / repo hygiene</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/4">#4</a> — Remove individual-centric default push remote.</p></li>
+</ul>
+<p><strong>Slack surface</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/5">#5</a> — Natural-language intent gate for free-text routing (Slack-only).</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/18">#18</a> — Durable Slack event dedupe to prevent double-ingest on restart.</p></li>
+</ul>
+<p><strong>Hindsight (semantic index)</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/13">#13</a> — Correct the Hindsight CLI invocation to match the official docs.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/7">#7</a> — Verify <code class="docutils literal notranslate"><span class="pre">SOURCE</span></code>/tag provenance survives Hindsight fact-extraction.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/9">#9</a> — Rename the Hindsight bank <code class="docutils literal notranslate"><span class="pre">hermes</span></code> → <code class="docutils literal notranslate"><span class="pre">thoth</span></code>.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/11">#11</a> — <code class="docutils literal notranslate"><span class="pre">tenacity</span></code>-backed retry around the Hindsight subprocess.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/8">#8</a> — Optional <code class="docutils literal notranslate"><span class="pre">pg_dump</span></code> of the index + manifest for fast restore.</p></li>
+</ul>
+<p><strong>Reliability / unattended operation</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/14">#14</a> — Decouple capture durability from the classify LLM call.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/15">#15</a> — Unattended observability: heartbeat + errors-to-Slack.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/16">#16</a> — Cost circuit-breaker / daily spend guard.</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/17">#17</a> — First-light integration smoke-test checklist.</p></li>
+</ul>
+<p><strong>Code quality / reuse</strong></p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/10">#10</a> — Adopt <code class="docutils literal notranslate"><span class="pre">python-slugify</span></code> (dedupe + Unicode-correct slugs).</p></li>
+<li><p><a class="reference external" href="https://github.com/gilesknap/thoth/issues/19">#19</a> — Consolidate the type/tag taxonomy to one source of truth.</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../explanations.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Explanations</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="decisions.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Architectural Decision Records</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-shape-of-the-system-recap">The shape of the system (recap)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-working-well">What is working well</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#the-closed-surface-bounds-the-prompt-injection-blast-radius">The closed surface bounds the prompt-injection blast radius</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#zero-data-lock-in-and-graceful-degradation">Zero data lock-in and graceful degradation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lean-well-chosen-foss-reuse">Lean, well-chosen FOSS reuse</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#topics-reviewed">Topics reviewed</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#public-release-readiness">Public-release readiness</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#relationship-to-the-hermes-predecessor">Relationship to the Hermes predecessor</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-routing-and-the-intent-gate-enhancement">Slack routing and the intent-gate enhancement</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hindsight-embedding-chunking-and-provenance">Hindsight: embedding, “chunking”, and provenance</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foss-reuse-pass">FOSS reuse pass</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-findings-from-unattended-operation-analysis">New findings from unattended-operation analysis</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conscious-trade-offs-not-requiring-action">Conscious trade-offs not requiring action</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-record-tracked-issues">Review record — tracked issues</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/architecture-review.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/explanations/architecture-review.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.18.0.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>
