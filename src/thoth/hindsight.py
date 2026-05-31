@@ -173,10 +173,15 @@ class RecallHit:
             present (the primary provenance channel), else parsed from a ``SOURCE:``
             line in the hit text (the fallback).
         text: The raw text the hit carried (provenance for callers).
+        page_type: The page-type tag recovered for the hit (``entity``/``concept``/
+            ``memory``/...), or ``""`` when none was carried. Recall is scoped by this
+            tag so knowledge Q&A stays precise while life-admin content is indexed too
+            (ADR 0004).
     """
 
     path: str
     text: str
+    page_type: str = ""
 
 
 def retain_text(rel_path: str, facts: str) -> str:
@@ -226,6 +231,35 @@ def _path_from_tags(tags: object) -> str | None:
         if "/" in tag and tag.endswith(".md"):
             return tag
     return None
+
+
+def _type_from_tags(tags: object) -> str:
+    """Recover a page-type tag (e.g. ``entity`` / ``memory``) from a hit's tags.
+
+    The retain side tags each page with ``[page_type, rel_path]`` (see
+    :meth:`Hindsight.retain`), so the page type is the tag that is **not** the
+    path-shaped ``rel`` tag. Accepts the same list / ``{"type": ...}`` mapping shapes
+    :func:`_path_from_tags` tolerates and returns the first bare type token (no path
+    separator, no ``.md`` suffix), or ``""`` when none is found. Callers use it to scope
+    recall by domain at query time (ADR 0004).
+    """
+    candidates: list[str] = []
+    if isinstance(tags, dict):
+        for key in ("type", "page_type"):
+            value = tags.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+    elif isinstance(tags, (list, tuple)):
+        for item in tags:
+            if isinstance(item, str):
+                candidates.append(item)
+    for raw in candidates:
+        tag = raw[len("type:") :] if raw.startswith("type:") else raw
+        # The page-type tag is the bare token (entity/concept/memory/...); the rel-path
+        # tag carries a path separator + .md suffix and is excluded here.
+        if tag and "/" not in tag and not tag.endswith(".md"):
+            return tag
+    return ""
 
 
 def _iter_recall_records(payload: object) -> Iterable[dict[str, object]]:
@@ -288,14 +322,21 @@ def parse_recall(stdout: str) -> list[RecallHit]:
     seen: set[str] = set()
     for record in _iter_recall_records(payload):
         text = _hit_text(record)
-        path = _path_from_tags(record.get("tags"))
+        tags = record.get("tags")
+        path = _path_from_tags(tags)
         if path is None:
             sentinel = _SOURCE_LINE_RE.search(text)
             path = sentinel.group(1) if sentinel else None
         if path is None or path in seen:
             continue
         seen.add(path)
-        hits.append(RecallHit(path=path, text=text or f"{SOURCE_SENTINEL} {path}"))
+        hits.append(
+            RecallHit(
+                path=path,
+                text=text or f"{SOURCE_SENTINEL} {path}",
+                page_type=_type_from_tags(tags),
+            )
+        )
     return hits
 
 
@@ -488,7 +529,13 @@ class Hindsight:
             argv += ["--document-tags", tag_value]
         self._run_checked("retain", rel_path, argv)
 
-    def recall(self, query: str, *, limit: int = 10) -> list[RecallHit]:
+    def recall(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        types: frozenset[str] | None = None,
+    ) -> list[RecallHit]:
         """Semantic recall; return vault paths recovered from each hit's ``rel`` tag.
 
         Builds ``base_args + RECALL_SUBCOMMAND + [bank, query, '-o', 'json']`` and
@@ -497,19 +544,32 @@ class Hindsight:
         empty result set is a normal outcome and returns ``[]``; only a non-zero exit
         raises.
 
+        Now that the index covers life-admin content too (ADR 0004), ``types`` scopes
+        recall by the hit's ``page_type`` tag **client-side**: only hits whose page type
+        is in ``types`` survive, so knowledge Q&A can filter to knowledge types and keep
+        its precision while "search my memories" can ask for life-admin types. The
+        filter runs *before* the ``limit`` cap. ``None`` (the default) keeps every hit,
+        so the retain-then-probe round-trip and any "search everything" caller are
+        unaffected.
+
         VPS-confirmed: the installed ``hindsight-embed`` ``memory recall`` has **no**
         ``--limit`` flag (it bounds output by ``--max-tokens``, default 4096), so the
-        ``limit`` is applied **client-side** -- the parsed, de-duped hits are truncated
-        to the first ``limit`` entries (first-seen order preserved by
-        :func:`parse_recall`).
+        ``limit`` is applied **client-side** -- the parsed, de-duped hits are filtered
+        by ``types`` then truncated to the first ``limit`` entries (first-seen order
+        preserved by :func:`parse_recall`). Filtering on the parsed tag rather than a
+        CLI flag also keeps "match any of these types" expressible (the CLI's
+        ``--tags-match all`` cannot).
 
         Args:
             query: The natural-language recall query.
             limit: Maximum number of hits to return (applied client-side after parsing).
+            types: When given, keep only hits whose ``page_type`` tag is in this set
+                (the domain scope, e.g. :data:`thoth.vault.KNOWLEDGE_TYPES`); ``None``
+                keeps all.
 
         Returns:
-            The de-duplicated :class:`RecallHit` list, capped at ``limit`` (``[]`` when
-            nothing matched).
+            The de-duplicated :class:`RecallHit` list, scoped by ``types`` and capped at
+            ``limit`` (``[]`` when nothing matched).
 
         Raises:
             HindsightError: if the CLI exits non-zero (permanent failures fail fast;
@@ -524,7 +584,10 @@ class Hindsight:
             "json",
         ]
         result = self._run_checked("recall", query, argv)
-        return parse_recall(result.stdout)[:limit]
+        hits = parse_recall(result.stdout)
+        if types is not None:
+            hits = [hit for hit in hits if hit.page_type in types]
+        return hits[:limit]
 
     def forget(self, rel_path: str) -> None:
         """Best-effort drop of stale facts for a path; never raises on CLI failure.

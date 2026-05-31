@@ -146,6 +146,44 @@ def test_live_hindsight_retain_recall_roundtrip(live_config: Config) -> None:
     )
 
 
+def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> None:
+    """The ``page_type`` tag round-trips through recall and scopes results (ADR 0004).
+
+    Issue #40 indexes life-admin content too and partitions recall **by the page-type
+    tag at query time**. CI mocks the CLI, so the live risk is whether the real
+    ``hindsight-embed`` round-trips that tag back in recall JSON. This retains a
+    uniquely-tagged ``entity`` probe, recalls it, and asserts the recovered
+    :attr:`~thoth.hindsight.RecallHit.page_type` is ``entity`` -- then that a
+    knowledge-type scope keeps the hit while a life-admin-only scope filters it out.
+    """
+    import uuid
+
+    from thoth.hindsight import Hindsight
+    from thoth.vault import KNOWLEDGE_TYPES, LIFE_ADMIN_TYPES
+
+    hindsight = Hindsight(live_config)
+    token = uuid.uuid4().hex
+    rel_path = f"entities/scope-probe-{token}.md"
+    query = f"scope probe entity {token}"
+    hindsight.retain(
+        rel_path, f"A tag-scope probe fact tagged {token}.", tags=["entity"]
+    )
+
+    match = next((h for h in hindsight.recall(query) if h.path == rel_path), None)
+    assert match is not None, f"recall did not recover {rel_path!r}"
+    assert match.page_type == "entity", (
+        f"page_type tag did not round-trip; got {match.page_type!r}"
+    )
+
+    # Knowledge scope keeps the entity hit; a life-admin-only scope filters it out.
+    knowledge = hindsight.recall(query, types=KNOWLEDGE_TYPES)
+    assert any(h.path == rel_path for h in knowledge), "knowledge scope dropped a hit"
+    life_admin = hindsight.recall(query, types=LIFE_ADMIN_TYPES)
+    assert all(h.path != rel_path for h in life_admin), (
+        "life-admin scope wrongly kept an entity hit"
+    )
+
+
 # --------------------------------------------------------------------------------------
 # 3. Slack -- Socket Mode credentials authenticate and the app wires up
 # --------------------------------------------------------------------------------------

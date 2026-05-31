@@ -42,14 +42,21 @@ from thoth.state import MARKER_REINDEX, MarkerStore
 from thoth.vault import KNOWLEDGE_DIRS, Vault
 
 
-def test_indexed_dirs_is_the_canonical_knowledge_dirs() -> None:
-    """INDEXED_DIRS derives from vault.KNOWLEDGE_DIRS (issue #19 single source).
+def test_indexed_dirs_derive_from_canonical_vault_dirs() -> None:
+    """INDEXED_DIRS = KNOWLEDGE_DIRS + LIFE_ADMIN_DIRS minus inbox (#40, ADR 0004).
 
-    The reindex walk must scope exactly the canonical fact-bearing folders; this guard
-    fails if the alias is ever replaced by a restated copy that drifts from vault.py.
+    The reindex walk is derived from the canonical vault folder lists (issue #19 single
+    source); this guard fails if it drifts from vault.py or starts walking inbox/.
     """
-    assert INDEXED_DIRS == KNOWLEDGE_DIRS
-    assert INDEXED_DIRS is KNOWLEDGE_DIRS
+    from thoth.vault import LIFE_ADMIN_DIRS
+
+    expected = (
+        *KNOWLEDGE_DIRS,
+        *(d for d in LIFE_ADMIN_DIRS if d != "inbox"),
+    )
+    assert INDEXED_DIRS == expected
+    assert set(KNOWLEDGE_DIRS) <= set(INDEXED_DIRS)
+    assert "inbox" not in INDEXED_DIRS
 
 
 # --------------------------------------------------------------------------- #
@@ -183,16 +190,25 @@ def vault(config: Config) -> Vault:
 
 
 def _seed_vault(root: Path) -> dict[str, str]:
-    """Seed one page per curated folder plus skip/excluded files; return body->rel map.
+    """Seed one page per indexed folder plus skip/excluded files; return label->rel map.
 
-    Returns a mapping of a short label to the vault-relative path of the curated pages
-    that *should* be indexed, so tests can refer to them by name.
+    Returns a mapping of a short label to the vault-relative path of the pages that
+    *should* be indexed, so tests can refer to them by name. Per ADR 0004 the index now
+    covers both the knowledge folders **and** the life-admin folders
+    (``actions``/``media``/``memories``/``people``); only ``inbox/`` and ``raw/`` (and
+    the spine / underscore dirs) stay excluded.
     """
     pages = {
+        # knowledge
         "entity": "entities/program-motion-controller.md",
         "concept": "concepts/distributed-systems.md",
         "comparison": "comparisons/foo-vs-bar.md",
         "query": "queries/how-does-foo-work.md",
+        # life-admin (now indexed too -- ADR 0004)
+        "action": "actions/fix-fence.md",
+        "media": "media/read-some-book.md",
+        "memory": "memories/wifi-password.md",
+        "person": "people/jane-doe.md",
     }
     _write(
         root,
@@ -214,6 +230,26 @@ def _seed_vault(root: Path) -> dict[str, str]:
         pages["query"],
         _page("How does foo work", "query", "Answer body.", updated="2026-05-30"),
     )
+    _write(
+        root,
+        pages["action"],
+        _page("Fix fence", "action", "todo", updated="2026-05-30"),
+    )
+    _write(
+        root,
+        pages["media"],
+        _page("Read some book", "media", "to read.", updated="2026-05-30"),
+    )
+    _write(
+        root,
+        pages["memory"],
+        _page("Wifi password", "memory", "it is hunter2.", updated="2026-05-30"),
+    )
+    _write(
+        root,
+        pages["person"],
+        _page("Jane", "entity", "Collaborator.", updated="2026-05-30"),
+    )
 
     # Files that must NEVER be retained:
     # - SKIP_FILES that happen to live inside an indexed folder
@@ -232,24 +268,20 @@ def _seed_vault(root: Path) -> dict[str, str]:
     _write(root, "index.md", _page("Home", "summary", "home", updated="2026-05-30"))
     _write(root, "SCHEMA.md", "# schema\n")
     _write(root, "log.md", "# log\n")
-    # - non-indexed dirs
-    _write(root, "raw/articles/some-clip.md", "---\ntype: entity\n---\n\nraw body\n")
-    _write(root, "raw/assets/note.md", "stray\n")
+    # - inbox/ holds transient deferred captures and stays excluded (ADR 0004)
     _write(
         root,
-        "actions/fix-fence.md",
-        _page("Fix fence", "action", "todo", updated="2026-05-30"),
+        "inbox/deadbeef12.md",
+        _page("Held", "inbox", "deferred raw", updated="2026-05-30"),
     )
+    # - non-indexed dirs (raw/ immutable source; underscore dirs are structure)
+    _write(root, "raw/articles/some-clip.md", "---\ntype: entity\n---\n\nraw body\n")
+    _write(root, "raw/assets/note.md", "stray\n")
     _write(root, "_bases/home.md", "base\n")
     _write(
         root,
         "_archive/old-entity.md",
         _page("Old", "entity", "archived", updated="2026-05-30"),
-    )
-    _write(
-        root,
-        "people/jane-doe.md",
-        _page("Jane", "entity", "person", updated="2026-05-30"),
     )
     return pages
 
@@ -399,10 +431,13 @@ def test_first_run_retains_every_curated_page_forget_then_retain(
         assert by_rel[rel] == page.body
         assert "type:" not in by_rel[rel]  # frontmatter stripped
 
-    # Tags carry [page_type, rel].
+    # Tags carry [page_type, rel] -- for knowledge AND life-admin pages (ADR 0004), so
+    # recall can scope by the page_type tag at query time.
     tags_by_rel = {rel: tags for rel, _, tags in hs.retains}
     assert tags_by_rel[pages["entity"]] == ("entity", pages["entity"])
     assert tags_by_rel[pages["query"]] == ("query", pages["query"])
+    assert tags_by_rel[pages["memory"]] == ("memory", pages["memory"])
+    assert tags_by_rel[pages["action"]] == ("action", pages["action"])
 
     # The manifest was written with a sha256 per page.
     manifest = json.loads(manifest_path(config).read_text(encoding="utf-8"))
@@ -692,33 +727,46 @@ def test_reset_bank_defaults_bank_to_the_hindsight_wrapper(
 # --------------------------------------------------------------------------- #
 
 
-def test_only_curated_dirs_are_walked_skip_files_and_excluded_dirs_ignored(
+def test_only_indexed_dirs_are_walked_skip_files_and_excluded_dirs_ignored(
     vault: Vault, config: Config
 ) -> None:
-    """SKIP_FILES and non-INDEXED_DIRS never retained; only the four curated dirs."""
+    """SKIP_FILES and non-INDEXED_DIRS never retained; knowledge + life-admin are."""
     pages = _seed_vault(vault.root)
     hs = RecordingHindsight()
     Reindexer(config, vault, hs).run()
 
     retained = {rel for rel, _, _ in hs.retains}
     assert retained == set(pages.values())
+    # Life-admin pages are now in the index (ADR 0004); inbox/ and raw/ are not.
+    assert "memories/wifi-password.md" in retained
+    assert "actions/fix-fence.md" in retained
+    assert "people/jane-doe.md" in retained
 
     # Spine files inside indexed folders are skipped.
     assert "entities/index.md" not in retained
     assert "concepts/SCHEMA.md" not in retained
     assert "queries/log.md" not in retained
-    # Excluded dirs never appear.
+    # Excluded dirs never appear: transient inbox/, immutable raw/, underscore dirs.
     for rel in retained:
+        assert not rel.startswith("inbox/")
         assert not rel.startswith("raw/")
-        assert not rel.startswith("actions/")
         assert not rel.startswith("_bases/")
         assert not rel.startswith("_archive/")
-        assert not rel.startswith("people/")
 
 
 def test_indexed_dirs_and_skip_files_constants_are_as_specified() -> None:
-    """The scope constants match the SPEC (four curated dirs; three spine files)."""
-    assert INDEXED_DIRS == ("entities", "concepts", "comparisons", "queries")
+    """INDEXED_DIRS = knowledge + life-admin minus inbox (ADR 0004); spine skipped."""
+    assert INDEXED_DIRS == (
+        "entities",
+        "concepts",
+        "comparisons",
+        "queries",
+        "actions",
+        "media",
+        "memories",
+        "people",
+    )
+    assert "inbox" not in INDEXED_DIRS
     assert SKIP_FILES == frozenset({"SCHEMA.md", "index.md", "log.md"})
 
 
