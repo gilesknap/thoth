@@ -40,8 +40,8 @@ from thoth.budget import KIND_ANTHROPIC, BudgetGuardLike
 from thoth.config import Config
 from thoth.vault import (
     FOLDER_TYPE_CONTRACT,
-    INDEX_SECTIONS,
     REQUIRED_COMMON_FIELDS,
+    SUMMARY_TYPES,
     VALID_SOURCES,
     SchemaError,
     SlugError,
@@ -173,17 +173,11 @@ FILE_PLAN_SCHEMA: dict[str, Any] = {
                     "slug": {"type": "string"},
                     "frontmatter": {"type": "object"},
                     "body": {"type": "string"},
+                    "summary": {"type": "string"},
                     "wikilinks": {"type": "array", "minItems": 2},
                     "embeds": {"type": "array"},
                     "confidence": {"enum": ["high", "medium", "low"]},
                 },
-            },
-        },
-        "index_entries": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["section", "wikilink", "summary"],
             },
         },
         "log": {
@@ -196,9 +190,10 @@ FILE_PLAN_SCHEMA: dict[str, Any] = {
 
 Each ``pages[*]`` entry maps 1:1 onto :meth:`thoth.vault.Vault.write_page`
 (``action``/``folder``/``slug``/``frontmatter``/``body``), carries ``>= 2`` outbound
-``wikilinks`` and optional ``embeds``; ``index_entries`` feed
-:meth:`thoth.vault.Vault.append_index` and ``log`` feeds
-:meth:`thoth.vault.Vault.append_log`. Authoritative validation is
+``wikilinks`` and optional ``embeds``, and -- for a reference page
+(:data:`~thoth.vault.SUMMARY_TYPES`) -- an optional one-line ``summary`` the curate pass
+routes into the page's frontmatter (the canonical, rebuildable gloss; ADR 0008). ``log``
+feeds :meth:`thoth.vault.Vault.append_log`. Authoritative validation is
 :func:`validate_file_plan`.
 """
 
@@ -232,16 +227,16 @@ def file_plan_contract_text() -> str:
     a one-line "return a file plan (see the file-plan schema)" instruction with the
     schema never actually shown -- so the model guessed the envelope and **every**
     capture was rejected by :func:`validate_file_plan` (empty ``folder``, missing
-    ``slug``/``updated``/``wikilinks``, a file path mistaken for ``source``, malformed
-    ``index_entries``/``log``). This spells out the exact JSON shape and the enums.
+    ``slug``/``updated``/``wikilinks``, a file path mistaken for ``source``, a malformed
+    ``log`` block). This spells out the exact JSON shape and the enums.
 
     It is rendered from the **same canonical constants the validator enforces**
     (:data:`~thoth.vault.FOLDER_TYPE_CONTRACT`, :data:`~thoth.vault.VALID_SOURCES`,
-    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, :data:`_VALID_LOG_ACTIONS`,
-    :data:`_MIN_WIKILINKS`), so the instructions and :func:`validate_file_plan` cannot
-    drift -- a new folder/type/source/log-action flows into the prompt automatically.
-    The internal ``inbox`` holding folder is excluded: it is the durable pre-LLM hold,
-    never a curate target.
+    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, :data:`~thoth.vault.SUMMARY_TYPES`,
+    :data:`_VALID_LOG_ACTIONS`, :data:`_MIN_WIKILINKS`), so the instructions and
+    :func:`validate_file_plan` cannot drift -- a new folder/type/source/log-action flows
+    into the prompt automatically. The internal ``inbox`` holding folder is excluded: it
+    is the durable pre-LLM hold, never a curate target.
 
     Returns:
         A multi-line contract string to embed in the curate prompt.
@@ -255,7 +250,7 @@ def file_plan_contract_text() -> str:
     sources = ", ".join(sorted(VALID_SOURCES))
     required = ", ".join(REQUIRED_COMMON_FIELDS)
     log_actions = ", ".join(sorted(_VALID_LOG_ACTIONS))
-    sections = ", ".join(sorted(INDEX_SECTIONS))
+    summary_types = ", ".join(sorted(SUMMARY_TYPES))
     return (
         "Return ONLY a single JSON object (no prose, no commentary) of this exact "
         "shape:\n"
@@ -271,24 +266,23 @@ def file_plan_contract_text() -> str:
         f'      "source": one of [{sources}], "tags": ["..."]\n'
         "    },\n"
         f'    "body": "markdown containing at least {_MIN_WIKILINKS} [[wikilinks]]",\n'
+        '    "summary": "one crisp line: what this page is about",   // see below\n'
         '    "wikilinks": ["[[a-related-page]]", "[[another-page]]"]   // >= '
         f"{_MIN_WIKILINKS}\n"
         "  } ],\n"
-        '  "index_entries": [ {"section": "<catalog section>", '
-        '"wikilink": "[[slug]]", "summary": "..."} ],   // optional\n'
         f'  "log": {{"action": one of [{log_actions}], "subject": "...", '
         '"files": ["folder/slug.md"]}   // optional\n'
         "}\n"
         f"Folder -> required type: {folder_types}.\n"
         "A note carries a tag for its kind (concept/comparison/query); a media item is "
         "an action tagged 'media' filed under actions.\n"
-        f'index_entries "section" (if you include any) MUST be one of: {sections}; '
-        "actions are surfaced by the dashboards, not the catalog, so omit "
-        "index_entries for them; omit index_entries entirely if none fit.\n"
+        f'Author a crisp one-line "summary" for every reference page (type one of: '
+        f"{summary_types}); it becomes the page's canonical one-line gloss in "
+        "frontmatter. Omit it for action pages (they are surfaced by the dashboards).\n"
         '"source" is the capture CHANNEL (one of the list above) -- NEVER a file path '
         "or the raw page path.\n"
         "Use today's date for created/updated. Do not invent folders, types, sources, "
-        "log actions, or index sections outside the lists above."
+        "or log actions outside the lists above."
     )
 
 
@@ -754,6 +748,10 @@ def _check_page(page: object, idx: int, problems: list[str]) -> None:
     if not isinstance(page.get("body"), str):
         problems.append(f"{where}: 'body' must be a string")
 
+    summary = page.get("summary")
+    if summary is not None and not isinstance(summary, str):
+        problems.append(f"{where}: 'summary' must be a string")
+
     wikilinks = page.get("wikilinks")
     if not isinstance(wikilinks, list):
         problems.append(f"{where}: 'wikilinks' must be a list")
@@ -771,8 +769,8 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
     Reuses :mod:`thoth.vault`'s validators so a passing plan is guaranteed to survive
     :meth:`thoth.vault.Vault.write_page`. Each ``pages[*]`` entry is checked for a known
     ``action``, a valid ``slug``, an allowed ``folder`` x ``type`` pairing, the required
-    common frontmatter fields, a valid ``source``, and ``>= 2`` ``wikilinks``. Any
-    ``index_entries`` and ``log`` block are shape-checked too.
+    common frontmatter fields, a valid ``source``, a string ``summary`` when present,
+    and ``>= 2`` ``wikilinks``. Any ``log`` block is shape-checked too.
 
     Args:
         obj: The decoded file-plan object.
@@ -791,19 +789,6 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
     else:
         for idx, page in enumerate(pages):
             _check_page(page, idx, problems)
-
-    entries = obj.get("index_entries")
-    if entries is not None:
-        if not isinstance(entries, list):
-            problems.append("'index_entries' must be a list")
-        else:
-            for idx, entry in enumerate(entries):
-                if not isinstance(entry, dict):
-                    problems.append(f"index_entries[{idx}]: must be an object")
-                    continue
-                for field in ("section", "wikilink", "summary"):
-                    if field not in entry:
-                        problems.append(f"index_entries[{idx}]: missing '{field}'")
 
     log = obj.get("log")
     if log is not None:

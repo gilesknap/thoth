@@ -7,9 +7,6 @@ updated: 2026-05-30
 
 # 🏠 PKM Vault — Home
 
-> Source of truth for everything captured. Total pages: N | Updated: YYYY-MM-DD
-> Agents: read SCHEMA.md, this index, and recent log.md before any operation.
-
 > [!danger]+ ⏰ Imminent actions
 > Overdue or due within the next two days — clear these first.
 >
@@ -46,17 +43,3 @@ updated: 2026-05-30
 > The latest activity across the whole vault.
 >
 > ![[_bases/home.base#Recent Captures (7d)]]
-
----
-
-## Knowledge catalog
-> One line per page: [[link]] — summary. Alphabetical within section.
-
-### Entities
-- [[program-motion-controller]] — central coordinator in the motor-control stack.
-- [[jane-doe]] — collaborator on home + controls work.
-
-### Notes
-- [[ioc-network-architecture]] — RTEMS IOC boot/VLAN/TFTP design notes.
-
-### Memories

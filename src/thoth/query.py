@@ -4,13 +4,13 @@ This is the read side of the appliance (SPEC section 7). A query is answered by
 walking progressively more expensive retrieval passes and stopping as soon as the
 vault has yielded enough pages:
 
-1. ``index.md`` -- the cheap, authoritative catalog (parsed by
-   :meth:`QueryEngine.index_summaries`).
-2. a lexical scan (grep) over the curated knowledge folders
-   (:meth:`QueryEngine.grep`).
-3. ``[[wikilink]]`` graph navigation from the pages already found
+1. a lexical scan (grep) over the curated knowledge folders
+   (:meth:`QueryEngine.grep`). grep scans the whole file including frontmatter, so a
+   reference page's one-line ``summary:`` gloss (issue #72 / ADR 0008) is matched here
+   -- transparently absorbing what the old ``index.md`` catalog pass used to do.
+2. ``[[wikilink]]`` graph navigation from the pages already found
    (:meth:`QueryEngine.follow_wikilinks`).
-4. semantic recall via Hindsight (:meth:`QueryEngine.recall_paths`), used only when
+3. semantic recall via Hindsight (:meth:`QueryEngine.recall_paths`), used only when
    the cheaper structural passes did not already answer.
 
 The composed prose is optional (an injected :class:`~thoth.llm.LLM` may write it,
@@ -70,12 +70,6 @@ removed so none leaks into the Slack answer.
 
 logger = logging.getLogger(__name__)
 
-# Catalog line in index.md: "- [[program-motion-controller]] - central coordinator..."
-# The separator may be a hyphen or an em dash (the SPEC seed template uses both forms).
-_CATALOG_LINE_RE: re.Pattern[str] = re.compile(
-    r"^- \[\[([^\]|#]+?)\]\]\s*(?:[-–—]\s*(.*))?$"
-)
-
 # Folders searched for lexical/structural retrieval (the reference layer). raw/ and the
 # actionable actions/ folder are intentionally excluded: retrieval composes from
 # reference pages, and raw sources are reached via their owning page's wikilinks.
@@ -99,8 +93,9 @@ class Citation:
 
     Every field is derived from a real, path-confined vault page: ``path`` has passed
     :meth:`~thoth.vault.Vault.resolve`, ``obsidian_uri`` comes from
-    :meth:`~thoth.vault.Vault.obsidian_uri`, and ``wikilink`` is derived from the page's
-    actual filename. The model never supplies any of these.
+    :meth:`~thoth.vault.Vault.obsidian_uri`, ``wikilink`` is derived from the page's
+    actual filename, and ``snippet`` is the page's own ``summary:`` frontmatter gloss
+    (issue #72 / ADR 0008) when it carries one. The model never supplies any of these.
     """
 
     path: str
@@ -111,6 +106,8 @@ class Citation:
     """The canonical ``obsidian://open`` deep link from :meth:`Vault.obsidian_uri`."""
     wikilink: str
     """The ``[[<slug>]]`` link derived from the real filename stem."""
+    snippet: str = ""
+    """The page's one-line ``summary:`` frontmatter gloss (``""`` when it has none)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,10 +177,11 @@ class QueryEngine:
     ) -> QueryResult:
         """Run the full cost-ordered retrieval and compose an answer with citations.
 
-        The passes run cheapest-first and short-circuit: an index/grep hit seeds the
-        candidate set, ``[[wikilink]]`` navigation expands it, and Hindsight recall is
+        The passes run cheapest-first and short-circuit: a grep hit seeds the
+        candidate set (grep scans frontmatter too, so a page's ``summary:`` gloss is
+        matched there), ``[[wikilink]]`` navigation expands it, and Hindsight recall is
         consulted only when ``use_recall`` is true *and* the cheap structural passes
-        found nothing (so a query the index/grep/wikilinks already answered never burns
+        found nothing (so a query the grep/wikilinks already answered never burns
         a recall call). The prose is written by the injected LLM if present, else taken
         as a deterministic excerpt of the top page; either way the citation block is
         harness-built from confined, real paths. With an LLM the result's citations are
@@ -219,8 +217,9 @@ class QueryEngine:
                     if from_recall:
                         recall_only.add(path)
 
-        # 1) index.md catalog -> grep, both lexical and cheap.
-        add(self._index_matches(query))
+        # 1) grep over the reference folders -- lexical and cheap. grep scans the whole
+        # file including frontmatter, so a page's one-line summary: gloss matches here
+        # (ADR 0008), transparently covering what the old index.md catalog pass did.
         add(self.grep(query, limit=max_pages * 4))
 
         # 2) graph navigation from what we already found (bounded).
@@ -231,7 +230,7 @@ class QueryEngine:
 
         # 3) semantic recall -- the expensive pass. Cost-ordered (SPEC section 7): it
         # runs only when the cheap structural passes found nothing, so a query the
-        # index/grep/wikilinks already answered never burns a recall call.
+        # grep/wikilinks already answered never burns a recall call.
         if use_recall and not ordered:
             add(self.recall_paths(query, limit=max_pages * 2), from_recall=True)
 
@@ -261,58 +260,7 @@ class QueryEngine:
             consulted_count=len(consulted),
         )
 
-    # ---- pass 1: the authoritative catalog --------------------------------------
-
-    def index_summaries(self) -> dict[str, str]:
-        """Parse ``index.md`` catalog lines into a ``{wikilink_target: summary}`` map.
-
-        Reads the catalog lines of the form ``- [[slug]] - summary`` (the separator may
-        be a hyphen or an em dash, per the SPEC seed template) from ``index.md``. The
-        map key is the raw wikilink target as written (for example ``program-motion-
-        controller`` or ``people/jane-doe``); blank/non-catalog lines and section
-        headings are ignored. A missing ``index.md`` yields an empty map rather than
-        raising, so a freshly initialised vault still answers structurally.
-
-        Returns:
-            An ordered mapping of wikilink target to its one-line summary (``""`` when a
-            catalog line carries no summary text).
-        """
-        summaries: dict[str, str] = {}
-        try:
-            text = self._read_text("index.md")
-        except VaultError:
-            return summaries
-        if text is None:
-            return summaries
-        for line in text.splitlines():
-            match = _CATALOG_LINE_RE.match(line.strip())
-            if match is None:
-                continue
-            target = match.group(1).strip()
-            summary = (match.group(2) or "").strip()
-            summaries[target] = summary
-        return summaries
-
-    def _index_matches(self, query: str) -> list[str]:
-        """Return vault paths whose index catalog entry matches ``query`` (lexical).
-
-        A catalog target or its summary that contains a query token (case-insensitive)
-        is resolved to a real vault page via :meth:`_target_to_path`. Order follows the
-        catalog; non-resolving (dangling) targets are dropped.
-        """
-        tokens = _tokenize(query)
-        if not tokens:
-            return []
-        hits: list[str] = []
-        for target, summary in self.index_summaries().items():
-            haystack = f"{target} {summary}".lower()
-            if any(token in haystack for token in tokens):
-                path = self._target_to_path(target)
-                if path is not None:
-                    hits.append(path)
-        return hits
-
-    # ---- pass 2: lexical scan over the curated folders --------------------------
+    # ---- pass 1: lexical scan over the curated folders --------------------------
 
     def grep(self, term: str, *, limit: int = 20) -> list[str]:
         """Lexically scan :data:`SEARCHED_DIRS` ``*.md`` for ``term`` (filename + body).
@@ -353,7 +301,7 @@ class QueryEngine:
                         return hits
         return hits
 
-    # ---- pass 3: graph navigation -----------------------------------------------
+    # ---- pass 2: graph navigation -----------------------------------------------
 
     def follow_wikilinks(self, path: str, *, limit: int = 20) -> list[str]:
         """Resolve the ``[[wikilinks]]`` in a page body to existing vault paths.
@@ -393,7 +341,7 @@ class QueryEngine:
                 break
         return resolved
 
-    # ---- pass 4: semantic recall ------------------------------------------------
+    # ---- pass 3: semantic recall ------------------------------------------------
 
     def recall_paths(
         self,
@@ -454,7 +402,9 @@ class QueryEngine:
         calls :meth:`~thoth.vault.Vault.resolve`), so a path outside the vault raises
         :class:`~thoth.vault.PathConfinementError` and no citation can be fabricated.
         The ``obsidian_uri`` is therefore exactly ``config.obsidian_uri(path)`` for a
-        confined path, and the ``wikilink`` is derived from the real filename stem.
+        confined path, the ``wikilink`` is derived from the real filename stem, and the
+        ``snippet`` is the page's own ``summary:`` frontmatter gloss (issue #72 / ADR
+        0008) when it carries one, else ``""``.
 
         Args:
             path: A vault-relative path to a ``.md`` page.
@@ -471,11 +421,14 @@ class QueryEngine:
         page = self._vault.read_page(path)
         title_value = page.frontmatter.get("title")
         title = title_value if isinstance(title_value, str) and title_value else slug
+        summary_value = page.frontmatter.get("summary")
+        snippet = summary_value.strip() if isinstance(summary_value, str) else ""
         return Citation(
             path=PurePosixPath(path).as_posix(),
             title=title,
             obsidian_uri=obsidian_uri,
             wikilink=f"[[{slug}]]",
+            snippet=snippet,
         )
 
     # ---- internals --------------------------------------------------------------
@@ -591,13 +544,6 @@ class QueryEngine:
             return absolute_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             return ""
-
-    def _read_text(self, rel: str) -> str | None:
-        """Read a confined vault file as text, or ``None`` when it does not exist."""
-        absolute = self._vault.resolve(rel)
-        if not absolute.is_file():
-            return None
-        return absolute.read_text(encoding="utf-8", errors="ignore")
 
 
 def _tokenize(text: str) -> list[str]:

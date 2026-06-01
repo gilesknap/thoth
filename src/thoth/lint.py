@@ -14,8 +14,10 @@ The 13 checks (SPEC Appendix table):
     (life-admin pages are exempt; Bases surface them).
 2.  **Broken wikilinks** -- ``[[target]]`` references that resolve to no page, honouring
     ``aliases`` frontmatter. Highest severity.
-3.  **Index completeness** -- every curated page appears in ``index.md`` and the
-    ``Total pages: N`` line matches the real curated-page count.
+3.  **Summary gloss** -- every reference page (``entity``/``note``/``memory``) carries a
+    non-empty one-line ``summary:`` frontmatter gloss (issue #72 / ADR 0008): the
+    canonical, rebuildable home of the per-page gloss that replaced the old
+    agent-maintained ``index.md`` catalog.
 4.  **Frontmatter validation** -- required common fields present, ``type`` valid,
     type-specific required fields present, and ``status`` / ``priority`` /
     ``media_type`` values within the Metadata-Menu vocabularies.
@@ -68,6 +70,7 @@ from thoth.vault import (
     CURATED_DIRS,
     FOLDER_TYPE_CONTRACT,
     REQUIRED_COMMON_FIELDS,
+    SUMMARY_TYPES,
     VALID_SOURCES,
     VALID_TYPES,
     Vault,
@@ -197,9 +200,6 @@ _EMBED_RE: re.Pattern[str] = re.compile(r"\!\[\[([^\[\]]+?)\]\]")
 # Fenced code spans (``` ... ``` or ~~~ ... ~~~) and inline code (`...`); their contents
 # must not produce false-positive wikilinks/embeds (SPEC: code-fenced false positives).
 _FENCE_RE: re.Pattern[str] = re.compile(r"```.*?```|~~~.*?~~~|`[^`\n]*`", re.DOTALL)
-
-# A single index-catalog "Total pages: N" marker (SPEC index.md seed template).
-_TOTAL_PAGES_RE: re.Pattern[str] = re.compile(r"Total pages:\s*(\d+)")
 
 # A log entry header line "## [YYYY-MM-DD] ...".
 _LOG_ENTRY_RE: re.Pattern[str] = re.compile(r"^## \[", re.MULTILINE)
@@ -342,7 +342,7 @@ class LintEngine:
         findings: list[Finding] = []
         findings.extend(self.check_orphans())
         findings.extend(self.check_broken_wikilinks())
-        findings.extend(self.check_index_completeness())
+        findings.extend(self.check_summaries())
         findings.extend(self.check_frontmatter())
         findings.extend(self.check_stale())
         findings.extend(self.check_contradictions())
@@ -432,62 +432,38 @@ class LintEngine:
                 )
         return findings
 
-    # ---- check 3: index completeness -------------------------------------------------
+    # ---- check 3: summary gloss ------------------------------------------------------
 
-    def check_index_completeness(self) -> list[Finding]:
-        """Flag curated pages missing from ``index.md`` and a stale total (check 3).
+    def check_summaries(self) -> list[Finding]:
+        """Flag reference pages missing a one-line ``summary:`` gloss (check 3).
 
-        Every curated knowledge page's slug (or path) must appear inside ``index.md``;
-        any that does not is flagged (``Severity.STYLE``). If ``index.md`` carries a
-        ``Total pages: N`` line whose ``N`` disagrees with the real curated-page count,
-        that mismatch is flagged too (``Severity.STYLE``). A missing ``index.md`` is a
-        single high-severity finding rather than a crash.
+        Every reference page (:data:`~thoth.vault.SUMMARY_TYPES`:
+        ``entity``/``note``/``memory``) must carry a non-empty one-line ``summary:``
+        frontmatter field -- the canonical, rebuildable per-page gloss that replaced the
+        old agent-maintained ``index.md`` catalog (issue #72 / ADR 0008). A page whose
+        ``summary`` is absent or blank is flagged ``Severity.STYLE`` (the tier the old
+        catalog-completeness check used), preserving the "every reference page is
+        glossed" guarantee on the page instead of the index. ``index.md`` is now a
+        static set of Bases dashboards and is not scanned.
 
         Returns:
-            The index-completeness findings.
+            The summary-gloss findings.
         """
-        pages = self._curated_pages()
-        try:
-            index_text = self._read_text("index.md")
-        except LintError:
-            return [
-                Finding(
-                    check=3,
-                    name="index-completeness",
-                    severity=Severity.BROKEN,
-                    path="index.md",
-                    message="index.md is missing; cannot verify catalog completeness",
-                )
-            ]
         findings: list[Finding] = []
-        index_links = {self._normalise_target(t) for t in extract_wikilinks(index_text)}
-        for page in pages:
-            handles = {page.slug, page.path, page.path.removesuffix(".md")}
-            if handles & index_links:
+        for page in self._curated_pages():
+            page_type = _str_field(page.meta.get("type"))
+            if page_type not in SUMMARY_TYPES:
                 continue
-            findings.append(
-                Finding(
-                    check=3,
-                    name="index-completeness",
-                    severity=Severity.STYLE,
-                    path=page.path,
-                    message="curated page is not listed in index.md",
+            if _str_field(page.meta.get("summary")) is None:
+                findings.append(
+                    Finding(
+                        check=3,
+                        name="summary-gloss",
+                        severity=Severity.STYLE,
+                        path=page.path,
+                        message="reference page has no one-line summary: frontmatter",
+                    )
                 )
-            )
-        match = _TOTAL_PAGES_RE.search(index_text)
-        if match is not None and int(match.group(1)) != len(pages):
-            findings.append(
-                Finding(
-                    check=3,
-                    name="index-completeness",
-                    severity=Severity.STYLE,
-                    path="index.md",
-                    message=(
-                        f"index.md 'Total pages: {match.group(1)}' disagrees with the "
-                        f"real curated-page count {len(pages)}"
-                    ),
-                )
-            )
         return findings
 
     # ---- check 4: frontmatter validation ---------------------------------------------

@@ -22,7 +22,7 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
 - File names: lowercase, hyphens, no spaces, no dates (dates live in frontmatter).
 - Every page starts with YAML frontmatter (see Frontmatter).
 - Link with [[wikilinks]]; every reference page needs >= 2 outbound links.
-- Bump `updated` on every edit. Add every new page to index.md. Append every action to log.md.
+- Bump `updated` on every edit. Append every action to log.md. (index.md is static — never edit it.)
 - Images: embed inline with ![[asset.ext]] on the owning page AND describe them there.
   Binaries live in raw/assets/. No per-image sidecar files. Never base64.
 - Provenance: on pages synthesising 3+ sources, append ^[raw/articles/source.md] to
@@ -31,6 +31,8 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
 ## Frontmatter
 Common (every page): title, type, created, updated, source, tags.
 type is one of: entity, note, memory, action (plus the inbox machinery type).
+Reference pages (`type: entity`/`note`/`memory`) also carry `summary`: one line saying
+what the page is about — its canonical, rebuildable gloss (no separate index catalog).
 Actionable pages (`type: action`) additionally carry `status` (and usually `due_date`);
 a media-queue item is an `action` tagged `media` with status to_consume/consuming/consumed.
 
@@ -57,7 +59,7 @@ Add a tag HERE before using it (prevents sprawl). Seed set:
 - ADD to an existing page when a source mentions something already covered.
 - DON'T create pages for passing mentions or out-of-scope detail.
 - SPLIT a page over ~200 lines into sub-topics with cross-links.
-- ARCHIVE fully-superseded pages to _archive/ and drop them from index.md.
+- ARCHIVE fully-superseded pages to _archive/.
 - Actions and memories are created on demand (one capture = one action/memory page)
   and do NOT need the 2-source threshold.
 

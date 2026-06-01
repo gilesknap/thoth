@@ -393,22 +393,16 @@ def _good_page(slug: str = "program-motion-controller") -> dict[str, Any]:
             "tags": ["controls"],
         },
         "body": "PMC coordinates motion. See [[drive-control-module]].",
+        "summary": "central coordinator in the motor-control stack",
         "wikilinks": ["drive-control-module", "motor-rail-api"],
         "embeds": [],
     }
 
 
 def _good_plan() -> dict[str, Any]:
-    """A two-page plan with index entries and a log block, all well-formed."""
+    """A two-page plan (each page carrying a summary) plus a log block, all valid."""
     return {
         "pages": [_good_page(), _good_page("drive-control-module")],
-        "index_entries": [
-            {
-                "section": "Entities",
-                "wikilink": "program-motion-controller",
-                "summary": "central coordinator",
-            }
-        ],
         "log": {
             "action": "ingest",
             "subject": "motor control",
@@ -423,8 +417,15 @@ def test_validate_file_plan_accepts_well_formed_plan() -> None:
 
 
 def test_validate_file_plan_accepts_minimal_pages_only() -> None:
-    """A plan with just a valid 'pages' list (no index/log) is acceptable."""
+    """A plan with just a valid 'pages' list (no log) is acceptable."""
     validate_file_plan({"pages": [_good_page()]})
+
+
+def test_validate_file_plan_accepts_page_without_summary() -> None:
+    """``summary`` is optional: a page omitting it still validates."""
+    page = _good_page()
+    del page["summary"]
+    validate_file_plan({"pages": [page]})
 
 
 def test_validate_file_plan_rejects_unknown_action() -> None:
@@ -497,12 +498,12 @@ def test_validate_file_plan_rejects_bad_log_action() -> None:
         validate_file_plan(plan)
 
 
-def test_validate_file_plan_rejects_malformed_index_entry() -> None:
-    """An index entry missing a required key is reported."""
-    plan = _good_plan()
-    del plan["index_entries"][0]["summary"]
+def test_validate_file_plan_rejects_non_string_summary() -> None:
+    """A non-string per-page ``summary`` is reported (#72)."""
+    page = _good_page()
+    page["summary"] = ["not", "a", "string"]
     with pytest.raises(SchemaValidationError, match="summary"):
-        validate_file_plan(plan)
+        validate_file_plan({"pages": [page]})
 
 
 def test_validate_file_plan_collects_multiple_problems() -> None:
@@ -640,6 +641,11 @@ def test_file_plan_contract_text_covers_validator_contract() -> None:
         assert field in text, f"required field {field!r} missing from contract"
     assert "create" in text and "update" in text
     assert "wikilinks" in text
+    # The per-page summary instruction is present and names the reference types it
+    # applies to (#72), but the removed catalog vocabulary is gone.
+    assert "summary" in text
+    assert "index_entries" not in text
+    assert "catalog" not in text
 
 
 def test_file_plan_contract_text_describes_a_pages_envelope() -> None:

@@ -655,46 +655,33 @@ def test_asset_sha256_missing_raises(vault: Vault) -> None:
         vault.asset_sha256("absent-000000.png")
 
 
-# --- append_index ------------------------------------------------------------------
+# --- summary frontmatter round-trip (#72) ------------------------------------------
 
 
-def test_append_index_inserts_sorted_and_deduped(vault: Vault) -> None:
-    """append_index keeps entries sorted within a section and dedupes by wikilink."""
-    vault.append_index("Entities", "zebra", "last alphabetically")
-    vault.append_index("Entities", "alpha", "first alphabetically")
-    # Idempotent: re-adding the same wikilink does not duplicate it.
-    vault.append_index("Entities", "alpha", "first alphabetically")
-    text = (vault.root / "index.md").read_text(encoding="utf-8")
-    section = text.split("### Entities", 1)[1].split("###", 1)[0]
-    lines = [ln for ln in section.splitlines() if ln.startswith("- [[")]
-    assert lines == [
-        "- [[alpha]] - first alphabetically",
-        "- [[zebra]] - last alphabetically",
-    ]
-
-
-def test_append_index_does_not_disturb_other_sections(vault: Vault) -> None:
-    """Adding under one heading leaves the other headings intact."""
-    vault.append_index("Notes", "raft", "consensus")
-    text = (vault.root / "index.md").read_text(encoding="utf-8")
-    for heading in ("### Entities", "### Notes", "### Memories"):
-        assert heading in text
-    assert "- [[raft]] - consensus" in text
-
-
-def test_append_index_unknown_section(vault: Vault) -> None:
-    """An unknown catalog section raises SchemaError."""
-    with pytest.raises(SchemaError):
-        vault.append_index("Widgets", "foo", "bar")
-
-
-def test_append_index_round_trips_as_markdown(vault: Vault) -> None:
-    """index.md remains parseable and the new entry survives a second add."""
-    vault.append_index("Notes", "cap-theorem", "consistency trade-offs")
-    vault.append_index("Notes", "raft", "consensus")
-    text = (vault.root / "index.md").read_text(encoding="utf-8")
-    assert text.count("- [[cap-theorem]]") == 1
-    assert text.count("- [[raft]]") == 1
+def test_summary_frontmatter_round_trips(vault: Vault) -> None:
+    """A reference page's ``summary:`` survives a write -> read round trip (#72)."""
+    rel = vault.write_page(
+        "notes",
+        "cap-theorem",
+        {
+            "title": "CAP Theorem",
+            "type": "note",
+            "source": "manual",
+            "tags": ["concept"],
+            "summary": "consistency/availability/partition-tolerance trade-offs",
+        },
+        "Body with [[a]] and [[b]] links.\n",
+    )
+    page = vault.read_page(rel)
+    assert (
+        page.frontmatter["summary"]
+        == "consistency/availability/partition-tolerance trade-offs"
+    )
+    # The gloss lives in the on-disk frontmatter block (so grep over the whole file
+    # finds it), not only in the parsed mapping.
+    raw = (vault.root / rel).read_text(encoding="utf-8")
+    head = raw.split("---", 2)[1]
+    assert "summary:" in head
 
 
 # --- append_log --------------------------------------------------------------------

@@ -33,8 +33,9 @@ tool. The passes are:
 4. **curate** -- a second Claude call returning a file-plan that is validated by
    :func:`thoth.llm.validate_file_plan` *and* re-validated through the
    :class:`~thoth.vault.Vault` write helpers, then written.
-5. **navigation** -- :meth:`~thoth.vault.Vault.append_index` for knowledge pages and
-   :meth:`~thoth.vault.Vault.append_log` for every file touched.
+5. **navigation** -- :meth:`~thoth.vault.Vault.append_log` for every file touched (a
+   reference page's one-line gloss rides in its own ``summary`` frontmatter, so there is
+   no separate ``index.md`` catalog pass; ADR 0008).
 6. **retain** -- :meth:`thoth.hindsight.Hindsight.retain` per curated page, then a
    ``probe`` that the page came back.
 7. **commit** -- :meth:`~thoth.git_sync.GitSync.commit`; a rebase conflict is surfaced
@@ -79,6 +80,7 @@ from thoth.llm import (
 )
 from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
 from thoth.vault import (
+    SUMMARY_TYPES,
     TYPE_ENUMERATION,
     VALID_TYPES,
     SchemaError,
@@ -112,15 +114,6 @@ _AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
 _TEXT_EXTS: frozenset[str] = frozenset(
     {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
 )
-
-# Reference ``type`` -> the index.md catalog section append_index targets (ADR 0005).
-# Only the lifecycle-free reference types earn a catalog entry; ``action`` pages are
-# surfaced by the Bases dashboards and get no index entry.
-_INDEX_SECTION_BY_TYPE: dict[str, str] = {
-    "entity": "Entities",
-    "note": "Notes",
-    "memory": "Memories",
-}
 
 # How many curate LLM attempts before giving up: one initial call plus one corrective
 # retry that feeds the validation errors back to the model. A model that returns a
@@ -1281,7 +1274,10 @@ class Ingestor:
 
         ``write_page`` re-validates the folder/type/slug contract and confines the path,
         so a plan that slipped a bad folder or an escaping slug past the schema check is
-        still rejected here. For a binary capture the asset's analysed OCR/extracted
+        still rejected here. A reference page's per-plan ``summary`` (issue #72) is
+        routed into its frontmatter -- the canonical, rebuildable one-line gloss that
+        replaces the old ``index.md`` catalog (ADR 0008) and which :meth:`thoth.query`
+        grep then absorbs transparently. For a binary capture the asset's analysed OCR
         text is ensured present in the body (issue #42) so the page is searchable on the
         real content even if the model's body did not transcribe it.
         """
@@ -1289,6 +1285,7 @@ class Ingestor:
         slug = page["slug"]
         frontmatter = dict(page["frontmatter"])
         frontmatter.setdefault("source", source)
+        self._apply_summary(frontmatter, page)
         body = page["body"]
         body = self._append_embeds(body, page, raw)
         body = self._ensure_analysis_text(body, raw, analysis)
@@ -1298,6 +1295,27 @@ class Ingestor:
             raise IngestError(
                 f"vault rejected planned page {folder}/{slug}: {exc}"
             ) from exc
+
+    @staticmethod
+    def _apply_summary(frontmatter: dict[str, Any], page: dict[str, Any]) -> None:
+        """Route a reference page's per-plan ``summary`` into its frontmatter (#72).
+
+        The curate plan carries a one-line ``summary`` per page; for a reference page
+        (:data:`~thoth.vault.SUMMARY_TYPES`: ``entity``/``note``/``memory``) it is the
+        canonical, rebuildable gloss and is written into frontmatter as ``summary:`` so
+        :meth:`thoth.query.QueryEngine.grep` (which scans the whole file including
+        frontmatter) finds it -- the page now owns its gloss instead of an ``index.md``
+        catalog (ADR 0008). A blank/whitespace summary, an ``action``/``inbox`` page, or
+        a page that already carries its own ``summary`` frontmatter is left untouched.
+        """
+        if "summary" in frontmatter:
+            return
+        page_type = frontmatter.get("type")
+        if not isinstance(page_type, str) or page_type not in SUMMARY_TYPES:
+            return
+        summary = page.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            frontmatter["summary"] = summary.strip()
 
     @staticmethod
     def _ensure_analysis_text(
@@ -1364,64 +1382,18 @@ class Ingestor:
     # ---- pass 5: navigation ------------------------------------------------------
 
     def _apply_navigation(self, plan: dict[str, Any], page_paths: list[str]) -> None:
-        """Append index entries for reference pages and a log block for all touches.
+        """Append a ``log.md`` block for every file touched (SPEC step 5).
 
-        ``index_entries`` from the plan are applied when present; otherwise a default
-        entry is derived for each written reference page (entity/note/memory).
-        Actionable pages (``action``) are surfaced by the Bases dashboards and get no
-        index entry (ADR 0005, SPEC step 5).
+        A reference page's one-line gloss is its own ``summary:`` frontmatter (routed in
+        at write time by :meth:`_write_planned_page`), so there is no separate
+        ``index.md`` catalog to maintain here -- ``index.md`` is a static set of Bases
+        dashboards (ADR 0008). The only navigation edit left is the append-only
+        ``log.md`` entry recording the touched paths.
         """
-        entries = plan.get("index_entries")
-        applied = 0
-        if isinstance(entries, list) and entries:
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                section = entry.get("section")
-                wikilink = entry.get("wikilink")
-                summary = entry.get("summary", "")
-                if isinstance(section, str) and isinstance(wikilink, str):
-                    try:
-                        self._vault.append_index(section, wikilink, str(summary))
-                    except SchemaError:
-                        # The model named an unknown catalog section. index_entries is
-                        # optional navigation metadata and the curated page is ALREADY
-                        # written, so skip this entry (and fall back to a derived
-                        # default below) rather than aborting and losing the capture.
-                        continue
-                    except VaultError as exc:
-                        raise IngestError(f"index update failed: {exc}") from exc
-                    applied += 1
-        # No usable explicit entry (none supplied, or every section was invalid): derive
-        # the catalog entries deterministically from the written pages' types instead.
-        if applied == 0:
-            self._default_index_entries(plan, page_paths)
-
         try:
             self._vault.append_log("ingest", self._log_subject(plan), page_paths)
         except VaultError as exc:
             raise IngestError(f"log update failed: {exc}") from exc
-
-    def _default_index_entries(
-        self, plan: dict[str, Any], page_paths: list[str]
-    ) -> None:
-        """Derive one catalog entry per written reference page from the plan."""
-        pages = plan.get("pages")
-        if not isinstance(pages, list):
-            return
-        for page, rel in zip(pages, page_paths, strict=True):
-            if not isinstance(page, dict):
-                continue
-            page_type = page.get("frontmatter", {}).get("type")
-            section = _INDEX_SECTION_BY_TYPE.get(str(page_type))
-            if section is None:
-                continue
-            slug = PurePosixPath(rel).stem
-            title = page.get("frontmatter", {}).get("title", slug)
-            try:
-                self._vault.append_index(section, slug, str(title))
-            except VaultError as exc:
-                raise IngestError(f"index update failed: {exc}") from exc
 
     @staticmethod
     def _log_subject(plan: dict[str, Any]) -> str:

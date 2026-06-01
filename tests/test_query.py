@@ -1,8 +1,9 @@
 """Tests for :mod:`thoth.query` -- cost-ordered, vault-only retrieval.
 
-These tests build a real seeded vault under ``tmp_path`` (an ``index.md`` with catalog
-lines plus a handful of curated pages carrying frontmatter and ``[[wikilinks]]``) and a
-real :class:`~thoth.vault.Vault` over it. The semantic-recall seam is a
+These tests build a real seeded vault under ``tmp_path`` (a static ``index.md`` plus a
+handful of curated pages carrying frontmatter -- including the one-line ``summary:``
+gloss (#72) -- and ``[[wikilinks]]``) and a real :class:`~thoth.vault.Vault` over it.
+The semantic-recall seam is a
 :class:`_FakeHindsight` (subclassing :class:`~thoth.hindsight.Hindsight` so it is a
 drop-in type but spawns no subprocess) returning canned hits, and the optional prose LLM
 is a tiny injected fake exposing ``.messages.create``. No network, no subprocess, no
@@ -40,20 +41,9 @@ type: summary
 updated: 2026-05-30
 ---
 
-# Home
+# 🏠 PKM Vault — Home
 
-## Knowledge catalog
-> One line per page: [[link]] - summary.
-
-### Entities
-- [[program-motion-controller]] - central coordinator in the motor-control stack.
-- [[drive-control-module]] — hardware interface for the motor rail.
-- [[jane-doe]] - collaborator on home + controls work.
-
-### Notes
-- [[distributed-systems]] - notes on CAP and consensus.
-
-### Memories
+![[_bases/home.base#Recent Captures (7d)]]
 """
 
 _LOG_SEED = """\
@@ -84,8 +74,10 @@ def _page(
     page_type: str,
     body: str,
     tags: str = "[controls]",
+    summary: str | None = None,
 ) -> str:
     """Render a minimal valid page (frontmatter + body) as markdown text."""
+    summary_line = f"summary: {summary}\n" if summary is not None else ""
     return (
         "---\n"
         f"title: {title}\n"
@@ -94,6 +86,7 @@ def _page(
         "updated: 2026-05-30\n"
         "source: slack\n"
         f"tags: {tags}\n"
+        f"{summary_line}"
         "---\n\n"
         f"{body}\n"
     )
@@ -149,6 +142,9 @@ def _seed_vault(root: Path) -> None:
             page_type="entity",
             body="# Jane Doe\n\nCollaborator on the controls work.\n",
             tags="[person]",
+            # A distinctive word ("kinematics") that appears ONLY in the summary, so a
+            # grep hit on it proves grep scans the frontmatter gloss (#72 / ADR 0008).
+            summary="lead on the kinematics calibration effort",
         ),
         encoding="utf-8",
     )
@@ -295,36 +291,29 @@ def test_citation_obsidian_uri_is_percent_encoded(engine: QueryEngine) -> None:
     assert citation.wikilink == "[[distributed-systems]]"
 
 
-# --- index_summaries ---------------------------------------------------------------
+# --- summary gloss via grep (#72 / ADR 0008) ---------------------------------------
 
 
-def test_index_summaries_parses_catalog_lines(engine: QueryEngine) -> None:
-    """Catalog lines parse into {target: summary}, ignoring blank sections/headings."""
-    summaries = engine.index_summaries()
-    assert (
-        summaries["program-motion-controller"]
-        == "central coordinator in the motor-control stack."
-    )
-    assert summaries["distributed-systems"] == "notes on CAP and consensus."
-    assert summaries["jane-doe"] == "collaborator on home + controls work."
-    # Headings and the blockquote legend are not catalog lines.
-    assert "Knowledge catalog" not in summaries
-    assert "link" not in summaries
+def test_grep_matches_frontmatter_summary(engine: QueryEngine) -> None:
+    """grep finds a page by a word that lives ONLY in its ``summary:`` frontmatter.
+
+    Replaces the old ``index.md`` catalog pass: the per-page gloss now rides in
+    frontmatter, and the existing grep (which scans the whole file) absorbs it (#72).
+    """
+    # "kinematics" appears only in jane-doe's summary frontmatter, never in any body.
+    assert engine.grep("kinematics") == ["entities/jane-doe.md"]
 
 
-def test_index_summaries_handles_em_dash_separator(engine: QueryEngine) -> None:
-    """A catalog line using an em dash separator parses just like a hyphen."""
-    summaries = engine.index_summaries()
-    assert summaries["drive-control-module"] == "hardware interface for the motor rail."
+def test_build_citation_surfaces_summary_snippet(engine: QueryEngine) -> None:
+    """``build_citation`` exposes the page's ``summary:`` gloss as its ``snippet``."""
+    citation = engine.build_citation("entities/jane-doe.md")
+    assert citation.snippet == "lead on the kinematics calibration effort"
 
 
-def test_index_summaries_empty_when_no_index(
-    config: Config, vault: Vault, hindsight: _FakeHindsight
-) -> None:
-    """A vault with no index.md yields an empty map rather than raising."""
-    (vault.root / "index.md").unlink()
-    engine = QueryEngine(config, vault, hindsight)
-    assert engine.index_summaries() == {}
+def test_build_citation_snippet_empty_without_summary(engine: QueryEngine) -> None:
+    """A page with no ``summary:`` frontmatter yields an empty citation snippet."""
+    citation = engine.build_citation("entities/drive-control-module.md")
+    assert citation.snippet == ""
 
 
 # --- grep --------------------------------------------------------------------------
