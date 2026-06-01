@@ -12,6 +12,23 @@ is not a known text / image / PDF / audio kind (so a stray binary never triggers
 surprise analyse call). Markdown/text files are filed as notes; images/PDFs/audio are
 analysed and kept as assets.
 
+## Running it on a deployed appliance
+
+`thoth capture` pulls and pushes the vault git repo, so the shell you run it in needs the
+same secrets the daemon uses — most importantly the vault remote's token. `load_config`
+reads `~/.thoth/.env` into the configuration but never exports it into the process
+environment, and the git sync inherits the real shell environment; the `thoth-slack`
+service gets those values from systemd, but an interactive shell does not. So before a
+manual import, source the env once:
+
+```console
+$ set -a; . ~/.thoth/.env; set +a
+$ thoth capture ~/notes
+```
+
+Without this the run fails at the initial vault pull with `Authentication failed` for the
+vault remote.
+
 ## Curate (default) vs as-is
 
 ```console
