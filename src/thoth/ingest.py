@@ -67,7 +67,7 @@ from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.extract import ExtractError, Extractor, FetchedBinary
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
-from thoth.hindsight import Hindsight, HindsightError
+from thoth.hindsight import Hindsight, HindsightError, page_record_text
 from thoth.llm import (
     LLM,
     LLMError,
@@ -1861,7 +1861,7 @@ class Ingestor:
                 page = self._vault.read_page(rel)
             except VaultError:
                 continue
-            facts = self._retain_facts(page.frontmatter, page.body)
+            facts = self._retain_facts(page.frontmatter, page.body, cls)
             try:
                 self._hindsight.retain(rel, facts, tags=[cls.page_type, rel])
             except BudgetExceededError:
@@ -1879,11 +1879,38 @@ class Ingestor:
                 pass
 
     @staticmethod
-    def _retain_facts(frontmatter: dict[str, object], body: str) -> str:
-        """Compose the fact text retained for a page (title line + body)."""
+    def _retain_facts(
+        frontmatter: dict[str, object], body: str, cls: Classification
+    ) -> str:
+        """Compose the retained text: a synthetic page-record block then the body (#98).
+
+        Hindsight's ``retain`` is LLM **fact-extraction**, so a fact-light page (a
+        photo/``memory`` page, a terse note, a bookmark) yields **zero** units and
+        becomes absent from semantic recall. To guarantee every curated page
+        contributes at least one recallable unit, a
+        :func:`thoth.hindsight.page_record_text` block -- built from the page's own
+        ``title``/``summary``/``tags`` plus the classify ``entities``/``concepts`` -- is
+        prepended as declarative assertions the extractor keeps as a fact. It
+        *complements* extraction (the body still yields its facts), is one bounded block
+        per page (no fact fan-out), and replaces the bare title line the retain text
+        previously carried.
+        """
         title = frontmatter.get("title")
-        header = f"{title}\n\n" if isinstance(title, str) and title else ""
-        return f"{header}{body}".strip()
+        title_str = title if isinstance(title, str) and title else cls.title
+        summary = frontmatter.get("summary")
+        summary_str = summary if isinstance(summary, str) else ""
+        tags = frontmatter.get("tags")
+        tag_list = (
+            [t for t in tags if isinstance(t, str)] if isinstance(tags, list) else []
+        )
+        record = page_record_text(
+            title=title_str,
+            summary=summary_str,
+            entities=cls.entities,
+            concepts=cls.concepts,
+            tags=tag_list,
+        )
+        return f"{record}\n\n{body}".strip()
 
     # ---- pass 7: commit ----------------------------------------------------------
 

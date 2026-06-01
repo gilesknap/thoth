@@ -57,6 +57,7 @@ from thoth.hindsight import (
     HindsightError,
     SubprocessRunner,
     default_runner,
+    page_record_text,
 )
 from thoth.hindsight import base_args as default_base_args
 from thoth.state import MARKER_REINDEX, MarkerStore
@@ -198,6 +199,31 @@ def _split_body(markdown: str) -> str:
         The body with any single leading frontmatter block removed.
     """
     return frontmatter.loads(markdown).content
+
+
+def _retain_text_for(markdown: str) -> str:
+    """Build the retained text for a page: a page-record block then the body (#98).
+
+    Mirrors the capture-time retain composition (:meth:`thoth.ingest.Ingestor.
+    _retain_facts`) so a full reindex stores the same single page-level record per page
+    that capture does -- guaranteeing every page (including fact-light photos/terse
+    notes that Hindsight's fact-extraction would otherwise store as zero units) is
+    semantically recallable. The page-record fields are read from the page's own
+    frontmatter (``title``/``summary``/``tags``); reindex has no classification, so the
+    ``entities``/``concepts`` lines are simply omitted (title + summary + tags already
+    anchor what the page is about). See :func:`thoth.hindsight.page_record_text`.
+    """
+    post = frontmatter.loads(markdown)
+    meta = post.metadata
+    title = meta.get("title")
+    summary = meta.get("summary")
+    tags = meta.get("tags")
+    record = page_record_text(
+        title=title if isinstance(title, str) else "",
+        summary=summary if isinstance(summary, str) else "",
+        tags=[t for t in tags if isinstance(t, str)] if isinstance(tags, list) else [],
+    )
+    return f"{record}\n\n{post.content}".strip()
 
 
 def _now_iso() -> str:
@@ -478,10 +504,10 @@ class Reindexer:
             ReindexError: if the checked retain raises
                 :class:`~thoth.hindsight.HindsightError`.
         """
-        body = _split_body(markdown)
+        text = _retain_text_for(markdown)
         self._hindsight.forget(rel)
         try:
-            self._hindsight.retain(rel, body, tags=[page_type(markdown), rel])
+            self._hindsight.retain(rel, text, tags=[page_type(markdown), rel])
         except HindsightError as exc:
             raise ReindexError(f"retain failed for {rel!r}: {exc}") from exc
 

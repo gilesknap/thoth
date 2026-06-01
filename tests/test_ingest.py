@@ -582,6 +582,63 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
     assert "notes/transformer-models.md" in harness.origin_files()
 
 
+def test_fact_light_memory_page_retains_a_page_record_unit(
+    harness: IngestHarness,
+) -> None:
+    """A fact-light memory page still lands a page-record in the retained text (#98).
+
+    Hindsight's retain is LLM fact-extraction, so a photo/terse memory page (title +
+    summary + tags, body with no discrete facts) used to retain only the bare body and
+    extract ZERO units -- making the page unrecallable. The synthetic page-record block
+    now prepended to the retained text guarantees >=1 recallable unit, phrased as
+    declarative assertions the extractor keeps, built from material thoth already has
+    (title, summary, classify entities/concepts, tags).
+    """
+    classify = _classify_json(
+        page_type="memory",
+        slug="black-curly-dog-gingham-bed",
+        title="Black curly dog on a gingham bed",
+        entities=["Labradoodle"],
+        concepts=["pet"],
+    )
+    plan = _file_plan_json(
+        folder="memories",
+        slug="black-curly-dog-gingham-bed",
+        page_type="memory",
+        title="Black curly dog on a gingham bed",
+        # A descriptive body with no extractable discrete fact (the fact-light case).
+        body="A black curly-coated dog lying on purple-and-white gingham bedding.",
+        wikilinks=[],
+        summary="A photo of my dog resting at home.",
+    )
+    client = _ScriptedClient(classify, plan)
+    hindsight = FakeHindsight()
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=hindsight,
+    )
+
+    report = ingestor.ingest(
+        Capture(text="A black curly-coated dog lying on gingham bedding.")
+    )
+
+    assert report.page_paths == ["memories/black-curly-dog-gingham-bed.md"]
+    # Exactly one retained unit for the page -- previously the bare body extracted to
+    # ZERO; now the page-record guarantees a recallable record (the #98 fix).
+    assert len(hindsight.retained) == 1
+    facts = hindsight.retained[0].facts
+    # The page-record anchor + the curate summary + the classify terms + the tags are
+    # all present, so semantic recall can bridge the vocabulary gap ("my pets" -> dog).
+    assert facts.startswith("This page is about Black curly dog on a gingham bed.")
+    assert "A photo of my dog resting at home." in facts
+    assert "It concerns Labradoodle, pet." in facts
+    assert "It is tagged ai-ml." in facts  # the seeded plan tag
+    # The descriptive body still follows the record (complement, not replace).
+    assert "purple-and-white gingham bedding" in facts
+
+
 def test_ingest_does_not_touch_static_index_and_appends_log(
     harness: IngestHarness,
 ) -> None:

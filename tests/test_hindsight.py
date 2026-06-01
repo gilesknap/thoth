@@ -33,6 +33,7 @@ from thoth.hindsight import (
     RecallHit,
     base_args,
     default_runner,
+    page_record_text,
     parse_recall,
     retain_text,
 )
@@ -235,6 +236,47 @@ def test_retain_text_prefixes_exactly_one_source_line() -> None:
     assert lines[2] == "Foo is a thing."
     # Exactly one SOURCE: line in the whole blob.
     assert blob.count(SOURCE_SENTINEL) == 1
+
+
+def test_page_record_text_is_declarative_and_includes_every_field() -> None:
+    """The page-record folds title + summary + entities/concepts + tags into one block.
+
+    The block is phrased as declarative assertions (the shape a fact-extractor keeps),
+    so a fact-light page still lands a recallable unit (#98). De-duplication is
+    case-insensitive and terms already named in the title are not repeated.
+    """
+    record = page_record_text(
+        title="Black curly dog on a gingham bed",
+        summary="A photo of my Labradoodle resting at home.",
+        entities=["Labradoodle", "labradoodle"],  # case-dup collapses
+        concepts=["pet"],
+        tags=["memory", "personal", "home"],
+    )
+    assert record.startswith("This page is about Black curly dog on a gingham bed.")
+    assert "A photo of my Labradoodle resting at home." in record
+    # Subject terms NOT already in the title are listed once (case-folded de-dup).
+    assert "It concerns Labradoodle, pet." in record
+    assert "It is tagged memory, personal, home." in record
+
+
+def test_page_record_text_handles_a_fact_light_page_with_only_a_title() -> None:
+    """A title-only page (no summary/tags) still yields a non-empty record (#98)."""
+    record = page_record_text(title="Sunset over the bay")
+    assert record == "This page is about Sunset over the bay."
+    # Even a blank title degrades to a non-empty anchor line, never an empty retain.
+    assert page_record_text(title="   ") == "This page is about Untitled."
+
+
+def test_page_record_text_drops_title_terms_and_empty_values() -> None:
+    """Terms already in the title are dropped; empty/whitespace fields are skipped."""
+    record = page_record_text(
+        title="Postgres tuning",
+        summary="   ",  # blank summary contributes no line
+        entities=["Postgres"],  # already in the title -> dropped
+        concepts=["", "indexing"],  # empty term dropped
+        tags=[],
+    )
+    assert record == "This page is about Postgres tuning.\nIt concerns indexing."
 
 
 def test_parse_recall_prefers_the_rel_tag_over_the_sentinel() -> None:

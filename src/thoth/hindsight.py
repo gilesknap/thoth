@@ -79,6 +79,7 @@ __all__ = [
     "SubprocessRunner",
     "base_args",
     "default_runner",
+    "page_record_text",
     "parse_recall",
     "retain_text",
 ]
@@ -202,6 +203,86 @@ def retain_text(rel_path: str, facts: str) -> str:
         The fact text with the single ``SOURCE:`` sentinel line prepended.
     """
     return f"{SOURCE_SENTINEL} {rel_path}\n\n{facts}"
+
+
+def _dedup_terms(*groups: Sequence[str]) -> list[str]:
+    """Flatten the term groups into one order-preserving, case-folded de-duped list.
+
+    Empty/whitespace-only terms are dropped; duplicates that differ only in case or
+    surrounding whitespace collapse to their first-seen spelling. Used to build the
+    page-record's entity/concept/tag lines without repeating a term the title already
+    carried.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for raw in group:
+            term = raw.strip()
+            key = term.casefold()
+            if term and key not in seen:
+                seen.add(key)
+                ordered.append(term)
+    return ordered
+
+
+def page_record_text(
+    *,
+    title: str,
+    summary: str = "",
+    entities: Sequence[str] = (),
+    concepts: Sequence[str] = (),
+    tags: Sequence[str] = (),
+) -> str:
+    """Build the synthetic *page-record* block prepended to every retained page (#98).
+
+    Hindsight's ``retain`` is **LLM fact-extraction**, not token-chunking or text
+    embedding: a page with no discrete extractable facts (a photo/``memory`` page, a
+    terse note, a bookmark, a list) yields **zero** stored units and is then completely
+    absent from semantic recall. This guarantees a **single page-level record per
+    page**, built only from material thoth already has (the classify/curate ``title`` +
+    ``summary`` + ``entities``/``concepts`` + frontmatter ``tags``), so *every* curated
+    page contributes at least one recallable unit regardless of fact density (issue #98,
+    Direction 1).
+
+    The block is phrased as plain **declarative assertions about the page** -- "This
+    page is about ...", "It concerns ...", "It is tagged ..." -- precisely the shape the
+    extractor keeps as a fact rather than discarding as "no facts" or re-splitting into
+    many. It is *one* compact block (bounded per-page cost, no fact fan-out) and it
+    *complements* extraction: it is prepended to the page body, so a fact-rich body
+    still yields its extra facts while a fact-light body still lands its page-record.
+
+    Phrasing -- not a CLI flag -- is the lever here because the wrapper's only retain
+    surface is ``memory retain <bank> "<text>"`` (fact-extraction); there is no
+    verbatim/embed retain mode to bypass extraction with.
+
+    Args:
+        title: The page title (always present; the record's anchor sentence).
+        summary: The one-line curate ``summary`` gloss, if the page type carries one.
+        entities: Named entities the page concerns (classify output / frontmatter).
+        concepts: Named concepts the page concerns (classify output / frontmatter).
+        tags: The page's frontmatter ``tags``.
+
+    Returns:
+        A short multi-line declarative block (never empty -- the title line is always
+        present), suitable for prepending to the page body before :func:`retain_text`.
+    """
+    clean_title = title.strip() or "Untitled"
+    lines: list[str] = [f"This page is about {clean_title}."]
+    clean_summary = summary.strip()
+    if clean_summary:
+        lines.append(clean_summary)
+    # Subject terms the title does not already carry, so a photo/terse page is still
+    # recallable by what it *concerns* even when its body has no extractable facts.
+    subjects = _dedup_terms(entities, concepts)
+    subjects = [
+        term for term in subjects if term.casefold() not in clean_title.casefold()
+    ]
+    if subjects:
+        lines.append(f"It concerns {', '.join(subjects)}.")
+    clean_tags = _dedup_terms(tags)
+    if clean_tags:
+        lines.append(f"It is tagged {', '.join(clean_tags)}.")
+    return "\n".join(lines)
 
 
 def _path_from_tags(tags: object) -> str | None:

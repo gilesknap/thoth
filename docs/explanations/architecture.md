@@ -45,7 +45,9 @@ flowchart TB
 **The eight passes:** `persist_inbound` (durable raw hold before any LLM call) →
 `classify` → `capture_raw` → `fetch_candidates` (Exa web search for URLs) →
 `curate` (Sonnet emits a schema-validated JSON file-plan) → `retain` (Hindsight
-fact-extraction) → `commit` (git pull/push) → `report` (Slack reply).
+fact-extraction, prepended with a synthetic page-record so even a fact-light page lands
+a recallable unit — [ADR 0011](decisions/0011-page-level-index-record.md)) → `commit`
+(git pull/push) → `report` (Slack reply).
 
 The **intent gate** (one cheap Haiku call) routes bare free-text to *capture*,
 *query*, or *ask*. Explicit prefixes (`capture:`, `note:`, raw URLs, or file

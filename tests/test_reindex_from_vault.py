@@ -419,12 +419,16 @@ def test_first_run_retains_every_curated_page_forget_then_retain(
         if kind == "retain":
             assert hs.events[index - 1] == ("forget", rel)
 
-    # The retained text is the BODY (frontmatter stripped) and matches the page body.
+    # The retained text is a synthetic page-record block (#98) followed by the page BODY
+    # (frontmatter stripped). The page-record guarantees a fact-light page still lands
+    # >=1 recallable unit; the body still follows it for fact extraction.
     by_rel = {rel: facts for rel, facts, _ in hs.retains}
     for rel in pages.values():
         page = vault.read_page(rel)
-        assert by_rel[rel] == page.body
-        assert "type:" not in by_rel[rel]  # frontmatter stripped
+        text = by_rel[rel]
+        assert text.startswith("This page is about ")  # page-record anchor line (#98)
+        assert page.body in text  # the body still follows the record
+        assert "type:" not in text  # frontmatter stripped
 
     # Tags carry [page_type, rel] -- for reference AND actionable pages (ADR 0004), so
     # recall can scope by the page_type tag at query time.
