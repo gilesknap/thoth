@@ -62,7 +62,8 @@ INTENT_INSTRUCTIONS: str = """# Slack intent gate
 Classify the user's Slack message into exactly ONE routing intent for their personal
 knowledge-management assistant, then return ONLY a JSON object (no prose, no fence):
 
-{"intent": "capture" | "ask" | "query", "confidence": "high" | "medium" | "low"}
+{"intent": "capture" | "ask" | "query", "confidence": "high" | "medium" | "low",
+ "keywords": ["dog", "Labradoodle", "pet"]}
 
 - "capture": the user is recording something to FILE for later -- a note, idea, fact
   about their life/work, reminder, or TODO/action. Imperatives like "remind me to ...",
@@ -76,6 +77,13 @@ knowledge-management assistant, then return ONLY a JSON object (no prose, no fen
 When the message is ambiguous between asking and filing, prefer "ask" and lower the
 confidence -- answering a misfiled note is harmless, but silently filing a real
 question is not. Set "confidence" to how sure you are of the chosen intent.
+
+"keywords" seed a lexical search of the user's vault, so give the most useful search
+terms drawn from the message. De-pluralise to the singular ("dogs" -> "dog"); drop noise
+and stop words ("list", "me", "the", "about", "what", "show"); and expand to obvious
+synonyms or named entities the message implies ("my pup" -> also "dog", "pet"). Keep
+them lowercase single words or short phrases. An empty list is fine when the message
+carries no searchable terms (e.g. a pure reminder).
 """
 """The classifier's task prompt, appended (uncached) after the cached persona prefix."""
 
@@ -87,11 +95,14 @@ class IntentDecision:
     ``intent`` is the model's best guess (one of ``capture`` / ``ask`` / ``query``) and
     ``confidence`` is ``high`` / ``medium`` / ``low``. Callers route on :attr:`route`,
     not :attr:`intent` directly, so the low-confidence-to-ask safety rule is applied in
-    one place.
+    one place. ``keywords`` are the de-pluralised, stop-word-stripped, synonym-expanded
+    search terms the gate extracted from the message (issue #102); they seed the lexical
+    grep on the query/ask read paths and are empty when the model gave none.
     """
 
     intent: str
     confidence: str
+    keywords: tuple[str, ...] = ()
 
     @property
     def route(self) -> str:
@@ -168,7 +179,10 @@ def _decision_from(obj: dict[str, object]) -> IntentDecision:
     An ``intent`` outside the three known engines is untrustworthy, so the whole verdict
     falls back to the safe default. A missing or unknown ``confidence`` is treated as
     ``low`` (which also routes to ask) rather than rejected, so a model that names a
-    valid intent but botches the confidence still routes conservatively.
+    valid intent but botches the confidence still routes conservatively. ``keywords`` is
+    parsed leniently (issue #102): a missing, non-list, or garbled value degrades to an
+    empty tuple rather than rejecting the verdict, because the keywords only *seed* the
+    lexical search and the raw query is always available as the fallback.
     """
     intent = obj.get("intent")
     if intent not in _VALID_INTENTS:
@@ -176,4 +190,24 @@ def _decision_from(obj: dict[str, object]) -> IntentDecision:
     confidence = obj.get("confidence")
     if confidence not in _VALID_CONFIDENCES:
         confidence = "low"
-    return IntentDecision(intent=str(intent), confidence=str(confidence))
+    return IntentDecision(
+        intent=str(intent),
+        confidence=str(confidence),
+        keywords=_keywords_from(obj.get("keywords")),
+    )
+
+
+def _keywords_from(value: object) -> tuple[str, ...]:
+    """Coerce a parsed ``keywords`` value into a clean tuple of search terms.
+
+    Totality-preserving (issue #102): only a genuine list of strings yields keywords;
+    any other shape (missing, a bare string, a number, nested junk) degrades to ``()``
+    so a malformed field never raises and the caller simply falls back to grepping the
+    raw query. Each entry is stripped, empties are dropped, and order/duplicates are
+    preserved as the model emitted them (the grep ranker dedupes downstream).
+    """
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        item.strip() for item in value if isinstance(item, str) and item.strip()
+    )

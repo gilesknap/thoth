@@ -729,6 +729,60 @@ def test_answer_rejects_bad_max_pages(engine: QueryEngine) -> None:
         engine.answer("cap", max_pages=0)
 
 
+# --- answer: search_terms seed the grep (issue #102) -------------------------------
+
+
+def test_answer_greps_search_terms_not_raw_query(config: Config, vault: Vault) -> None:
+    """search_terms seed the grep, so the de-pluralised keyword finds the page (#102).
+
+    The raw prose ("the docs about dogs") would miss ``dog`` under word-boundary grep,
+    and the stop words match nothing useful; the gate's ``["dog"]`` keyword surfaces it.
+    """
+    engine = _ranking_engine(
+        config,
+        vault,
+        memories__dog_page="My dog is a black curly Labradoodle.",
+    )
+    result = engine.answer(
+        "list me the docs about dogs", search_terms=["dog"], max_pages=3
+    )
+    assert "memories/dog_page.md" in {c.path for c in result.citations}
+
+
+def test_answer_composes_prose_from_raw_query_not_search_terms(
+    config: Config, vault: Vault
+) -> None:
+    """The LLM prompt carries the original query; search_terms only drive the grep."""
+    client = _FakeClient("A dog answer.\nUSED: 1")
+    llm = LLM(config, client=client)  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config), llm)
+    (vault.root / "memories" / "dog-page.md").write_text(
+        _page(title="Dog Page", page_type="note", body="My dog is a Labradoodle."),
+        encoding="utf-8",
+    )
+    engine.answer("list me the docs about dogs", search_terms=["dog"], max_pages=2)
+    # The composed-prose prompt is keyed off the natural-language query, not keywords.
+    prompt = client.messages.calls[0]["messages"][0]["content"]
+    assert "list me the docs about dogs" in prompt
+    assert "Question: dog" not in prompt
+
+
+def test_answer_empty_search_terms_falls_back_to_query(
+    config: Config, vault: Vault
+) -> None:
+    """An empty/None search_terms greps the raw query -- the pre-#102 behaviour."""
+    engine = _ranking_engine(
+        config,
+        vault,
+        notes__consensus_page="A page about consensus and quorums.",
+    )
+    # No keywords -> the raw query is grepped (and still finds the page).
+    by_none = engine.answer("consensus", search_terms=None, max_pages=3)
+    by_empty = engine.answer("consensus", search_terms=[], max_pages=3)
+    assert "notes/consensus_page.md" in {c.path for c in by_none.citations}
+    assert "notes/consensus_page.md" in {c.path for c in by_empty.citations}
+
+
 # --- answer: prose composition -----------------------------------------------------
 
 

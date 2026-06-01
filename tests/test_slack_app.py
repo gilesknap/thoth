@@ -122,14 +122,21 @@ class FakeQueryEngine:
         self, result: QueryResult | None = None, error: Exception | None = None
     ) -> None:
         self.queries: list[str] = []
+        self.search_terms: list[list[str] | None] = []
         self._result = result if result is not None else _result()
         self._error = error
 
     def answer(
-        self, query: str, *, max_pages: int = 5, use_recall: bool = True
+        self,
+        query: str,
+        *,
+        max_pages: int = 5,
+        use_recall: bool = True,
+        search_terms: list[str] | None = None,
     ) -> QueryResult:
-        """Record the query and return the canned result (or raise)."""
+        """Record the query (+ any keywords) and return the canned result (or raise)."""
         self.queries.append(query)
+        self.search_terms.append(search_terms)
         if self._error is not None:
             raise self._error
         return self._result
@@ -147,6 +154,7 @@ class FakeResearch:
         save_error: Exception | None = None,
     ) -> None:
         self.asks: list[str] = []
+        self.search_terms: list[list[str] | None] = []
         self.saves: list[tuple[str, AskResult]] = []
         self._result = result if result is not None else _ask_result()
         self._error = error
@@ -154,10 +162,16 @@ class FakeResearch:
         self._save_error = save_error
 
     def ask(
-        self, question: str, *, force_web: bool = False, max_pages: int = 5
+        self,
+        question: str,
+        *,
+        force_web: bool = False,
+        max_pages: int = 5,
+        search_terms: list[str] | None = None,
     ) -> AskResult:
-        """Record the question and return the canned blended result (or raise)."""
+        """Record the question (+ keywords) and return the canned result (or raise)."""
         self.asks.append(question)
+        self.search_terms.append(search_terms)
         if self._error is not None:
             raise self._error
         return self._result
@@ -192,9 +206,17 @@ def _ask_result(**overrides: Any) -> AskResult:
 class FakeIntentClassifier:
     """Records classify calls and returns a canned routing decision (issue #5)."""
 
-    def __init__(self, intent: str = "ask", confidence: str = "high") -> None:
+    def __init__(
+        self,
+        intent: str = "ask",
+        confidence: str = "high",
+        *,
+        keywords: tuple[str, ...] = (),
+    ) -> None:
         self.classified: list[str] = []
-        self._decision = IntentDecision(intent=intent, confidence=confidence)
+        self._decision = IntentDecision(
+            intent=intent, confidence=confidence, keywords=keywords
+        )
 
     def classify(self, text: str) -> IntentDecision:
         """Record the text and return the canned decision."""
@@ -641,6 +663,74 @@ def test_intent_gate_routes_ask_to_blended(config: Config) -> None:
     assert research.asks == ["what is raft?"]
     assert qry.queries == []
     assert "Save this answer" in say.messages[0]
+
+
+def test_intent_gate_query_passes_keywords_as_search_terms(config: Config) -> None:
+    """A 'query' verdict threads the gate's keywords to the vault query (issue #102)."""
+    research = FakeResearch()
+    gate = FakeIntentClassifier(
+        intent="query", confidence="high", keywords=("dog", "pet")
+    )
+    handlers, _, qry = _handlers(config, research=research, intent_classifier=gate)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "list me the docs about dogs", "ts": "5.2c"}, say
+    )
+    # The raw prose is still the query text (prose is composed from it), but the grep is
+    # seeded with the de-pluralised keywords the gate extracted.
+    assert qry.queries == ["list me the docs about dogs"]
+    assert qry.search_terms == [["dog", "pet"]]
+
+
+def test_intent_gate_ask_passes_keywords_as_search_terms(config: Config) -> None:
+    """An 'ask' verdict threads the gate's keywords to the blended ask (issue #102)."""
+    research = FakeResearch()
+    gate = FakeIntentClassifier(
+        intent="ask", confidence="high", keywords=("raft", "consensus")
+    )
+    handlers, _, _ = _handlers(config, research=research, intent_classifier=gate)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "how does raft work?", "channel": "D1", "ts": "5.3c"},
+        say,
+    )
+    assert research.asks == ["how does raft work?"]
+    assert research.search_terms == [["raft", "consensus"]]
+
+
+def test_intent_gate_no_keywords_greps_raw_text(config: Config) -> None:
+    """A verdict with no keywords falls back to grepping the raw text (issue #102)."""
+    research = FakeResearch()
+    gate = FakeIntentClassifier(intent="query", confidence="high")  # no keywords
+    handlers, _, qry = _handlers(config, research=research, intent_classifier=gate)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "what did I save about exa?", "ts": "5.2d"}, say
+    )
+    # An empty keyword list is threaded through; query.answer treats it as "grep the
+    # raw query" (the pre-gate behaviour).
+    assert qry.search_terms == [[]]
+
+
+def test_research_prefix_greps_raw_question_no_keywords(config: Config) -> None:
+    """A 'research:'-forced ask bypasses the gate, so it greps the raw question.
+
+    The marker is a deterministic escape hatch (the gate is never consulted), so there
+    are no keywords and the blended ask greps the question verbatim -- unchanged.
+    """
+    research = FakeResearch()
+    gate = FakeIntentClassifier(
+        intent="capture", confidence="high", keywords=("ignored",)
+    )
+    handlers, _, _ = _handlers(config, research=research, intent_classifier=gate)
+    say = Recorder()
+    handlers.handle_message(
+        {"user": ALLOWED, "text": "research: who won the 2022 final?", "ts": "5.9c"},
+        say,
+    )
+    assert gate.classified == []  # gate bypassed entirely
+    assert research.asks == ["research: who won the 2022 final?"]
+    assert research.search_terms == [[]]  # no keywords -> grep raw question
 
 
 def test_handle_message_logs_free_text_route(
