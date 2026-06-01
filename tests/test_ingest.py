@@ -2657,10 +2657,13 @@ def test_diagram_image_saves_excalidraw_asset_and_embeds_it(
     assert "excalidraw-plugin: parsed" in excal
     # The reconstruction saw the SAME image bytes as the analyse call (no re-read).
     assert analyser.excalidraw_calls == [(src.read_bytes(), "png")]
-    # The curated body embeds both the original and the reconstruction.
+    # The curated body embeds both the original and the reconstruction. The Excalidraw
+    # embed drops the ``.md`` so Obsidian renders the DRAWING, not the raw scene JSON
+    # (issue #68 live-verify fix).
     page_text = (harness.work / "notes/flow-sketch.md").read_text(encoding="utf-8")
     assert "![[flow-sketch.png]]" in page_text
-    assert "![[flow-sketch.excalidraw.md]]" in page_text
+    assert "![[flow-sketch.excalidraw]]" in page_text
+    assert "![[flow-sketch.excalidraw.md]]" not in page_text
 
 
 def test_document_image_saves_cleaned_scan_and_embeds_it(

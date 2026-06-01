@@ -1534,13 +1534,12 @@ class Ingestor:
     def _append_embeds(body: str, page: dict[str, Any], raw: RawCaptureResult) -> str:
         """Append Obsidian ``![[asset]]`` embeds for saved assets not already in body.
 
-        Uses the bare asset filename (Obsidian resolves embeds vault-wide), never a
-        base64 blob. Embeds already present in the model's body are left as-is.
+        Uses the asset filename (Obsidian resolves embeds vault-wide), never a base64
+        blob. Embeds already present in the model's body are left as-is.
         """
         embeds: list[str] = []
         for asset_rel in raw.asset_paths:
-            name = PurePosixPath(asset_rel).name
-            embed = f"![[{name}]]"
+            embed = f"![[{_embed_name(PurePosixPath(asset_rel).name)}]]"
             if embed not in body and embed not in embeds:
                 embeds.append(embed)
         if not embeds:
@@ -1969,6 +1968,21 @@ def _str_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _embed_name(asset_filename: str) -> str:
+    """Map an asset filename to the name Obsidian must embed to *render* it (issue #68).
+
+    For an Excalidraw drawing stored as ``<slug>.excalidraw.md``, the trailing ``.md``
+    must be dropped: Obsidian's basename for that file is ``<slug>.excalidraw``, and the
+    Excalidraw plugin only renders the *drawing* for an ``![[<slug>.excalidraw]]`` embed
+    -- ``![[<slug>.excalidraw.md]]`` embeds the markdown note instead, showing the raw
+    scene JSON (the issue #68 live-verify failure). Every other asset embeds by its bare
+    filename unchanged.
+    """
+    if asset_filename.endswith(".excalidraw.md"):
+        return asset_filename[: -len(".md")]
+    return asset_filename
 
 
 def _merge_terms(primary: list[str], extra: list[str]) -> list[str]:

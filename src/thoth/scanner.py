@@ -36,6 +36,17 @@ __all__ = [
     "clean_document",
 ]
 
+# A detected page quad is only trusted to be the *page* when it covers a large
+# fraction of the frame. Naive "largest 4-point contour" detection otherwise latches
+# onto a small high-contrast sub-element (a logo / icon / boxed figure) and warps to
+# *that*, producing a tiny nonsense crop -- far worse than no scan. So a quad must both
+# enclose at least :data:`_MIN_PAGE_AREA_RATIO` of the image area AND span at least
+# :data:`_MIN_PAGE_SPAN_RATIO` of the frame in each axis (corners near the edges);
+# otherwise :func:`clean_document` degrades to ``None`` (no cleaned scan). Conservative
+# by design (issue #68 live-verify): a missed page is cheap, a bad crop is not.
+_MIN_PAGE_AREA_RATIO: float = 0.5
+_MIN_PAGE_SPAN_RATIO: float = 0.6
+
 
 class ScannerError(Exception):
     """Raised only for a genuinely broken OpenCV install, never for a "bad image".
@@ -113,9 +124,24 @@ def clean_document(image_bytes: bytes, *, ext: str) -> bytes | None:
     if quad is None:
         return None
 
+    # Conservative page gate: reject a quad that is too small or too central to be the
+    # page (a logo/icon), so a low-confidence detection degrades to "no scan" rather
+    # than a junk crop (issue #68). Both the enclosed area and the per-axis span must
+    # clear the thresholds.
+    points = np.asarray(quad, dtype="float32").reshape(4, 2)
+    img_height, img_width = gray.shape[:2]
+    area_ratio = float(cv2.contourArea(quad)) / float(img_height * img_width)
+    span_width = float(points[:, 0].max() - points[:, 0].min()) / float(img_width)
+    span_height = float(points[:, 1].max() - points[:, 1].min()) / float(img_height)
+    if (
+        area_ratio < _MIN_PAGE_AREA_RATIO
+        or span_width < _MIN_PAGE_SPAN_RATIO
+        or span_height < _MIN_PAGE_SPAN_RATIO
+    ):
+        return None
+
     # Order the four corners as top-left, top-right, bottom-right, bottom-left so the
     # warp maps them to a consistent, un-mirrored rectangle.
-    points = np.asarray(quad, dtype="float32").reshape(4, 2)
     ordered = _order_corners(np, points)
     top_left, top_right, bottom_right, bottom_left = (
         ordered[0],

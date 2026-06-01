@@ -33,6 +33,7 @@ document JSON response (or injects a fake :class:`Analyser` directly).
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -312,12 +313,16 @@ class Analyser:
             obj = parse_json_block(extract_text(response))
         except Exception:  # noqa: BLE001 -- best-effort enhancement, never propagate
             return None
-        elements = obj.get("elements")
-        if not isinstance(elements, list) or not elements:
+        raw = obj.get("elements")
+        if not isinstance(raw, list) or not raw:
             return None
-        if not all(isinstance(element, dict) for element in elements):
+        specs = [element for element in raw if isinstance(element, dict)]
+        if not specs:
             return None
-        return _excalidraw_markdown(elements)
+        elements, text_elements = _build_excalidraw_elements(specs)
+        if not elements:
+            return None
+        return _excalidraw_markdown(elements, text_elements)
 
 
 def analyse_image_path(analyser: Analyser, path: Path, *, ext: str) -> Analysis:
@@ -375,12 +380,17 @@ _EXCALIDRAW_PROMPT = (
     "the structure, labels, and connections.\n"
     "Return ONLY a single JSON object (no prose) of this exact shape:\n"
     '{"elements": [ ... ]}\n'
-    "where each element is an Excalidraw element object. Use the Excalidraw element "
-    "types 'rectangle', 'ellipse', 'diamond', 'arrow', 'line', 'text' and 'freedraw'. "
-    "Every element MUST have at least 'type', 'x' and 'y'; add 'width' and 'height' "
-    "for shapes, 'text' for a text element, 'points' for an arrow/line/freedraw, and a "
-    "'label' where a shape carries text. Lay the elements out to mirror the diagram's "
-    "spatial arrangement."
+    "where each element is a SIMPLE node/connector spec (thoth expands it into a valid "
+    "Excalidraw element, so do NOT include styling/ids you are unsure of). Fields:\n"
+    "- 'id': a short unique string for the element (e.g. 'n1', 'n2', 'a1').\n"
+    "- 'type': one of 'rectangle', 'ellipse', 'diamond', 'text', 'arrow', 'line'.\n"
+    "- shapes ('rectangle'/'ellipse'/'diamond'): 'x','y','width','height' (top-left + "
+    "size, in pixels) and 'text' for the label drawn inside the shape.\n"
+    "- 'text': 'x','y' and 'text' (a free-standing label/title).\n"
+    "- connectors ('arrow'/'line'): 'from' and 'to' set to the ids of the shapes they "
+    "join (preferred); or give explicit 'x','y' and 'points'.\n"
+    "Lay the coordinates out (roughly a 600-1000px canvas) to mirror the diagram's "
+    "arrangement, with arrows reflecting the real connections and direction."
 )
 
 
@@ -421,18 +431,40 @@ def _as_kind(value: object) -> str:
     return ""
 
 
-def _excalidraw_markdown(elements: list[dict[str, Any]]) -> str:
-    """Assemble the ``.excalidraw.md`` envelope around model-supplied scene elements.
+# The banner Obsidian-Excalidraw writes at the top of a parsed drawing; reproduced
+# verbatim so a thoth-authored file is byte-shaped like a plugin-authored one.
+_EXCALIDRAW_BANNER = (
+    "==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu of this document. ⚠== "
+    "You can decompress Drawing data with the command palette: 'Decompress current "
+    "Excalidraw file'. For more info check in plugin settings under 'Saving'"
+)
 
-    The model is trusted only for the ``elements`` list; thoth builds the rest of the
-    Obsidian-Excalidraw file format deterministically: YAML frontmatter that marks the
-    note as a parsed Excalidraw drawing, then a ``# Excalidraw Data`` section whose
-    ``## Drawing`` subsection holds the full scene object inside a fenced ``json`` code
-    block. The scene wraps the elements with the fixed Excalidraw scaffolding
-    (``type``/``version``/``source``/``appState``/``files``).
+# Excalidraw element defaults shared by every element (the renderer needs these present;
+# Excalidraw's own restore() is tolerant, but emitting them in full keeps the scene OK
+# across plugin versions). Per-type fields are layered on top in the builders below.
+_EXCALIDRAW_TEXT_FONT_SIZE: int = 20
+_EXCALIDRAW_LINE_HEIGHT: float = 1.25
+
+
+def _excalidraw_markdown(
+    elements: list[dict[str, Any]], text_elements: list[dict[str, str]]
+) -> str:
+    """Assemble the ``.excalidraw.md`` envelope around the built scene elements.
+
+    thoth builds the entire Obsidian-Excalidraw file format deterministically (the model
+    is trusted only for the node/connector *structure*, expanded by
+    :func:`_build_excalidraw_elements`): the YAML frontmatter that marks the note as a
+    parsed Excalidraw drawing, the plugin's switch-to-Excalidraw banner, a
+    ``## Text Elements`` index (each label's text plus its ``^id`` anchor, for Obsidian
+    search), and a ``%%``-commented ``# Excalidraw Data`` / ``## Drawing`` section that
+    holds the full scene object in a fenced ``json`` block. The scene is stored
+    **uncompressed** (plain ``json``, not ``compressed-json``): the plugin reads both,
+    and plain JSON keeps the vault canonical-as-plain-text (a compressed blob does not).
 
     Args:
-        elements: The non-empty list of Excalidraw element dicts the model returned.
+        elements: The fully-formed Excalidraw element dicts (from
+            :func:`_build_excalidraw_elements`).
+        text_elements: ``{"id", "text"}`` rows for the ``## Text Elements`` index.
 
     Returns:
         The complete ``.excalidraw.md`` markdown string.
@@ -446,14 +478,272 @@ def _excalidraw_markdown(elements: list[dict[str, Any]]) -> str:
         "files": {},
     }
     scene_json = json.dumps(scene, indent=2)
+    text_index = "".join(
+        f"{row['text']} ^{row['id']}\n\n"
+        for row in text_elements
+        if row["text"].strip()
+    )
     return (
         "---\n"
         "excalidraw-plugin: parsed\n"
         "tags: [excalidraw]\n"
         "---\n\n"
+        f"{_EXCALIDRAW_BANNER}\n\n\n"
         "# Excalidraw Data\n\n"
+        "## Text Elements\n"
+        f"{text_index}"
+        "%%\n"
         "## Drawing\n"
         "```json\n"
         f"{scene_json}\n"
         "```\n"
+        "%%\n"
     )
+
+
+def _build_excalidraw_elements(
+    specs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Expand the model's simple node/connector specs into valid Excalidraw elements.
+
+    The model returns only the *structure* (a shape's box + label, a connector's
+    endpoints); this turns each spec into a fully-formed Excalidraw element with all the
+    properties the renderer expects (issue #68 live-verify: the earlier minimal shapes
+    with a ``label`` shorthand rendered as empty boxes). Specifically:
+
+    * A ``rectangle``/``ellipse``/``diamond`` becomes a shape element plus -- when it
+      carries a ``text`` label -- a separate ``text`` element centred over it (a plain
+      overlaid label, not a bound-container, which keeps the scene simple + valid while
+      still showing the text).
+    * A ``text`` spec becomes a free-standing text element.
+    * An ``arrow``/``line`` is routed between the centres of the shapes named by its
+      ``from``/``to`` ids (or explicit ``x``/``y``/``points`` as a fallback), so links
+      mirror the real diagram.
+
+    Unknown/!malformed specs are skipped. Returns ``(elements, text_index_rows)`` where
+    the rows feed the ``## Text Elements`` section.
+    """
+    centres: dict[str, tuple[float, float]] = {}
+    elements: list[dict[str, Any]] = []
+    text_rows: list[dict[str, str]] = []
+    connectors: list[dict[str, Any]] = []
+
+    for index, spec in enumerate(specs):
+        etype = spec.get("type")
+        eid = _excalidraw_id(spec, index)
+        if etype in ("rectangle", "ellipse", "diamond"):
+            x, y, w, h = _spec_geometry(spec, default_w=160.0, default_h=80.0)
+            elements.append(_shape_element(eid, str(etype), x, y, w, h))
+            centres[eid] = (x + w / 2, y + h / 2)
+            label = _spec_label(spec)
+            if label:
+                label_id = f"{eid}-label"
+                elements.append(_text_element(label_id, label, x, y, w, h))
+                text_rows.append({"id": label_id, "text": label})
+        elif etype == "text":
+            label = _spec_label(spec)
+            if not label:
+                continue
+            x, y, w, h = _spec_geometry(
+                spec, default_w=_estimate_text_width(label), default_h=25.0
+            )
+            elements.append(_text_element(eid, label, x, y, w, h, centred=False))
+            text_rows.append({"id": eid, "text": label})
+        elif etype in ("arrow", "line"):
+            connectors.append({"id": eid, "spec": spec, "type": etype})
+
+    for connector in connectors:
+        element = _connector_element(
+            connector["id"], connector["type"], connector["spec"], centres
+        )
+        if element is not None:
+            elements.append(element)
+    return elements, text_rows
+
+
+def _excalidraw_id(spec: dict[str, Any], index: int) -> str:
+    """Return the spec's ``id`` (when a non-empty string) or a stable ``el{index}``."""
+    raw = spec.get("id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return f"el{index}"
+
+
+def _spec_label(spec: dict[str, Any]) -> str:
+    """Pull a label string from a spec's ``text`` (or a ``label``/``label.text``)."""
+    for key in ("text", "label"):
+        value = spec.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            inner = value.get("text")
+            if isinstance(inner, str) and inner.strip():
+                return inner.strip()
+    return ""
+
+
+def _spec_geometry(
+    spec: dict[str, Any], *, default_w: float, default_h: float
+) -> tuple[float, float, float, float]:
+    """Read ``x``/``y``/``width``/``height`` from a spec with sane numeric fallbacks."""
+    x = _as_float(spec.get("x"), 0.0)
+    y = _as_float(spec.get("y"), 0.0)
+    w = _as_float(spec.get("width"), default_w)
+    h = _as_float(spec.get("height"), default_h)
+    return x, y, max(w, 1.0), max(h, 1.0)
+
+
+def _as_float(value: object, default: float) -> float:
+    """Coerce a JSON number to ``float`` (the default for a non-number)."""
+    return float(value) if isinstance(value, (int, float)) else default
+
+
+def _estimate_text_width(text: str) -> float:
+    """Estimate a text element's width from its length at the default font size."""
+    return max(
+        len(text) * _EXCALIDRAW_TEXT_FONT_SIZE * 0.6, float(_EXCALIDRAW_TEXT_FONT_SIZE)
+    )
+
+
+def _excalidraw_seed(eid: str, salt: str) -> int:
+    """A deterministic 31-bit seed/nonce for an element (no RNG; stable output)."""
+    digest = hashlib.sha256(f"{eid}:{salt}".encode()).digest()
+    return int.from_bytes(digest[:4], "big") % 2_000_000_000
+
+
+def _excalidraw_base(
+    eid: str, etype: str, x: float, y: float, w: float, h: float
+) -> dict[str, Any]:
+    """The property set every Excalidraw element shares (styling + bookkeeping)."""
+    return {
+        "id": eid,
+        "type": etype,
+        "x": round(x, 2),
+        "y": round(y, 2),
+        "width": round(w, 2),
+        "height": round(h, 2),
+        "angle": 0,
+        "strokeColor": "#1e1e1e",
+        "backgroundColor": "transparent",
+        "fillStyle": "solid",
+        "strokeWidth": 2,
+        "strokeStyle": "solid",
+        "roughness": 1,
+        "opacity": 100,
+        "groupIds": [],
+        "frameId": None,
+        "roundness": None,
+        "seed": _excalidraw_seed(eid, "seed"),
+        "version": 1,
+        "versionNonce": _excalidraw_seed(eid, "nonce"),
+        "isDeleted": False,
+        "boundElements": None,
+        "updated": 1,
+        "link": None,
+        "locked": False,
+    }
+
+
+def _shape_element(
+    eid: str, etype: str, x: float, y: float, w: float, h: float
+) -> dict[str, Any]:
+    """A closed-shape element (rectangle/ellipse/diamond) with rounded corners."""
+    element = _excalidraw_base(eid, etype, x, y, w, h)
+    if etype == "rectangle":
+        element["roundness"] = {"type": 3}
+    return element
+
+
+def _text_element(
+    eid: str,
+    text: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    centred: bool = True,
+) -> dict[str, Any]:
+    """A text element, centred over a host shape's box (``centred``) or free-standing.
+
+    A label is drawn as a plain overlaid text element rather than a bound-container
+    child -- simpler and valid, and it makes the text visible (the empty-box failure was
+    a ``label`` shorthand that Excalidraw does not render).
+    """
+    font = _EXCALIDRAW_TEXT_FONT_SIZE
+    tw = _estimate_text_width(text)
+    th = float(font) * _EXCALIDRAW_LINE_HEIGHT
+    if centred:
+        tx = x + (w - tw) / 2
+        ty = y + (h - th) / 2
+    else:
+        tx, ty = x, y
+    element = _excalidraw_base(eid, "text", tx, ty, tw, th)
+    element.update(
+        {
+            "text": text,
+            "rawText": text,
+            "originalText": text,
+            "fontSize": font,
+            "fontFamily": 1,
+            "textAlign": "center" if centred else "left",
+            "verticalAlign": "middle",
+            "baseline": round(font * 0.85, 2),
+            "containerId": None,
+            "lineHeight": _EXCALIDRAW_LINE_HEIGHT,
+            "autoResize": True,
+        }
+    )
+    return element
+
+
+def _connector_element(
+    eid: str, etype: str, spec: dict[str, Any], centres: dict[str, tuple[float, float]]
+) -> dict[str, Any] | None:
+    """Build an arrow/line, routed between the centres named by ``from``/``to``.
+
+    Falls back to the spec's explicit ``x``/``y``/``points`` when the endpoint ids are
+    not resolvable; returns ``None`` when neither a routable pair nor explicit points
+    are available (so a dangling connector is dropped, not emitted malformed).
+    """
+    start = centres.get(_as_ref(spec.get("from")))
+    end = centres.get(_as_ref(spec.get("to")))
+    if start is not None and end is not None:
+        x, y = start
+        points = [[0.0, 0.0], [end[0] - start[0], end[1] - start[1]]]
+    else:
+        points = _as_points(spec.get("points"))
+        if points is None:
+            return None
+        x = _as_float(spec.get("x"), 0.0)
+        y = _as_float(spec.get("y"), 0.0)
+    xs = [px for px, _ in points]
+    ys = [py for _, py in points]
+    element = _excalidraw_base(eid, etype, x, y, max(xs) - min(xs), max(ys) - min(ys))
+    element.update(
+        {
+            "points": [[round(px, 2), round(py, 2)] for px, py in points],
+            "lastCommittedPoint": None,
+            "startBinding": None,
+            "endBinding": None,
+            "startArrowhead": None,
+            "endArrowhead": "arrow" if etype == "arrow" else None,
+        }
+    )
+    return element
+
+
+def _as_ref(value: object) -> str:
+    """Return a connector endpoint reference id as a string (``""`` when absent)."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _as_points(value: object) -> list[list[float]] | None:
+    """Coerce a model ``points`` value to ``[[x, y], ...]`` or ``None`` if unusable."""
+    if not isinstance(value, list) or len(value) < 2:
+        return None
+    points: list[list[float]] = []
+    for item in value:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            points.append([_as_float(item[0], 0.0), _as_float(item[1], 0.0)])
+    return points if len(points) >= 2 else None

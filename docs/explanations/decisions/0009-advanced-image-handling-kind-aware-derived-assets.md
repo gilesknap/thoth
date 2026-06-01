@@ -53,22 +53,33 @@ original capture.**
   and the PDF path.
 
 - **`kind == "diagram"` → an idealised, editable Excalidraw reconstruction.** A *second*
-  vision call (`Analyser.reconstruct_excalidraw`) asks the model to reconstruct the drawing
-  as an Excalidraw scene and return only `{"elements": [...]}`. The harness parses that and
-  builds the `.excalidraw.md` envelope **deterministically in code** (frontmatter +
-  `# Excalidraw Data` / `## Drawing` + a fenced `json` scene block) — the model is trusted
-  only for the element list, never the file wrapper. The result is saved *alongside* the
-  original as `<slug>.excalidraw.md` and embedded; **the original photo is always kept** (the
-  reconstruction is an idealisation, not a replacement).
+  vision call (`Analyser.reconstruct_excalidraw`) asks the model for only the *structure* — a
+  list of simple node/connector specs (`{id, type, x, y, width, height, text}` for a shape,
+  `{from, to}` ids for a connector) — and the harness **expands each spec into a fully-formed
+  Excalidraw element in code** (ids, the full styling/bookkeeping property set, a shape's
+  label rendered as a centred overlaid `text` element, a connector routed between the named
+  shapes' centres), then assembles the complete `.excalidraw.md` envelope: frontmatter, the
+  plugin's switch-to-view banner, a `## Text Elements` search index, and a `%%`-commented
+  `## Drawing` block holding the scene as **uncompressed `json`** (the plugin reads both
+  `json` and `compressed-json`; plain JSON keeps the vault canonical-as-plain-text). The file
+  is saved *alongside* the original as `<slug>.excalidraw.md` and embedded as
+  `![[<slug>.excalidraw]]` — **the `.md` is dropped** so Obsidian renders the *drawing*, not
+  the raw JSON note; **the original photo is always kept**. (Live-verify lessons: a
+  `label`-shorthand / minimal-property scene renders as empty boxes, and a `.md`-suffixed
+  embed shows raw JSON — both are designed out here.)
 
 - **`kind == "document"` → a model-free OpenCV cleaned scan.** `thoth.scanner.clean_document`
   decodes the bytes, finds the largest 4-point contour, perspective-de-warps to a top-down
   view, adaptively thresholds to crisp B/W, and re-encodes to PNG — **pure OpenCV/NumPy, no
-  Anthropic call, no budget cost**. The cleaned scan is saved as `<slug>-scan.png` *alongside*
-  the original and embedded; again the original is kept. `opencv-python-headless` is a
-  **runtime optional dependency** (the `runtime` extra), lazily imported *inside* the
-  function so the module stays import-safe under pytest collection and the autosummary docs
-  build where OpenCV is absent — exactly like the `whisper` / `exa_py` / `firecrawl` seams.
+  Anthropic call, no budget cost**. A detected quad is accepted **only when it covers ≥50% of
+  the frame and spans ≥60% of each axis** (a conservative page gate): naive "largest 4-point
+  contour" otherwise latches onto a small logo/icon and warps to a tiny junk crop (the
+  live-verify failure), so a low-confidence detection degrades to *no scan* rather than a bad
+  one. The cleaned scan is saved as `<slug>-scan.png` *alongside* the original and embedded;
+  again the original is kept. `opencv-python-headless` is a **runtime optional dependency**
+  (the `runtime` extra), lazily imported *inside* the function so the module stays
+  import-safe under pytest collection and the autosummary docs build where OpenCV is absent —
+  exactly like the `whisper` / `exa_py` / `firecrawl` seams.
 
 - **Both derivations are strictly best-effort.** They run only after the primary analysis
   succeeds, reuse the *same* image bytes already read for the analyse call (no second read),

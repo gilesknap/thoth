@@ -45,6 +45,21 @@ def test_clean_document_returns_decodable_scan() -> None:
     assert decoded.size > 0
 
 
+def test_clean_document_small_icon_quad_returns_none() -> None:
+    """A small high-contrast quad (a logo/icon, not the page) is rejected -> None.
+
+    Guards the conservative page gate: without it, "largest 4-point contour" warps to
+    the icon and emits a tiny junk crop (the issue #68 live-verify failure)."""
+    canvas = np.zeros((400, 400, 3), dtype=np.uint8)
+    # A crisp 50x50 bright square in a corner -- ~1.5% of the frame, well under the
+    # page-area threshold and nowhere near spanning the edges.
+    cv2.rectangle(canvas, (30, 30), (80, 80), (255, 255, 255), -1)
+
+    ok, encoded = cv2.imencode(".png", canvas)
+    assert ok
+    assert clean_document(encoded.tobytes(), ext="png") is None
+
+
 def test_clean_document_blank_image_returns_none() -> None:
     """A uniform image has no document-like quadrilateral -> graceful None."""
     blank = np.full((300, 300, 3), 127, dtype=np.uint8)

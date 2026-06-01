@@ -253,17 +253,39 @@ def test_result_shape_mentions_faithful_markdown_for_documents() -> None:
 # --- Excalidraw reconstruction (issue #68) --------------------------------------------
 
 
-def _excalidraw_elements() -> list[dict[str, Any]]:
-    """A minimal but valid list of Excalidraw scene elements."""
+def _excalidraw_specs() -> list[dict[str, Any]]:
+    """The simple node/connector specs the model is asked to return (issue #68).
+
+    Two labelled boxes joined by an arrow plus a free-standing title -- the exact shape
+    thoth must expand into valid Excalidraw elements (the live-verify case).
+    """
     return [
-        {"type": "rectangle", "x": 10, "y": 20, "width": 100, "height": 50},
-        {"type": "text", "x": 30, "y": 35, "text": "Idea"},
+        {
+            "id": "n1",
+            "type": "rectangle",
+            "x": 100,
+            "y": 100,
+            "width": 160,
+            "height": 80,
+            "text": "Shared IOC",
+        },
+        {
+            "id": "n2",
+            "type": "rectangle",
+            "x": 100,
+            "y": 300,
+            "width": 160,
+            "height": 80,
+            "text": "Device",
+        },
+        {"id": "a1", "type": "arrow", "from": "n1", "to": "n2"},
+        {"id": "t1", "type": "text", "x": 100, "y": 40, "text": "Boot architecture"},
     ]
 
 
 def _excalidraw_response() -> str:
-    """A canned model reply carrying only the element list."""
-    return json.dumps({"elements": _excalidraw_elements()})
+    """A canned model reply carrying only the simple specs."""
+    return json.dumps({"elements": _excalidraw_specs()})
 
 
 def _parse_excalidraw_scene(markdown: str) -> dict[str, Any]:
@@ -275,26 +297,79 @@ def _parse_excalidraw_scene(markdown: str) -> dict[str, Any]:
 
 
 def test_reconstruct_excalidraw_builds_envelope() -> None:
-    """A diagram reconstruction returns a valid .excalidraw.md envelope."""
+    """A diagram reconstruction returns a valid .excalidraw.md envelope with real
+    elements expanded from the model's simple node/connector specs (issue #68)."""
     client = _CapturingClient(_excalidraw_response())
     analyser = Analyser(LLM(_config(), client=client))
 
     markdown = analyser.reconstruct_excalidraw(b"bytes", ext="png")
 
     assert markdown is not None
-    # Frontmatter marks it as a parsed Excalidraw note.
+    # Frontmatter + the plugin's switch-to-Excalidraw banner + the indexed text section.
     assert "excalidraw-plugin: parsed" in markdown
     assert "tags: [excalidraw]" in markdown
+    assert "Switch to EXCALIDRAW VIEW" in markdown
     assert "# Excalidraw Data" in markdown
+    assert "## Text Elements" in markdown
     assert "## Drawing" in markdown
-    # The fenced json scene wraps the model's elements with the fixed scaffolding.
+    # The labels are indexed in the ## Text Elements section for Obsidian search.
+    assert "Shared IOC ^" in markdown
+    assert "Boot architecture ^" in markdown
+
     scene = _parse_excalidraw_scene(markdown)
     assert scene["type"] == "excalidraw"
     assert scene["version"] == 2
     assert scene["source"] == "thoth"
-    assert scene["elements"] == _excalidraw_elements()
     assert scene["appState"]["viewBackgroundColor"] == "#ffffff"
     assert scene["files"] == {}
+
+    elements = scene["elements"]
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for element in elements:
+        by_type.setdefault(element["type"], []).append(element)
+        # Every element is fully formed (the empty-box failure was missing props/ids).
+        assert element["id"]
+        assert element["strokeColor"] == "#1e1e1e"
+        assert element["isDeleted"] is False
+    # Two boxes, three text elements (two labels + the title), one arrow.
+    assert len(by_type["rectangle"]) == 2
+    assert len(by_type["text"]) == 3
+    assert {t["text"] for t in by_type["text"]} == {
+        "Shared IOC",
+        "Device",
+        "Boot architecture",
+    }
+    arrow = by_type["arrow"][0]
+    # The arrow is routed between the two boxes' centres and carries a real arrowhead.
+    assert arrow["endArrowhead"] == "arrow"
+    assert arrow["points"][0] == [0.0, 0.0]
+    assert arrow["points"][1] == [0.0, 200.0]  # n1 centre -> n2 centre, straight down
+
+
+def test_reconstruct_excalidraw_dangling_connector_is_dropped() -> None:
+    """An arrow whose endpoints resolve to nothing (no from/to, no points) is dropped
+    rather than emitted malformed; the rest of the scene still builds."""
+    specs = [
+        {
+            "id": "n1",
+            "type": "rectangle",
+            "x": 0,
+            "y": 0,
+            "width": 80,
+            "height": 40,
+            "text": "A",
+        },
+        {"id": "a1", "type": "arrow", "from": "missing", "to": "alsogone"},
+    ]
+    client = _CapturingClient(json.dumps({"elements": specs}))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    markdown = analyser.reconstruct_excalidraw(b"bytes", ext="png")
+
+    assert markdown is not None
+    scene = _parse_excalidraw_scene(markdown)
+    assert not [e for e in scene["elements"] if e["type"] == "arrow"]
+    assert [e for e in scene["elements"] if e["type"] == "rectangle"]
 
 
 def test_reconstruct_excalidraw_passes_diagram_model() -> None:
