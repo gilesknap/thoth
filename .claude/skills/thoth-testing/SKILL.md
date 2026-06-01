@@ -3,8 +3,13 @@ name: thoth-testing
 description: >-
   How to test and verify changes to thoth — the tox GATE, the injected-fakes
   testing model (and why green CI does not prove a boundary change works), the
-  live-smoke marker, and the deploy-to-verify gotchas. Use when running the test
-  suite, adding tests, or deciding whether a change is safe to merge.
+  live-smoke marker, and how to deploy a branch to the live VPS appliance and
+  verify it before merge (the gold standard: git checkout + uv sync + systemd
+  restart, plus the deploy-to-verify gotchas). Use when running the test suite,
+  adding tests, deciding whether a change is safe to merge, or deploying /
+  testing / verifying a branch on the VPS (the live appliance / production box)
+  — e.g. "test this on the vps", "deploy the branch to the appliance", "verify
+  live before merge", "restart thoth-slack".
 ---
 
 # Testing & verifying thoth changes
