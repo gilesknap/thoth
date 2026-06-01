@@ -32,7 +32,9 @@ flowchart TB
     ig -->|query| qry["query.py"]
     ig -->|ask| res["research.py"]
     ing --> ext["extract.py<br>Exa · Firecrawl · Whisper<br>fetch URLs · transcribe audio"]
-    ing --> llm["llm.py<br>Claude Sonnet API<br>classify · curate · vision"]
+    ing --> an["analyse.py<br>vision: kind · transcribe<br>Excalidraw via Opus"]
+    ing --> llm["llm.py<br>Claude Sonnet API<br>classify · curate"]
+    an --> llm
     ing --> va["vault.py<br>path-confined writes<br>schema validation"]
     ing --> hs["hindsight.py<br>Hindsight CLI<br>semantic index"]
     va --> gs["git_sync.py<br>vault-pull · vault-commit"]
@@ -54,9 +56,11 @@ A binary capture (image or PDF) passes through the **analyse seam**
 text, a routing hint, entities/concepts, and an image *kind* (`diagram` /
 `document` / `screenshot` / `photo`). That kind drives best-effort, kind-specific
 handling — a diagram becomes an editable `.excalidraw.md` saved alongside the
-original (a second vision call), and a document gets a faithful
-structured-markdown transcription in its body. The original is always kept and a
-derivation failure never defers the capture (ADR-0009).
+original (a second vision call, pinned to **Opus** by default because
+reconstructing layout into valid Excalidraw JSON needs spatial reasoning), and a
+document gets a faithful structured-markdown transcription in its body. The
+original is always kept and a derivation failure never defers the capture
+(ADR-0009). See [Models](models) for the per-call model strategy.
 
 ## MCP query/research pipeline
 
@@ -87,12 +91,36 @@ read-only vault tools and optional live web calls; the model decides when to
 reach for the web and can offer to save the composed answer back to the vault
 as a `notes/` page.
 
+(models)=
+## Models
+
+thoth is multi-model by design: each LLM call runs on the cheapest tier that can
+do its job, and the three jobs that justify a stronger (or weaker) model than the
+default are pinned independently. Every model id is configurable through the
+environment (`deploy/.env.example` documents the keys), so the deployment can
+re-tier without code changes.
+
+| Call | Default model | Env override | Why this tier |
+|---|---|---|---|
+| **Intent gate** (`intent.py`) | Claude Haiku (`claude-haiku-4-5`) | `ANTHROPIC_MODEL` is unrelated; the gate model is set in code | A one-shot routing guess (capture / query / ask) — fast and cheap is the whole point |
+| **Classify · curate** (`ingest.py` → `llm.py`) | Claude Sonnet (`claude-sonnet-4-6`) | `ANTHROPIC_MODEL` | The pipeline workhorse: schema-validated classification and the curate file-plan |
+| **Analyse / transcribe** (`analyse.py`) | Sonnet (the default — Sonnet is multimodal) | `THOTH_ANALYSE_MODEL` | One vision call for OCR text, routing hint, kind, and document transcription; can drop to Haiku for cheaper A/B work |
+| **Excalidraw reconstruction** (`analyse.py`) | **Opus** (`claude-opus-4-8`) | `THOTH_DIAGRAM_MODEL` | Rebuilding a hand-drawn diagram into valid Excalidraw JSON needs spatial reasoning — worth a stronger model than the default |
+| **Blended Q&A** (`research.py`, `query.py`) | Sonnet (`ANTHROPIC_MODEL`) | `ANTHROPIC_MODEL` | Reasoning over read-only vault tools plus optional live web calls |
+
+`ANTHROPIC_MODEL` sets the default for every call that does not pin its own model;
+`THOTH_ANALYSE_MODEL` and `THOTH_DIAGRAM_MODEL` are per-call overrides that fall
+back to `ANTHROPIC_MODEL` when unset. The default deployment ships
+`THOTH_DIAGRAM_MODEL=claude-opus-4-8` and leaves the rest on Sonnet. Bare aliases
+that 404 fall back to a proven dated id (`llm.py`); a daily call-count budget
+(`budget.py`) guards every model chokepoint against redelivery storms.
+
 ## The stack
 
 | Component | Role |
 |---|---|
 | **Slack Bolt** | Socket-Mode event handling — the inbound capture channel |
-| **Anthropic Claude API** | Intent gate (Haiku), classification, curation, vision analysis, and blended Q&A (Sonnet) |
+| **Anthropic Claude API** | Multi-model LLM backend — intent gate (Haiku), classify/curate/analyse/Q&A (Sonnet), Excalidraw reconstruction (Opus). See [Models](models) |
 | **Hindsight** | Semantic search backend: fact-extraction (not token-chunking) and recall over the vault |
 | **Exa** | Web search for candidate pages during ingest and for live research |
 | **Firecrawl** | Web page extraction to clean Markdown during ingest and research |
