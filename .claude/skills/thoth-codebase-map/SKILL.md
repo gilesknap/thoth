@@ -34,35 +34,26 @@ MCP server.
    filesystem access — only a fixed set of validated, path-confined tools. Don't
    add a tool that can escape the vault or run commands.
 
-## Module map (`src/thoth/`)
+## Finding your way around `src/thoth/`
 
-- `slack_app.py` — Slack Socket-Mode handler: dedup, channel gate, allow-list,
-  routing, threaded replies, save-confirm.
-- `intent.py` — the cheap Haiku **intent gate** that routes bare free text to
-  capture / query / ask.
+Most filenames say what they are (`slack_app.py`, `query.py`, `summary.py`,
+`lint.py`, `budget.py`, `config.py`, `state.py`, `git_sync.py`, `mcp_server.py`) —
+`ls src/thoth/` plus each module's docstring is the authoritative, never-stale
+map, so this skill deliberately does **not** restate it (a hand-kept file list
+just drifts). Only the non-obvious ones, where the name doesn't reveal the role:
+
+- `extract.py` vs `analyse.py` — `extract.py` *fetches* external content (Exa
+  search, Firecrawl page→Markdown, Whisper transcription); `analyse.py` does
+  vision / OCR / PDF analysis. Easy to reach for the wrong one.
+- `llm.py` — the **single Anthropic seam** (`LLM.complete`); also owns the
+  classify/curate prompts and the curate file-plan JSON schema + validation.
+  Change LLM behavior here, via the prompt — not with output post-processing.
+- `hindsight.py` — thin wrapper around the **external Hindsight CLI** (see the
+  foot-gun below); `reindex_from_vault.py` rebuilds that index from the vault.
 - `ingest.py` — the bounded **8-pass capture pipeline** (persist raw → classify →
-  capture_raw → fetch_candidates → curate → retain → commit → report).
-- `extract.py` — external fetch: Exa (web search), Firecrawl (page→Markdown),
-  Whisper (audio transcription).
-- `analyse.py` — vision / OCR / PDF analysis (Anthropic vision).
-- `llm.py` — the single Anthropic seam (`LLM.complete`); classify/curate prompts +
-  the curate file-plan JSON schema and its validation.
-- `vault.py` — path-confined reads/writes, frontmatter + schema validation, the
-  page-type contracts.
-- `hindsight.py` — wrapper around the external Hindsight CLI (semantic index).
-- `reindex_from_vault.py` — rebuilds the Hindsight index from the canonical vault.
-- `query.py` — vault-only retrieval, **cost-ordered** (grep → wikilink traversal →
-  Hindsight recall; cheapest first, recall only as a last resort).
-- `research.py` — blended web+vault Q&A (`pkm_ask`); model decides when to hit the
-  web, can offer to save the answer back as a note.
-- `mcp_server.py` — FastMCP server exposing the `pkm_*` tools (stdio).
-- `summary.py` — composes + posts the Slack digest.
-- `lint.py` — scans the vault for maintenance issues (the canonical invariants).
-- `budget.py` — the daily cost circuit-breaker (`THOTH_DAILY_LLM_BUDGET`).
-- `config.py` — frozen `Config` from env; `state.py` — SQLite dedupe/markers/budget.
-- `git_sync.py` — vault pull/commit wrappers. `alerts.py` — Slack alerting.
-- `templates/` — the seed spine (`index.md`, `SCHEMA.md`, `log.md`) + `_bases/*.base`
-  dashboards, loaded via importlib resources.
+  capture_raw → fetch_candidates → curate → retain → commit → report); raw is
+  persisted *before* any LLM call so nothing is lost on restart.
+- `intent.py` — the cheap Haiku **intent gate** (see behavior note below).
 
 ## Vault page-type model (ADR 0005)
 
