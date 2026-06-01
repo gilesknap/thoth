@@ -13,14 +13,14 @@ true way to set it up — there is no migration path to preserve.
 ## 0. What you are building
 
 ```text
-                 ┌────────────────────────── VPS (user: pkm) ──────────────────────────┐
-  Slack  ◀─────▶ │  thoth-slack.service  ──http://127.0.0.1:9277──▶ thoth-hindsight    │
- (private        │   (capture / retrieve)                            (semantic index)   │
-  channel)       │        │                                                             │
-                 │        ▼  whisper · Exa · Firecrawl · Claude                          │
-                 │  /opt/pkm-vault  ──git push/pull (HTTPS)──▶  GitHub: pkm-vault repo   │
-                 └─────────────────────────────────────────────────────────────────────┘
-        cron: 06:30 reindex · 07:00 daily/weekly summary · config-backup every 6h
+               +----------------------- VPS (user: pkm) ------------------------+
+Slack  <-----> | thoth-slack.service  --(127.0.0.1:9277)-->  thoth-hindsight    |
+(private       |   (capture / retrieve)                      (semantic index)   |
+ channel)      |        |                                                       |
+               |        v   whisper | Exa | Firecrawl | Claude                  |
+               | /opt/pkm-vault  --git push/pull (HTTPS)-->  pkm-vault (GitHub) |
+               +----------------------------------------------------------------+
+                 cron: 06:30 reindex | 07:00 daily/weekly summary | config-backup every 6h
 ```
 
 - **Vault is canonical.** Knowledge is Markdown in the `pkm-vault` git repo. The Hindsight
