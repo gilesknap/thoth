@@ -1864,8 +1864,9 @@ class Ingestor:
             conflict=False,
             deferred=True,
             message=(
-                "Saved raw, curation deferred -- LLM unavailable. A later "
-                f"reindex/sweep will re-curate the held item. ({exc})"
+                f"Saved raw, curation deferred ({exc}). The item is held durably "
+                "in inbox/ but is not re-curated automatically -- re-run the capture "
+                "to curate it once capacity is available."
             ),
         )
         if not do_commit:
