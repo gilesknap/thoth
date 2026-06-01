@@ -21,6 +21,7 @@ views:
         - status != "cancelled"
         - due_date != ""
         - due_date <= now() + "2 days"
+        - "!tags.contains(\"personal\")"
     order: [file.name, due_date, priority, status, project]
     sort:
       - { property: due_date, direction: ASC }
@@ -33,6 +34,7 @@ views:
         - status != "completed"
         - status != "cancelled"
         - "!tags.contains(\"media\")"
+        - "!tags.contains(\"personal\")"
     order: [file.name, due_date, priority, status, project, recurrence]
     sort:
       - { property: priority, direction: ASC }
@@ -44,6 +46,7 @@ views:
         - status != "completed"
         - due_date != ""
         - due_date < now() + "7 days"
+        - "!tags.contains(\"personal\")"
     order: [file.name, due_date, priority]
   - type: table
     name: Media — To Consume
@@ -51,6 +54,7 @@ views:
       and:
         - tags.contains("media")
         - status == "to_consume"
+        - "!tags.contains(\"personal\")"
     order: [file.name, media_type, creator, priority]
     sort: [{ property: priority, direction: ASC }]
   - type: table
@@ -59,6 +63,7 @@ views:
       and:
         - tags.contains("media")
         - status == "consuming"
+        - "!tags.contains(\"personal\")"
     order: [file.name, media_type, creator, priority]
     sort: [{ property: priority, direction: ASC }]
   - type: table
@@ -67,6 +72,7 @@ views:
       and:
         - tags.contains("media")
         - status == "consumed"
+        - "!tags.contains(\"personal\")"
     order: [file.name, media_type, creator, created]
     sort: [{ property: created, direction: DESC }]
   - type: table
