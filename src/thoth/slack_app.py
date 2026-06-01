@@ -72,7 +72,7 @@ from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
-from thoth.intent import IntentClassifier
+from thoth.intent import IntentClassifier, IntentDecision
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
 from thoth.render import render_vault_ref
 from thoth.research import (
@@ -99,6 +99,11 @@ _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
 _CONFIRM_WORDS: frozenset[str] = frozenset(
     {"y", "yes", "save", "save it", "ok", "okay"}
 )
+
+# The safe routing verdict used when the gate is bypassed (no classifier wired, or a
+# deterministic ``research:`` escape hatch): route to the blended ask with no keywords,
+# so the read path greps the raw text -- the pre-gate behaviour (issue #5 / #102).
+_ASK_FALLBACK_DECISION: IntentDecision = IntentDecision(intent="ask", confidence="high")
 
 # The polite refusal sent to a user who is not on the allow-list, if anything at all.
 _REFUSAL_TEXT: str = "Sorry, you are not authorised to use this assistant."
@@ -797,8 +802,17 @@ class Handlers:
         With no classifier wired the route is always ``ask``, so the pre-gate behaviour
         is preserved exactly: blended ask when research is wired, vault-only query
         otherwise.
+
+        The gate's keywords (issue #102) ride along on the :class:`~thoth.intent.
+        IntentDecision` and are passed to both read paths (:meth:`_do_query` /
+        :meth:`_do_ask`) as ``search_terms`` to seed the lexical grep; capture ignores
+        them (it has its own classify/curate enrichment). On the research-prefix / no-
+        classifier ``ask`` fallback there are no keywords, so the read path greps the
+        raw text -- unchanged behaviour.
         """
-        route = self._free_text_route(text)
+        decision = self._free_text_route(text)
+        route = decision.route
+        keywords = list(decision.keywords)
         # Concise operator-readable line (issue #52): the engine bare free text was
         # routed to (capture / query / ask), so a misroute is visible in the log.
         logger.info("slack routed free text to %s", route)
@@ -806,29 +820,30 @@ class Handlers:
             capture = Capture(text=text, source=source)
             self._do_ingest(capture, responder, hint=_GATE_CAPTURE_HINT)
         elif route == "query":
-            self._do_query(text, responder)
+            self._do_query(text, responder, search_terms=keywords)
         elif self.research is not None:
-            self._do_ask(text, thread, responder)
+            self._do_ask(text, thread, responder, search_terms=keywords)
         else:
-            self._do_query(text, responder)
+            self._do_query(text, responder, search_terms=keywords)
 
-    def _free_text_route(self, text: str) -> str:
-        """Pick the engine for bare free text: ``capture`` / ``ask`` / ``query``.
+    def _free_text_route(self, text: str) -> IntentDecision:
+        """Pick the routing verdict for bare free text (issue #5 + #102 keywords).
 
-        Returns ``ask`` when no classifier is wired (the pre-gate default, so the
-        research/query fallback in :meth:`_route_free_text` is unchanged) **and** when
-        the text carries the explicit ``research:`` marker -- that marker is a
-        deterministic "ask the web" escape hatch (issue #5) and must bypass the gate to
-        reach :meth:`thoth.research.ResearchEngine.ask`, which strips it and forces the
-        web on; classifying it could misroute it to capture/query. Otherwise it consults
-        the gate and returns its :attr:`~thoth.intent.IntentDecision.route`, which
-        already collapses a low-confidence verdict to the safe ``ask``. The classifier
-        is itself total, so a model/parse failure also yields ``ask`` rather than
-        raising.
+        Returns the safe ``ask`` decision (no keywords) when no classifier is wired (the
+        pre-gate default, so the research/query fallback in :meth:`_route_free_text` is
+        unchanged) **and** when the text carries the explicit ``research:`` marker --
+        that marker is a deterministic "ask the web" escape hatch (issue #5) and skips
+        the gate to reach :meth:`thoth.research.ResearchEngine.ask`, which strips it and
+        forces the web on; classifying it could misroute it to capture/query. Otherwise
+        it consults the gate and returns the full :class:`~thoth.intent.IntentDecision`,
+        whose :attr:`~thoth.intent.IntentDecision.route` already collapses a low-
+        confidence verdict to the safe ``ask`` and whose ``keywords`` seed the read
+        path's grep (issue #102). The classifier is itself total, so a model/parse
+        failure also yields the safe default rather than raising.
         """
         if self.intent_classifier is None or force_web_requested(text):
-            return "ask"
-        return self.intent_classifier.classify(text).route
+            return _ASK_FALLBACK_DECISION
+        return self.intent_classifier.classify(text)
 
     def _do_ingest(
         self,
@@ -902,17 +917,25 @@ class Handlers:
             commits_ahead=ahead, since=since, detail=detail
         )
 
-    def _do_query(self, text: str, responder: Responder) -> None:
+    def _do_query(
+        self,
+        text: str,
+        responder: Responder,
+        *,
+        search_terms: list[str] | None = None,
+    ) -> None:
         """Run a vault-only query and reply; render an error fail-loud, never crash.
 
         Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
         it in place with the rendered answer; degrades to a single reply on a
         client-less path. The ``Sources:`` block lists only the pages the model said it
         used (issue #34's ``USED:`` filter, parsed in :mod:`thoth.query`).
+        ``search_terms`` are the intent gate's keywords (issue #102): they seed the grep
+        while the prose is composed from ``text``; empty/``None`` greps ``text`` itself.
         """
         responder.progress(_ASK_PLACEHOLDER)
         try:
-            result = self.query_engine.answer(text)
+            result = self.query_engine.answer(text, search_terms=search_terms)
         except BudgetExceededError:
             responder.finish(_BUDGET_REACHED_TEXT)
             return
@@ -921,7 +944,14 @@ class Handlers:
             return
         responder.finish(render_query_result(result))
 
-    def _do_ask(self, text: str, thread: str, responder: Responder) -> None:
+    def _do_ask(
+        self,
+        text: str,
+        thread: str,
+        responder: Responder,
+        *,
+        search_terms: list[str] | None = None,
+    ) -> None:
         """Run the blended web+vault ask, reply with the offer-to-save, and remember it.
 
         Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
@@ -933,12 +963,14 @@ class Handlers:
         rendered answer carries the "save this answer?" offer and the
         ``(question, result)`` is stashed in :attr:`pending_saves` **keyed by the
         conversation thread** (issue #61) so a follow-up "y" in that thread files it. A
-        :class:`~thoth.research.ResearchError` is rendered fail-loud.
+        :class:`~thoth.research.ResearchError` is rendered fail-loud. ``search_terms``
+        are the intent gate's keywords (issue #102): they seed the vault candidate grep
+        while the web gate and prose stay keyed off ``text``; empty/``None`` greps it.
         """
         assert self.research is not None  # routing guard guarantees this
         responder.progress(_ASK_PLACEHOLDER)
         try:
-            result = self.research.ask(text)
+            result = self.research.ask(text, search_terms=search_terms)
         except BudgetExceededError:
             responder.finish(_BUDGET_REACHED_TEXT)
             return

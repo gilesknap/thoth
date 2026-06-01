@@ -185,3 +185,59 @@ def test_classify_treats_bad_confidence_as_low(config: Config) -> None:
     assert decision.confidence == "low"
     # ...so a capture the model wasn't sure about is still answered, not filed.
     assert decision.route == "ask"
+
+
+# --- keywords (issue #102) ---------------------------------------------------
+
+
+def test_intent_decision_defaults_to_no_keywords() -> None:
+    """An IntentDecision built without keywords carries the empty tuple, not None."""
+    assert IntentDecision(intent="query", confidence="high").keywords == ()
+
+
+def test_classify_parses_keywords(config: Config) -> None:
+    """A well-formed keywords list is parsed into the decision's tuple (issue #102)."""
+    classifier, _ = _classifier(
+        config,
+        text='{"intent": "query", "confidence": "high", '
+        '"keywords": ["dog", "Labradoodle", "pet"]}',
+    )
+    decision = classifier.classify("list me the docs about dogs")
+    assert decision.keywords == ("dog", "Labradoodle", "pet")
+
+
+def test_classify_keywords_strips_and_drops_empties(config: Config) -> None:
+    """Whitespace-only / blank keyword entries are dropped and the rest trimmed."""
+    classifier, _ = _classifier(
+        config,
+        text='{"intent": "query", "confidence": "high", '
+        '"keywords": ["  dog  ", "", "   ", "pet"]}',
+    )
+    assert classifier.classify("anything").keywords == ("dog", "pet")
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        '{"intent": "query", "confidence": "high"}',  # absent
+        '{"intent": "query", "confidence": "high", "keywords": "dog"}',  # bare string
+        '{"intent": "query", "confidence": "high", "keywords": 42}',  # number
+        '{"intent": "query", "confidence": "high", "keywords": null}',  # null
+        '{"intent": "query", "confidence": "high", "keywords": [1, 2, 3]}',  # non-str
+    ],
+)
+def test_classify_malformed_keywords_degrade_to_empty(
+    config: Config, blob: str
+) -> None:
+    """A missing/garbled keywords field degrades to () without raising (totality)."""
+    classifier, _ = _classifier(config, text=blob)
+    decision = classifier.classify("anything")
+    # The verdict still parses (intent/confidence intact); only keywords degrade.
+    assert decision.intent == "query"
+    assert decision.keywords == ()
+
+
+def test_classify_model_error_yields_no_keywords(config: Config) -> None:
+    """The fail-safe default decision carries no keywords (issue #102 totality)."""
+    classifier, _ = _classifier(config, error=RuntimeError("api exploded"))
+    assert classifier.classify("anything").keywords == ()

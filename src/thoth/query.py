@@ -182,7 +182,12 @@ class QueryEngine:
     # ---- the full cost-ordered pass ---------------------------------------------
 
     def answer(
-        self, query: str, *, max_pages: int = 5, use_recall: bool = True
+        self,
+        query: str,
+        *,
+        max_pages: int = 5,
+        use_recall: bool = True,
+        search_terms: list[str] | None = None,
     ) -> QueryResult:
         """Run the full cost-ordered retrieval and compose an answer with citations.
 
@@ -197,11 +202,22 @@ class QueryEngine:
         the **used** subset the model named on its ``USED:`` line (issue #34), and
         ``consulted_count`` records how many candidates were offered before that filter.
 
+        ``search_terms`` (issue #102) seed the lexical passes: when the Slack intent
+        gate extracts de-pluralised, stop-word-stripped keywords from a natural-language
+        message it passes them here, so the grep ranks on those terms instead of the raw
+        prose ("list me the docs about dogs" greps ``dog``, not the noise words). The
+        recall pass and the composed prose stay keyed off the original ``query`` so the
+        answer still reads naturally and the citation/USED logic is unchanged; an empty
+        or ``None`` ``search_terms`` falls back to grepping ``query`` verbatim (today's
+        behaviour).
+
         Args:
             query: The natural-language query.
             max_pages: The maximum number of candidate pages to consult and cite.
             use_recall: When false, the semantic Hindsight pass is skipped entirely
                 (the cheap, structural-only path).
+            search_terms: Optional lexical keywords (from the intent gate) to grep
+                instead of the raw ``query``; empty/``None`` greps ``query``.
 
         Returns:
             A :class:`QueryResult` whose citations all resolve to real vault pages.
@@ -211,6 +227,9 @@ class QueryEngine:
         """
         if max_pages < 1:
             raise QueryError("max_pages must be at least 1")
+        # The keywords from the intent gate (issue #102) seed the lexical grep; the raw
+        # query is the fallback so the pre-gate behaviour holds when none were given.
+        grep_term = " ".join(search_terms) if search_terms else query
 
         started = time.monotonic()
         ordered: list[str] = []
@@ -229,7 +248,7 @@ class QueryEngine:
         # 1) grep over the reference folders -- lexical and cheap. grep scans the whole
         # file including frontmatter, so a page's one-line summary: gloss matches here
         # (ADR 0008), transparently covering what the old index.md catalog pass did.
-        add(self.grep(query, limit=max_pages * 4))
+        add(self.grep(grep_term, limit=max_pages * 4))
 
         # 2) graph navigation from what we already found (bounded).
         for path in list(ordered):

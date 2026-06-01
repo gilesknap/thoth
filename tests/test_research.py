@@ -843,6 +843,29 @@ def test_ask_surfaces_vault_candidates_in_prompt(
     assert "notes/distributed-systems.md" in prompt
 
 
+def test_ask_search_terms_seed_vault_candidate_grep(
+    config: Config, vault: Vault, query_engine: QueryEngine
+) -> None:
+    """The gate's keywords seed the candidate grep, surfacing a page the prose misses.
+
+    Issue #102: "tell me about consensus systems" under word-boundary grep would not hit
+    the ``consensus`` page on "systems" alone, but the gate's ``["consensus"]`` keyword
+    surfaces ``notes/distributed-systems.md`` into the model's candidate list. The web
+    gate + prose stay keyed off the original question.
+    """
+    extractor = _FakeExtractor()
+    responses = [_text_response("answer")]
+    engine = _engine(config, vault, query_engine, extractor, responses)
+
+    engine.ask("tell me everything", search_terms=["consensus"])
+
+    prompt = _scripted(engine).calls[0]["messages"][0]["content"]
+    # The keyword-seeded grep surfaced the consensus page; the prose prompt still
+    # carries the original (keyword-free) question, not the keyword.
+    assert "notes/distributed-systems.md" in prompt
+    assert "Question: tell me everything" in prompt
+
+
 def test_ask_prompt_carries_clean_prose_instruction(
     config: Config, vault: Vault, query_engine: QueryEngine
 ) -> None:

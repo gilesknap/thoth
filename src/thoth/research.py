@@ -269,7 +269,12 @@ class ResearchEngine:
     # ---- the blended ask ---------------------------------------------------------
 
     def ask(
-        self, question: str, *, force_web: bool = False, max_pages: int = 5
+        self,
+        question: str,
+        *,
+        force_web: bool = False,
+        max_pages: int = 5,
+        search_terms: list[str] | None = None,
     ) -> AskResult:
         """Answer ``question`` from the vault and (model-decided) the web, citing both.
 
@@ -284,11 +289,19 @@ class ResearchEngine:
         :meth:`~thoth.query.QueryEngine.build_citation` for the pages the model actually
         read, and web citations are the URLs it extracted.
 
+        ``search_terms`` (issue #102) are the intent gate's de-pluralised, stop-word-
+        stripped keywords; they seed the vault candidate pass's lexical grep so a
+        natural-language ask still finds the right pages. The web gate and the prose
+        stay keyed off the original ``question``; an empty/``None`` value greps the
+        question verbatim (today's behaviour).
+
         Args:
             question: The natural-language question (a leading ``research:`` marker
                 forces the web tools on and is stripped from the prompt).
             force_web: Force the web tools on regardless of the prefix.
             max_pages: How many candidate vault pages to surface to the model.
+            search_terms: Optional lexical keywords (from the intent gate) to seed the
+                vault candidate grep; empty/``None`` greps the question.
 
         Returns:
             An :class:`AskResult` whose vault citations all resolve to real, confined
@@ -300,7 +313,9 @@ class ResearchEngine:
         started = time.monotonic()
         allow_web = force_web_requested(question, force_web=force_web)
         clean_question = strip_research_prefix(question)
-        candidates = self._vault_candidates(clean_question, max_pages=max_pages)
+        candidates = self._vault_candidates(
+            clean_question, max_pages=max_pages, search_terms=search_terms
+        )
         tools = build_research_tools(allow_web=allow_web)
 
         loop = _ToolLoop(self, candidates)
@@ -416,18 +431,29 @@ class ResearchEngine:
 
     # ---- internals ---------------------------------------------------------------
 
-    def _vault_candidates(self, question: str, *, max_pages: int) -> list[Citation]:
+    def _vault_candidates(
+        self,
+        question: str,
+        *,
+        max_pages: int,
+        search_terms: list[str] | None = None,
+    ) -> list[Citation]:
         """Run the read-only vault pass and return harness-built candidate citations.
 
         Reuses :meth:`~thoth.query.QueryEngine.answer` for the structural + recall pass.
-        A :class:`~thoth.query.QueryError` (no vault page matched) is non-fatal here: a
-        blended ask may still be answered from the web alone, so an empty candidate list
-        is returned rather than raising.
+        ``search_terms`` (issue #102) are forwarded so the intent gate's keywords seed
+        the lexical grep; the prose composed inside ``answer`` is discarded here (only
+        the citations are kept), so the candidate pass cares only about *which* pages
+        match. A :class:`~thoth.query.QueryError` (no vault page matched) is non-fatal
+        here: a blended ask may still be answered from the web alone, so an empty
+        candidate list is returned rather than raising.
         """
         if max_pages < 1:
             return []
         try:
-            vault_result = self._query.answer(question, max_pages=max_pages)
+            vault_result = self._query.answer(
+                question, max_pages=max_pages, search_terms=search_terms
+            )
         except QueryError:
             return []
         return list(vault_result.citations)
