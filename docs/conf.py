@@ -49,6 +49,8 @@ extensions = [
     "sphinx_design",
     # So we can write markdown files
     "myst_parser",
+    # Render Mermaid diagrams in docs
+    "sphinxcontrib.mermaid",
 ]
 
 # So we can use the ::: syntax
@@ -107,15 +109,28 @@ exclude_patterns = ["_build"]
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
 
-# This means you can link things like `str` and `asyncio` to the relevant
-# docs in the python documentation.
-intersphinx_mapping = {"python": ("https://docs.python.org/3/", None)}
+# Cross-references to the Python standard library. Populated at build time
+# only when the upstream inventory is reachable (CI / local); left empty in
+# offline or restricted-network environments so the build does not warn-fail.
+try:
+    import httpx
+
+    _inv_ok = httpx.head("https://docs.python.org/3/objects.inv", timeout=5).is_success
+except Exception:
+    _inv_ok = False
+
+intersphinx_mapping = (
+    {"python": ("https://docs.python.org/3/", None)} if _inv_ok else {}
+)
 
 # A dictionary of graphviz graph attributes for inheritance diagrams.
 inheritance_graph_attrs = {"rankdir": "TB"}
 
 # Ignore localhost links for periodic check that links in docs are valid
 linkcheck_ignore = [r"http://localhost:\d+/"]
+
+# Suppress warnings that are harmless in offline / restricted-network environments
+suppress_warnings: list[str] = []
 
 # Set copy-button to ignore python and bash prompts
 # https://sphinx-copybutton.readthedocs.io/en/latest/use.html#using-regexp-prompt-identifiers

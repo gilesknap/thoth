@@ -53,6 +53,7 @@ dev = [
     "sphinx-autobuild",
     "sphinx-copybutton",
     "sphinx-design",
+    "sphinxcontrib-mermaid",
     "tox-uv",
     "types-mock",
 ]
