@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>2. Adopt python-copier-template for project structure &#8212; thoth 0.1.dev63+gb2c2c0c58 documentation</title>
+    <title>9. Kind-aware advanced image handling: derived assets from one vision call &#8212; thoth 0.1.dev63+gb2c2c0c58 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=30646c52"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0002-switched-to-python-copier-template';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0009-advanced-image-handling-kind-aware-derived-assets';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="3. Slack free-text intent gate (route prose to the right engine)" href="0003-slack-free-text-intent-gate.html" />
-    <link rel="prev" title="1. Record architecture decisions" href="0001-record-architecture-decisions.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="8. Page-frontmatter summary is the canonical gloss; index.md is static" href="0008-page-summary-frontmatter-static-index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -425,14 +425,14 @@
 <li class="toctree-l1"><a class="reference internal" href="../architecture-review.html">Architecture review notes</a></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../decisions.html">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">2. Adopt python-copier-template for project structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l2"><a class="reference internal" href="0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
 </ul>
 </details></li>
 </ul>
@@ -481,7 +481,7 @@
     
     <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">2. Adopt python-copier-template for project structure</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">9. Kind-aware advanced image handling: derived assets from one vision call</span></li>
   </ul>
 </nav>
 </div>
@@ -498,33 +498,113 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="adopt-python-copier-template-for-project-structure">
-<h1>2. Adopt python-copier-template for project structure<a class="headerlink" href="#adopt-python-copier-template-for-project-structure" title="Link to this heading">#</a></h1>
+  <section id="kind-aware-advanced-image-handling-derived-assets-from-one-vision-call">
+<h1>9. Kind-aware advanced image handling: derived assets from one vision call<a class="headerlink" href="#kind-aware-advanced-image-handling-derived-assets-from-one-vision-call" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-01</p>
 <section id="status">
 <h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
 <p>Accepted</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
-<p>We should use the following <a class="reference external" href="https://github.com/DiamondLightSource/python-copier-template">python-copier-template</a>.
-The template will ensure consistency in developer
-environments and package management.</p>
+<p>The analyse seam (<code class="docutils literal notranslate"><span class="pre">thoth.analyse.Analyser</span></code>, ADR-0006) already sends one transient-base64
+vision call per binary capture and returns an <code class="docutils literal notranslate"><span class="pre">Analysis</span></code> (extracted text, description,
+summary, suggested type, entities, concepts) that routes <code class="docutils literal notranslate"><span class="pre">classify</span></code> and bodies <code class="docutils literal notranslate"><span class="pre">curate</span></code>.
+But every image was treated identically — a flat OCR-style pass — even though the captures
+fall into visibly different <em>kinds</em> that each reward different handling:</p>
+<ul class="simple">
+<li><p>A <strong>hand-drawn diagram / whiteboard</strong> photo is most useful as an <em>editable</em> artefact, not
+a flat description: the owner wants to reopen and rework it.</p></li>
+<li><p>A <strong>document</strong> (a phone snap or scan of a printed/handwritten page) deserves a <em>faithful
+structured markdown</em> transcription (headings, lists, tables), not loose OCR prose — the
+verbatim, well-structured text is the useful artefact.</p></li>
+<li><p>A <strong>screenshot</strong> or a real-world <strong>photo</strong> wants neither of those; the existing flat
+analysis is exactly right.</p></li>
+</ul>
+<p>The naive way to get per-kind behaviour is a separate cheap pre-call (a Haiku classifier)
+to label the image before the main analyse call. That doubles the per-capture model calls,
+adds a second deferral point, and re-derives information the main vision model already has
+in front of it.</p>
+<p>One further constraint shapes the design: the project’s durability invariant is sacred —
+the primary analyse/classify/curate/commit path must never be deferred or lost for the sake
+of a nicety — a capture is held and filed regardless of whether any enhancement succeeds.</p>
 </section>
 <section id="decision">
 <h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
-<p>We have switched to using the template.</p>
+<p><strong>Fold the image <em>kind</em> into the existing single vision call, and use it to branch into
+best-effort, kind-specific handling that enriches — but never replaces and never blocks —
+the original capture.</strong></p>
+<ul>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">kind</span></code> is part of the one analyse call, not a separate pre-call.</strong> <code class="docutils literal notranslate"><span class="pre">Analysis</span></code> gains a
+<code class="docutils literal notranslate"><span class="pre">kind</span></code> field (one of <code class="docutils literal notranslate"><span class="pre">diagram</span></code> / <code class="docutils literal notranslate"><span class="pre">document</span></code> / <code class="docutils literal notranslate"><span class="pre">screenshot</span></code> / <code class="docutils literal notranslate"><span class="pre">photo</span></code>, or <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> when
+unknown). The existing <code class="docutils literal notranslate"><span class="pre">_RESULT_SHAPE</span></code> prompt now also asks for <code class="docutils literal notranslate"><span class="pre">kind</span></code> with a one-line
+definition of the four values, and the parser validates the answer against that closed
+set (anything else collapses to <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>). No extra model round-trip is added for labelling.</p></li>
+<li><p><strong>Document transcription is a <em>strengthened prompt</em> on that same call</strong>, not a new call.
+When the model judges an image a <code class="docutils literal notranslate"><span class="pre">document</span></code>, the prompt instructs it to return the <code class="docutils literal notranslate"><span class="pre">text</span></code>
+as a <strong>faithful structured markdown transcription</strong> — preserving headings, lists, and
+tables as markdown — rather than loose OCR. One combined prompt still serves every image
+and the PDF path.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">kind</span> <span class="pre">==</span> <span class="pre">&quot;diagram&quot;</span></code> → an idealised, editable Excalidraw reconstruction.</strong> A <em>second</em>
+vision call (<code class="docutils literal notranslate"><span class="pre">Analyser.reconstruct_excalidraw</span></code>) asks the model for only the <em>structure</em> — a
+list of simple node/connector specs (<code class="docutils literal notranslate"><span class="pre">{id,</span> <span class="pre">type,</span> <span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">width,</span> <span class="pre">height,</span> <span class="pre">text}</span></code> for a shape,
+<code class="docutils literal notranslate"><span class="pre">{from,</span> <span class="pre">to,</span> <span class="pre">text}</span></code> ids for a connector) — and the harness <strong>expands each spec into a
+fully-formed Excalidraw element in code</strong> (ids, the full styling/bookkeeping property set),
+wiring up the relationships Excalidraw expects: a shape’s label is a <strong>bound text element</strong>
+(<code class="docutils literal notranslate"><span class="pre">containerId</span></code> → the shape, the shape’s <code class="docutils literal notranslate"><span class="pre">boundElements</span></code> → the label) so the text is a
+<em>property of the box</em>; a connector that joins two shapes is <strong>bound to their edges</strong> — each
+endpoint snaps to the point on a box’s border facing the other box (plus a small gap), with
+<code class="docutils literal notranslate"><span class="pre">startBinding</span></code>/<code class="docutils literal notranslate"><span class="pre">endBinding</span></code> and the shapes’ <code class="docutils literal notranslate"><span class="pre">boundElements</span></code> recording the bond, so arrows
+attach at the boxes’ edges rather than plunging into their centres; and a connector’s own
+label is bound to the connector so Excalidraw places it at the line’s midpoint over a masked
+background, near the line and never crossing it. The harness then assembles the complete
+<code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> envelope: frontmatter, the plugin’s switch-to-view banner, a
+<code class="docutils literal notranslate"><span class="pre">##</span> <span class="pre">Text</span> <span class="pre">Elements</span></code> search index, and a <code class="docutils literal notranslate"><span class="pre">%%</span></code>-commented <code class="docutils literal notranslate"><span class="pre">##</span> <span class="pre">Drawing</span></code> block holding the scene as
+<strong>uncompressed <code class="docutils literal notranslate"><span class="pre">json</span></code></strong> (the plugin reads both <code class="docutils literal notranslate"><span class="pre">json</span></code> and <code class="docutils literal notranslate"><span class="pre">compressed-json</span></code>; plain JSON keeps
+the vault canonical-as-plain-text). The file is saved <em>alongside</em> the original as
+<code class="docutils literal notranslate"><span class="pre">&lt;slug&gt;.excalidraw.md</span></code> and embedded as <code class="docutils literal notranslate"><span class="pre">![[&lt;slug&gt;.excalidraw]]</span></code> — <strong>the <code class="docutils literal notranslate"><span class="pre">.md</span></code> is dropped</strong> so
+Obsidian renders the <em>drawing</em>, not the raw JSON note; <strong>the original photo is always kept</strong>.
+(Live-verify lessons: a <code class="docutils literal notranslate"><span class="pre">label</span></code>-shorthand / minimal-property scene renders as empty boxes, a
+<code class="docutils literal notranslate"><span class="pre">.md</span></code>-suffixed embed shows raw JSON, and centre-routed arrows with overlaid labels read as
+broken — all designed out here.)</p>
+<p><em>(A model-free OpenCV “scan cleanup” for documents was prototyped here but <strong>dropped</strong>: in
+practice the de-warp/threshold pass produced misaligned, lower-value output, and the
+faithful structured-markdown transcription above is the genuinely useful document artefact.
+No <code class="docutils literal notranslate"><span class="pre">-scan.png</span></code> is produced and <code class="docutils literal notranslate"><span class="pre">opencv-python-headless</span></code> is not a dependency.)</em></p>
+</li>
+<li><p><strong>The reconstruction is strictly best-effort.</strong> It runs only after the primary analysis
+succeeds, reuses the <em>same</em> image bytes already read for the analyse call (no second read),
+and is wrapped so that <em>any</em> failure — unparseable model output, empty elements, or a budget
+trip (<code class="docutils literal notranslate"><span class="pre">BudgetExceededError</span></code>) — degrades to “no derived asset”. The capture is never deferred
+or lost for an enhancement; the original asset is always saved and filed.</p></li>
+<li><p><strong>Two env-configurable model knobs</strong> (ADR-style, not module constants): <code class="docutils literal notranslate"><span class="pre">analyse_model</span></code>
+(<code class="docutils literal notranslate"><span class="pre">THOTH_ANALYSE_MODEL</span></code>) selects the model for the folded analyse/kind/transcription call —
+letting the owner drop to a Haiku for cheap document A/B — and <code class="docutils literal notranslate"><span class="pre">diagram_model</span></code>
+(<code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL</span></code>) selects the model for the spatial-reasoning Excalidraw
+reconstruction. Both default to <code class="docutils literal notranslate"><span class="pre">None</span></code>, which falls back to <code class="docutils literal notranslate"><span class="pre">config.anthropic_model</span></code>
+(Sonnet) via the injected <code class="docutils literal notranslate"><span class="pre">LLM</span></code>, so both calls remain on the daily budget guard.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ASSET_SLUG_RE</span></code> is relaxed to allow compound extensions</strong>
+(<code class="docutils literal notranslate"><span class="pre">^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+)+$</span></code>) so <code class="docutils literal notranslate"><span class="pre">&lt;slug&gt;.excalidraw.md</span></code> validates while
+<code class="docutils literal notranslate"><span class="pre">..</span></code>, leading dots, uppercase, and spaces stay forbidden.</p></li>
+</ul>
 </section>
 <section id="consequences">
 <h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
-<p>This module will use a fixed set of tools as developed in <code class="docutils literal notranslate"><span class="pre">python-copier-template</span></code>
-and can pull from this template to update the packaging to the latest techniques.</p>
-<p>As such, the developer environment may have changed, the following could be
-different:</p>
 <ul class="simple">
-<li><p>linting</p></li>
-<li><p>formatting</p></li>
-<li><p>pip venv setup</p></li>
-<li><p>CI/CD</p></li>
+<li><p>A binary image capture is now handled <em>by what it is</em>: a whiteboard photo gains an
+editable <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> the owner can reopen and rework; a document photo gains a
+structured-markdown transcription in its body; a screenshot or snapshot keeps the lean flat
+analysis. The derived Excalidraw asset is embedded with <code class="docutils literal notranslate"><span class="pre">![[…]]</span></code> next to the original and
+reaches curate via <code class="docutils literal notranslate"><span class="pre">RawCaptureResult.asset_paths</span></code>.</p></li>
+<li><p>The cost ceiling is unchanged for non-diagram images (one vision call, as before) and rises
+by exactly one extra reconstruction call for diagrams — bounded by the same daily spend
+guard (issue #16).</p></li>
+<li><p>Idempotency and durability are preserved end-to-end: the derived Excalidraw asset routes
+through the same byte-SHA-keyed <code class="docutils literal notranslate"><span class="pre">_store_asset</span></code> path, so a byte-identical re-ingest skips the
+original <em>and</em> the derivation; and because the derivation sits <em>after</em> the durable raw hold
+and the primary analysis, an enhancement failure can never defer or lose a capture.</p></li>
+<li><p>Cross-references ADR-0006 (transient base64 to the vision API — the call this builds on) and
+builds on issue #16 (the daily budget guard the second call is charged against).</p></li>
 </ul>
 </section>
 </section>
@@ -540,20 +620,20 @@ different:</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="0001-record-architecture-decisions.html"
+       href="0008-page-summary-frontmatter-static-index.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">1. Record architecture decisions</p>
+        <p class="prev-next-title">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</p>
       </div>
     </a>
     <a class="right-next"
-       href="0003-slack-free-text-intent-gate.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">3. Slack free-text intent gate (route prose to the right engine)</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -587,7 +667,7 @@ different:</p>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0002-switched-to-python-copier-template.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0009-advanced-image-handling-kind-aware-derived-assets.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -602,7 +682,7 @@ different:</p>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/explanations/decisions/0002-switched-to-python-copier-template.md.txt">
+    <a href="../../_sources/explanations/decisions/0009-advanced-image-handling-kind-aware-derived-assets.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
