@@ -1,0 +1,9 @@
+{
+  "promptDelete": false,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "inbox",
+  "attachmentFolderPath": "raw/assets",
+  "alwaysUpdateLinks": true,
+  "showUnsupportedFiles": true,
+  "propertiesInDocument": "visible"
+}

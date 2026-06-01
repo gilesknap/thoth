@@ -55,6 +55,7 @@ from importlib.resources.abc import Traversable
 __all__ = [
     "BASE_NAMES",
     "SPINE_NAMES",
+    "OBSIDIAN_NAMES",
     "TemplateError",
     "template_text",
     "base_text",
@@ -131,6 +132,41 @@ def _resolve(name: str) -> Traversable:
     return resource
 
 
+def _discover_obsidian_names() -> tuple[str, ...]:
+    """Discover every shipped ``.obsidian/`` config file, recursively.
+
+    Walks the packaged ``templates/.obsidian`` tree so a new Obsidian config file
+    is seeded into fresh vaults just by dropping it in -- no code change needed.
+    Returns forward-slash paths under the templates root (each prefixed with
+    ``.obsidian/``), sorted for a deterministic seed order. Empty if no
+    ``.obsidian`` directory ships.
+    """
+    root = _root().joinpath(".obsidian")
+    if not root.is_dir():
+        return ()
+    names: list[str] = []
+    stack: list[tuple[str, Traversable]] = [(".obsidian", root)]
+    while stack:
+        prefix, node = stack.pop()
+        for child in node.iterdir():
+            rel = f"{prefix}/{child.name}"
+            if child.is_dir():
+                stack.append((rel, child))
+            else:
+                names.append(rel)
+    return tuple(sorted(names))
+
+
+#: Obsidian-config files shipped with the spine, as forward-slash paths under the
+#: templates root (each prefixed ``.obsidian/``). Discovered by walking the
+#: packaged ``templates/.obsidian`` tree, so dropping a new config file in seeds
+#: it into fresh vaults with no code change. :meth:`thoth.vault.Vault.seed` writes
+#: each verbatim into ``<vault>/.obsidian/``, giving a fresh vault thoth's plugin
+#: set, theme choice, and the ``dashboard-full-width`` snippet (enabled via the
+#: shipped ``appearance.json``).
+OBSIDIAN_NAMES: tuple[str, ...] = _discover_obsidian_names()
+
+
 def template_text(name: str) -> str:
     """Return the UTF-8 text of a packaged template by relative name.
 
@@ -157,8 +193,8 @@ def base_text(name: str) -> str:
 def iter_templates() -> list[tuple[str, str]]:
     """Return ``(relative-name, text)`` for every packaged template.
 
-    The result lists the three spine files followed by the ``_bases/*.base``
-    dashboards, each paired with its UTF-8 text.
+    The result lists the three spine files, the ``_bases/*.base`` dashboards, and
+    the ``.obsidian`` config files, each paired with its UTF-8 text.
     """
     items: list[tuple[str, str]] = []
     for spine in SPINE_NAMES:
@@ -166,4 +202,6 @@ def iter_templates() -> list[tuple[str, str]]:
     for base in BASE_NAMES:
         rel = f"_bases/{base}.base"
         items.append((rel, template_text(rel)))
+    for obsidian in OBSIDIAN_NAMES:
+        items.append((obsidian, template_text(obsidian)))
     return items

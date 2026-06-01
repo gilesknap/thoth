@@ -1,0 +1,7 @@
+{
+  "cssTheme": "Minimal",
+  "theme": "obsidian",
+  "enabledCssSnippets": [
+    "dashboard-full-width"
+  ]
+}
