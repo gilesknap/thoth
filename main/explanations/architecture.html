@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architecture overview &#8212; thoth 0.1.dev53+ga5d4cb414 documentation</title>
+    <title>Architecture overview &#8212; thoth 0.1.dev55+g845b21163 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=38780135"></script>
+    <script src="../_static/documentation_options.js?v=09a3c67f"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -867,6 +867,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
 </ul>
 </details></li>
 </ul>
@@ -992,9 +993,11 @@ apply here as in ingest — the MCP surface cannot escape the vault either.</p>
     res --&gt; ext[&quot;extract.py&lt;br&gt;Exa · Firecrawl&lt;br&gt;web search · extract&quot;]
     va --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
     hs -.-&gt; ov
-    </pre><p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> uses a cost-ordered search strategy: <code class="docutils literal notranslate"><span class="pre">index.md</span></code> summaries → grep →
-wikilink traversal → Hindsight semantic recall — cheapest first, LLM only as
-a last resort. <code class="docutils literal notranslate"><span class="pre">research.py</span></code> (the <code class="docutils literal notranslate"><span class="pre">pkm_ask</span></code> tool) runs Claude Sonnet with
+    </pre><p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> uses a cost-ordered search strategy: grep → wikilink traversal →
+Hindsight semantic recall — cheapest first, LLM only as a last resort. grep
+scans the whole file including frontmatter, so a reference page’s one-line
+<code class="docutils literal notranslate"><span class="pre">summary:</span></code> gloss is matched there; <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a static set of Bases
+dashboards that retrieval never reads. <code class="docutils literal notranslate"><span class="pre">research.py</span></code> (the <code class="docutils literal notranslate"><span class="pre">pkm_ask</span></code> tool) runs Claude Sonnet with
 read-only vault tools and optional live web calls; the model decides when to
 reach for the web and can offer to save the composed answer back to the vault
 as a <code class="docutils literal notranslate"><span class="pre">notes/</span></code> page.</p>
