@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>thoth &#8212; thoth 0.1.dev73+g4041fca77 documentation</title>
+    <title>thoth &#8212; thoth 0.1.dev76+g96f4edc61 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="_static/documentation_options.js?v=91f716b4"></script>
+    <script src="_static/documentation_options.js?v=44316ea9"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
@@ -438,9 +438,13 @@
 <p><a class="reference external" href="https://www.apache.org/licenses/LICENSE-2.0"><img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" /></a></p>
 <section id="thoth">
 <h1>thoth<a class="headerlink" href="#thoth" title="Link to this heading">#</a></h1>
-<p>agent PKM with semantic index, slack connector and MCP</p>
-<p>This is where you should write a short paragraph that describes what your module does,
-how it does it, and why people should use it.</p>
+<p><strong>A personal, single-user “second brain” appliance.</strong> Capture anything — a URL, a PDF,
+an image, a voice memo, or a quick note — by dropping it into one private Slack channel,
+and thoth files it into a git-backed <a class="reference external" href="https://obsidian.md">Obsidian</a> vault: classified,
+curated into clean Markdown, cross-linked to your existing pages, and indexed for semantic
+recall. Ask a question in the same channel and it answers <strong>from your vault</strong> (and,
+optionally, the web), citing the pages it actually used. The same knowledge is exposed to
+AI assistants over <a class="reference external" href="https://modelcontextprotocol.io">MCP</a>.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>What</p></th>
@@ -460,18 +464,53 @@ how it does it, and why people should use it.</p>
 </tbody>
 </table>
 </div>
-<p>This is where you should put some images or code snippets that illustrate
-some relevant examples. If it is a library then you might put some
-introductory code here:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">thoth</span><span class="w"> </span><span class="kn">import</span> <span class="n">__version__</span>
-
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Hello thoth </span><span class="si">{</span><span class="n">__version__</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<section id="what-it-does">
+<h2>What it does<a class="headerlink" href="#what-it-does" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><strong>Capture from Slack.</strong> Post a link, upload a file, or jot a note in a private channel;
+thoth fetches/transcribes/OCRs it, decides what kind of thing it is, writes a tidy page,
+and links it to related notes — replying in-thread with an <code class="docutils literal notranslate"><span class="pre">obsidian://</span></code> link.</p></li>
+<li><p><strong>Retrieve from Slack.</strong> Ask a question and get a conversational answer grounded in your
+vault, with a short <code class="docutils literal notranslate"><span class="pre">Sources:</span></code> list of the pages it used (web-blended when you ask it to
+research).</p></li>
+<li><p><strong>Your knowledge is plain Markdown in git.</strong> The Obsidian vault is the single source of
+truth — open it in Obsidian, edit it by hand, grep it, diff it. No lock-in.</p></li>
+<li><p><strong>Semantic recall.</strong> A rebuildable vector index
+(<a class="reference external" href="https://hindsight.vectorize.io">Hindsight</a>) sits over the vault so retrieval finds
+things by meaning, not just keywords. It is <strong>disposable</strong> — re-derived from the vault at
+any time.</p></li>
+<li><p><strong>MCP server.</strong> Exposes <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tools (search, ask, ingest, recent, todos, write) so
+Claude Desktop or any MCP client can read and write the same vault.</p></li>
+</ul>
+</section>
+<section id="how-it-works">
+<h2>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
+<p>A small set of injected boundaries do the heavy lifting: <strong>Claude</strong> classifies, curates,
+and answers; <strong>Whisper</strong> (local) transcribes audio; <strong>Exa</strong> + <strong>Firecrawl</strong> handle web
+search and URL→Markdown extraction; <strong>Hindsight</strong> provides the semantic index; and the
+<strong>Obsidian vault</strong> (a two-way-synced git repo) is the canonical store. It runs unattended
+on a small VPS as a single long-running Slack daemon (<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>) plus a handful of cron
+jobs.</p>
+<p>See the <a class="reference external" href="https://gilesknap.github.io/thoth/explanations/architecture.html">architecture explanation</a>
+for the full picture, and the <a class="reference external" href="https://gilesknap.github.io/thoth/explanations/decisions.html">design decisions</a>
+for the why.</p>
+</section>
+<section id="get-started">
+<h2>Get started<a class="headerlink" href="#get-started" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><strong>Deploy the appliance</strong> (the main path) — a full, dependency-by-dependency setup
+including every API key and the <code class="docutils literal notranslate"><span class="pre">.env</span></code>:
+<a class="reference external" href="https://gilesknap.github.io/thoth/how-to/deploy-appliance.html">Deploy the thoth appliance</a>.</p></li>
+<li><p><strong>Set up the Slack app</strong> —
+<a class="reference external" href="https://gilesknap.github.io/thoth/how-to/slack-setup.html">Slack setup</a>.</p></li>
+<li><p><strong>First-light smoke checklist</strong> — verify each live boundary after deploy:
+<a class="reference external" href="https://gilesknap.github.io/thoth/how-to/first-light.html">First light</a>.</p></li>
+</ul>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>thoth<span class="w"> </span>--version<span class="w">    </span><span class="c1"># confirm the CLI is on your PATH</span>
+<span class="gp">$ </span>thoth<span class="w"> </span>slack<span class="w">        </span><span class="c1"># run the capture/retrieve daemon (Socket Mode)</span>
 </pre></div>
 </div>
-<p>Or if it is a commandline tool then you might put some example commands here:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">thoth</span> <span class="o">--</span><span class="n">version</span>
-</pre></div>
-</div>
+</section>
 <section id="how-the-documentation-is-structured">
 <h2>How the documentation is structured<a class="headerlink" href="#how-the-documentation-is-structured" title="Link to this heading">#</a></h2>
 <p>Documentation is split into <a class="reference external" href="https://diataxis.fr">four categories</a>, also accessible from links in the top bar.</p>
@@ -506,6 +545,7 @@ introductory code here:</p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="how-to.html">How-to Guides</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="how-to/contribute.html">Contribute to the project</a></li>
+<li class="toctree-l2"><a class="reference internal" href="how-to/deploy-appliance.html">Deploy the thoth appliance</a></li>
 <li class="toctree-l2"><a class="reference internal" href="how-to/first-light.html">First-light smoke checklist</a></li>
 <li class="toctree-l2"><a class="reference internal" href="how-to/recovery.html">Recover from a lost VPS</a></li>
 <li class="toctree-l2"><a class="reference internal" href="how-to/slack-setup.html">Set up the Slack app</a></li>

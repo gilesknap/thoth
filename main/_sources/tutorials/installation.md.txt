@@ -1,42 +1,69 @@
 # Installation
 
-## Check your version of python
+This tutorial gets the `thoth` CLI onto a machine for local use or development. To stand
+up the **unattended appliance** (the Slack daemon, the semantic index, systemd, cron, and
+every API key) follow the {doc}`../how-to/deploy-appliance` how-to instead — this page is
+the lightweight, single-machine path.
 
-You will need python 3.11 or later. You can check your version of python by
-typing into a terminal:
+thoth is not published to PyPI; it is installed from the git repository with
+[`uv`](https://docs.astral.sh/uv/).
 
+## Prerequisites
+
+- **Python 3.11 or later.** Check with:
+
+  ```console
+  $ python3 --version
+  ```
+
+- **[`uv`](https://docs.astral.sh/uv/)** — the project's environment/dependency manager:
+
+  ```console
+  $ curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+
+- **`ffmpeg`** — *only* if you want local audio transcription (Whisper). On Debian/Ubuntu:
+  `sudo apt-get install -y ffmpeg`. You can skip it; thoth raises a clear error if you try
+  to transcribe without it.
+
+## Clone and install
+
+```console
+$ git clone https://github.com/gilesknap/thoth.git
+$ cd thoth
+$ uv sync --extra runtime
 ```
-$ python3 --version
+
+`uv sync` creates a `.venv/` and installs thoth as an **editable** install. The base
+install is import-safe and dependency-light; the `runtime` extra adds the live clients
+(`anthropic`, `slack-bolt`, `exa-py`, `firecrawl-py`, `mcp`) that the appliance needs at
+run time but that CI does not install. Omit `--extra runtime` for a docs/test-only checkout.
+
+Confirm the CLI is on your path:
+
+```console
+$ uv run thoth --version
 ```
 
-## Create a virtual environment
+(Activate the venv with `source .venv/bin/activate` if you prefer to call `thoth` directly.)
 
-It is recommended that you install into a “virtual environment” so this
-installation will not interfere with any existing Python software:
+## What you get
 
-```
-$ python3 -m venv /path/to/venv
-$ source /path/to/venv/bin/activate
-```
+`thoth --help` lists the subcommands. The ones you will use most:
 
-## Installing the library
+| Command | What it does |
+| --- | --- |
+| `thoth slack` | Run the capture/retrieve daemon (Socket Mode); the appliance's only long-running process. |
+| `thoth mcp` | Serve the `pkm_*` tools over MCP (stdio) for Claude Desktop / MCP clients. |
+| `thoth reindex [--full-rebuild]` | (Re)build the Hindsight semantic index from the vault. |
+| `thoth summary daily\|weekly` | Compose and post the digest to the Slack summary channel. |
 
-You can now use `pip` to install the library and its dependencies:
+All of these need configuration (a vault, an Anthropic key, Slack tokens, …). For a quick
+local poke you can point `PKM_VAULT` at a throwaway directory; for the real, unattended
+setup, continue to {doc}`../how-to/deploy-appliance`.
 
-```
-$ python3 -m pip install thoth
-```
+## Next steps
 
-If you require a feature that is not currently released you can also install
-from github:
-
-```
-$ python3 -m pip install git+https://github.com/gilesknap/thoth.git
-```
-
-The library should now be installed and the commandline interface on your path.
-You can check the version that has been installed by typing:
-
-```
-$ thoth --version
-```
+- {doc}`../how-to/deploy-appliance` — the full production install on a VPS.
+- {doc}`../how-to/slack-setup` — create the Slack app and wire the tokens.
+- {doc}`../how-to/first-light` — verify every live boundary once deployed.
