@@ -18,7 +18,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 
@@ -953,10 +953,16 @@ class _RecordingGit:
         return _R()
 
 
+class _IngestorLike(Protocol):
+    """Structural type for the capture-loop fakes (recording + one-bad-file)."""
+
+    def ingest(self, capture: Any, *, commit: bool = ..., as_is: bool = ...) -> Any: ...
+
+
 def _wire_capture_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    ingestor: _RecordingIngestor,
+    ingestor: _IngestorLike,
     git: _RecordingGit,
 ) -> None:
     """Inject the fake ingestor graph + fake GitSync into the run_capture handler."""
