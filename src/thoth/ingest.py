@@ -57,6 +57,7 @@ import hashlib
 import logging
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -262,10 +263,22 @@ class _Analysed:
             bytes are reused for the asset write -- no second network download and no
             leaked temp file. ``None`` for a local-``path`` capture (no fetch happened)
             or a non-binary kind.
+        excalidraw_md: The reconstructed ``.excalidraw.md`` markdown for a ``diagram``
+            -kind image (issue #68), or ``None``. A best-effort *enhancement* -- it is
+            saved as an extra asset alongside the original, never replacing it, and
+            never defers or loses the capture.
+        cleaned_scan: The model-free OpenCV-cleaned bytes for a ``document``-kind image
+            (issue #68), or ``None``. Likewise best-effort: saved as an extra asset
+            alongside the original, never replacing it.
+        cleaned_scan_ext: The bare extension for ``cleaned_scan`` (always ``"png"`` --
+            :func:`thoth.scanner.clean_document` re-encodes to PNG).
     """
 
     analysis: Analysis | None
     fetched: FetchedBinary | None = None
+    excalidraw_md: str | None = None
+    cleaned_scan: bytes | None = None
+    cleaned_scan_ext: str = "png"
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +331,7 @@ class Ingestor:
         schema_md: str | None = None,
         markers: MarkerStore | None = None,
         analyser: Analyser | None = None,
+        scanner: Callable[..., bytes | None] | None = None,
     ) -> None:
         """Store the injected collaborators.
 
@@ -338,8 +352,16 @@ class Ingestor:
             analyser: Optional :class:`~thoth.analyse.Analyser` for the vision/PDF
                 content-analysis pass (issue #42). When ``None`` (the default) one is
                 built lazily from the injected ``llm`` -- so it shares the same daily
-                budget guard -- and a test can inject a fake to drive analysis with no
-                real model call.
+                budget guard -- and configured with the ``analyse_model`` /
+                ``diagram_model`` knobs (issue #68); a test can inject a fake to drive
+                analysis with no real model call.
+            scanner: Optional model-free document-cleanup callable with the signature
+                ``(image_bytes, *, ext) -> bytes | None`` (issue #68). When ``None``
+                (the default) a lazy wrapper over
+                :func:`thoth.scanner.clean_document` is used, so the optional OpenCV
+                dependency is imported only at runtime (never at import/collection time,
+                and absent in CI); a test injects a fake to drive the ``document``
+                branch with no OpenCV install.
         """
         self._config = config
         self._vault = vault
@@ -349,7 +371,16 @@ class Ingestor:
         self._git = git
         self._schema_md = schema_md
         self._markers = markers
-        self._analyser = analyser if analyser is not None else Analyser(llm)
+        self._analyser = (
+            analyser
+            if analyser is not None
+            else Analyser(
+                llm,
+                model=config.analyse_model,
+                diagram_model=config.diagram_model,
+            )
+        )
+        self._scanner = scanner if scanner is not None else _default_scanner
 
     def _record_marker(self, name: str) -> None:
         """Record a liveness marker (best-effort; never lets bookkeeping break ingest).
@@ -408,6 +439,7 @@ class Ingestor:
                 classification,
                 prefetched=holding.prefetched,
                 fetched=analysed.fetched,
+                derived=analysed,
             )
             candidates = self.fetch_candidates(classification)
             plan = self.curate(
@@ -577,7 +609,61 @@ class Ingestor:
         except Exception as exc:  # noqa: BLE001 - any client failure defers (raw durable)
             _cleanup_fetched(fetched)
             raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
-        return _Analysed(analysis=analysis, fetched=fetched)
+        # The PRIMARY analysis succeeded (or filed blind) -- the capture is already
+        # safe. Now derive the best-effort enhancement artifacts (issue #68) from the
+        # reported image kind, reusing the SAME bytes already in hand (no second
+        # read/fetch). Each is purely additive: any failure leaves the original asset
+        # filed cleanly and NEVER defers or loses the capture.
+        excalidraw_md, cleaned_scan = self._derive_artifacts(
+            kind, analysis, image_bytes, ext
+        )
+        return _Analysed(
+            analysis=analysis,
+            fetched=fetched,
+            excalidraw_md=excalidraw_md,
+            cleaned_scan=cleaned_scan,
+        )
+
+    def _derive_artifacts(
+        self,
+        kind: CaptureKind,
+        analysis: Analysis | None,
+        image_bytes: bytes,
+        ext: str,
+    ) -> tuple[str | None, bytes | None]:
+        """Best-effort derive the per-kind enhancement artifacts (issue #68, ADR 0009).
+
+        Branches on the analysed image ``kind`` for an IMAGE capture only (a PDF gets no
+        Excalidraw/scan derivation):
+
+        * ``diagram`` -> an editable Excalidraw reconstruction via
+          :meth:`thoth.analyse.Analyser.reconstruct_excalidraw` (a second vision call).
+        * ``document`` -> a model-free OpenCV-cleaned scan via the injected ``scanner``.
+
+        Both are pure *enhancements* saved alongside the kept original, so every
+        failure mode -- ``None``, a raised exception, or a budget trip -- is swallowed
+        and turned into ``None`` here: the primary capture is already durable, never
+        deferred or lost by a best-effort artifact (the second vision call already
+        returns ``None`` on its own failures, but the scanner and any surprise are
+        guarded too). Returns ``(excalidraw_md, cleaned_scan)``.
+        """
+        if kind is not CaptureKind.IMAGE or analysis is None:
+            return None, None
+        excalidraw_md: str | None = None
+        cleaned_scan: bytes | None = None
+        if analysis.kind == "diagram":
+            try:
+                excalidraw_md = self._analyser.reconstruct_excalidraw(
+                    image_bytes, ext=ext
+                )
+            except Exception:  # noqa: BLE001 - enhancement only, never lose the capture
+                excalidraw_md = None
+        elif analysis.kind == "document":
+            try:
+                cleaned_scan = self._scanner(image_bytes, ext=ext)
+            except Exception:  # noqa: BLE001 - enhancement only, never lose the capture
+                cleaned_scan = None
+        return excalidraw_md, cleaned_scan
 
     def _analyse_bytes(
         self, capture: Capture, kind: CaptureKind
@@ -702,6 +788,7 @@ class Ingestor:
         *,
         prefetched: _Prefetched | None = None,
         fetched: FetchedBinary | None = None,
+        derived: _Analysed | None = None,
     ) -> RawCaptureResult:
         """Extract the immutable source and write it under ``raw/`` (idempotent).
 
@@ -729,9 +816,15 @@ class Ingestor:
                 fetch; ``None`` re-extracts.
             fetched: A URL binary the analyse pass already downloaded, reused to avoid a
                 second download (and the temp-file leak); ``None`` re-fetches.
+            derived: The :class:`_Analysed` carrying the best-effort enhancement
+                artifacts (issue #68) -- an Excalidraw reconstruction of a ``diagram``
+                and a cleaned scan of a ``document`` -- saved as *extra* assets next to
+                the original image (the original is always kept and listed first).
+                ``None`` saves only the original.
 
         Returns:
-            A :class:`RawCaptureResult` recording the path and disposition.
+            A :class:`RawCaptureResult` recording the path and disposition. For an image
+            capture its ``asset_paths`` lists the original first, then derived assets.
 
         Raises:
             IngestError: on extraction failure (wraps
@@ -740,7 +833,9 @@ class Ingestor:
         kind = self._capture_kind(capture)
         try:
             if kind is CaptureKind.IMAGE:
-                return self._capture_image(capture, cls, fetched=fetched)
+                return self._capture_image(
+                    capture, cls, fetched=fetched, derived=derived
+                )
             if kind is CaptureKind.URL:
                 if prefetched is not None:
                     return self._write_raw_doc(
@@ -1165,8 +1260,23 @@ class Ingestor:
         cls: Classification,
         *,
         fetched: FetchedBinary | None = None,
+        derived: _Analysed | None = None,
     ) -> RawCaptureResult:
-        """Download/stage an image binary into ``raw/assets`` (never base64)."""
+        """Download/stage an image binary into ``raw/assets`` (never base64).
+
+        The original image is always saved first, then any best-effort enhancement
+        artifacts the analyse pass derived (issue #68) are saved as *extra* assets under
+        the same slug and merged into the returned ``asset_paths`` (original first), so
+        :meth:`_append_embeds` embeds all of them and curate sees them:
+
+        * ``<slug>.excalidraw.md`` -- an editable Excalidraw reconstruction of a hand-
+          drawn ``diagram`` (the original is kept, never replaced).
+        * ``<slug>-scan.png`` -- a model-free OpenCV-cleaned scan of a ``document``.
+
+        Each derived asset goes through :meth:`_store_asset`, so it keeps the same
+        bytes-SHA-256 idempotency/drift behaviour as the original (a byte-identical
+        re-ingest skips it).
+        """
         if capture.url is not None:
             # Reuse the analyse pass's single download when present (no second fetch,
             # no leaked temp); fall back to fetching for a standalone capture_raw call.
@@ -1175,10 +1285,95 @@ class Ingestor:
                 if fetched is not None
                 else self._extractor.fetch_binary(capture.url)
             )
-            return self._save_fetched_asset(cls, binary)
-        path = _require(capture.path, "path")
-        ext = (capture.filename or path.name).rsplit(".", 1)[-1].lower()
-        return self._save_local_asset_result(cls, path, ext)
+            original = self._save_fetched_asset(cls, binary)
+        else:
+            path = _require(capture.path, "path")
+            ext = (capture.filename or path.name).rsplit(".", 1)[-1].lower()
+            original = self._save_local_asset_result(cls, path, ext)
+        return self._append_derived_assets(cls, original, derived)
+
+    def _append_derived_assets(
+        self,
+        cls: Classification,
+        original: RawCaptureResult,
+        derived: _Analysed | None,
+    ) -> RawCaptureResult:
+        """Save the derived enhancement assets and merge them after the original.
+
+        Writes each derived artifact (issue #68) to a temp file and routes it through
+        :meth:`_store_asset` under the classification slug, then returns a
+        :class:`RawCaptureResult` whose ``asset_paths`` lists the original first then
+        every derived asset saved. The original's own disposition is preserved (the
+        derived assets are additive and never change whether the *original* was created,
+        skipped, or drifted). ``None`` derived (or no artifacts) returns the original
+        unchanged.
+        """
+        if derived is None:
+            return original
+        asset_paths = list(original.asset_paths)
+        if derived.excalidraw_md is not None:
+            rel = self._store_text_asset(
+                f"{cls.slug}.excalidraw.md", derived.excalidraw_md
+            )
+            if rel is not None and rel not in asset_paths:
+                asset_paths.append(rel)
+        if derived.cleaned_scan is not None:
+            rel = self._store_bytes_asset(
+                f"{cls.slug}-scan.{derived.cleaned_scan_ext}", derived.cleaned_scan
+            )
+            if rel is not None and rel not in asset_paths:
+                asset_paths.append(rel)
+        return RawCaptureResult(
+            raw_path=original.raw_path,
+            disposition=original.disposition,
+            asset_paths=asset_paths,
+        )
+
+    def _store_text_asset(self, asset_name: str, text: str) -> str | None:
+        """Stage a derived *text* artifact and store it under ``raw/assets``.
+
+        Used for the ``<slug>.excalidraw.md`` reconstruction (issue #68). The text is
+        written to a fresh tmp file and handed to :meth:`_store_asset` (so the bytes-
+        SHA-256 idempotency/drift rule applies and the tmp is never leaked). Returns the
+        stored vault-relative path, or ``None`` if the (best-effort) write fails.
+
+        Crucially, a derived artifact is an *enhancement* and must never lose or defer
+        the already-durable primary capture: an :class:`IngestError` from
+        :meth:`_store_asset` -- most realistically *drift*, because
+        :meth:`~thoth.analyse.Analyser.reconstruct_excalidraw` is a non-deterministic
+        model call so a byte-identical re-ingest produces a *different*
+        ``<slug>.excalidraw.md`` -- is swallowed to ``None`` here (the existing asset
+        is left untouched) rather than aborting the capture (ADR 0009).
+        """
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            handle.write(text.encode("utf-8"))
+            staged = Path(handle.name)
+        try:
+            result = self._store_asset(staged, asset_name)
+        except IngestError:
+            return None
+        return result.asset_paths[0] if result.asset_paths else None
+
+    def _store_bytes_asset(self, asset_name: str, data: bytes) -> str | None:
+        """Stage a derived *binary* artifact and store it under ``raw/assets``.
+
+        Used for the ``<slug>-scan.png`` cleaned scan (issue #68). The bytes are written
+        to a fresh tmp file and handed to :meth:`_store_asset`, so the same idempotency/
+        drift/temp-cleanup behaviour as the original asset applies. Returns the stored
+        vault-relative path, or ``None`` if the (best-effort) write fails.
+
+        Like :meth:`_store_text_asset`, a derived-asset :class:`IngestError` (drift or a
+        vault rejection) is swallowed to ``None`` so a best-effort enhancement can never
+        abort the already-durable primary capture (ADR 0009).
+        """
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            handle.write(data)
+            staged = Path(handle.name)
+        try:
+            result = self._store_asset(staged, asset_name)
+        except IngestError:
+            return None
+        return result.asset_paths[0] if result.asset_paths else None
 
     def _save_fetched_asset(
         self, cls: Classification, fetched: FetchedBinary
@@ -1752,6 +1947,21 @@ def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
     if ext in _AUDIO_EXTS:
         return CaptureKind.AUDIO
     return default
+
+
+def _default_scanner(image_bytes: bytes, *, ext: str) -> bytes | None:
+    """Lazy wrapper over :func:`thoth.scanner.clean_document` (the OpenCV cleanup).
+
+    The OpenCV dependency is a lazy-imported runtime optional (issue #68, ADR 0009): it
+    is *not* installed in CI and must never be imported at module/collection time. This
+    wrapper defers ``import thoth.scanner`` (which itself lazy-imports ``cv2``) to the
+    first ``document``-kind capture, so importing :mod:`thoth.ingest` stays safe whether
+    or not OpenCV is present. It is the default ``scanner`` seam on :class:`Ingestor`; a
+    test injects a fake instead.
+    """
+    from thoth.scanner import clean_document
+
+    return clean_document(image_bytes, ext=ext)
 
 
 def _str_list(value: object) -> list[str]:

@@ -49,6 +49,16 @@ The **intent gate** (one cheap Haiku call) routes bare free-text to *capture*,
 *query*, or *ask*. Explicit prefixes (`capture:`, `note:`, raw URLs, or file
 uploads) skip the gate entirely and go straight to ingest.
 
+A binary capture (image or PDF) passes through the **analyse seam**
+(`analyse.py`) during `capture_raw`: one vision call returns the extracted
+text, a routing hint, entities/concepts, and an image *kind* (`diagram` /
+`document` / `screenshot` / `photo`). That kind drives best-effort *derived
+assets* saved alongside the original — a diagram becomes an editable
+`.excalidraw.md` (a second vision call), a document becomes a de-warped B/W
+`-scan.png` (model-free OpenCV in `scanner.py`, a lazy optional dep) plus a
+faithful structured-markdown transcription. The original is always kept and a
+derivation failure never defers the capture (ADR-0009).
+
 ## MCP query/research pipeline
 
 Claude Code and claude.ai reach the vault through seven `pkm_*` tools served

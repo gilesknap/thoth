@@ -224,12 +224,24 @@ class FakeAnalyser:
         *,
         analysis: Analysis | None = None,
         error: Exception | None = None,
+        excalidraw: str | None = None,
+        excalidraw_error: Exception | None = None,
     ) -> None:
-        """Configure the canned analysis or the error to raise."""
+        """Configure the canned analysis or the error to raise.
+
+        ``excalidraw`` is the canned :meth:`reconstruct_excalidraw` return (issue #68);
+        ``None`` (the default) means the reconstruction *gracefully degrades* (no
+        derived asset). ``excalidraw_error`` makes the reconstruction *raise* so a
+        test proves the ingest pass still files the original cleanly (the real method
+        never raises, but the ingest seam guards it best-effort regardless).
+        """
         self._analysis = analysis if analysis is not None else Analysis()
         self._error = error
+        self._excalidraw = excalidraw
+        self._excalidraw_error = excalidraw_error
         self.image_calls: list[tuple[bytes, str]] = []
         self.pdf_calls: list[bytes] = []
+        self.excalidraw_calls: list[tuple[bytes, str]] = []
 
     def analyse_image(self, image_bytes: bytes, *, ext: str) -> Analysis:
         """Record the call and return the canned analysis (or raise the error)."""
@@ -244,6 +256,40 @@ class FakeAnalyser:
         if self._error is not None:
             raise self._error
         return self._analysis
+
+    def reconstruct_excalidraw(self, image_bytes: bytes, *, ext: str) -> str | None:
+        """Record the call and return the canned Excalidraw markdown (or raise)."""
+        self.excalidraw_calls.append((image_bytes, ext))
+        if self._excalidraw_error is not None:
+            raise self._excalidraw_error
+        return self._excalidraw
+
+
+class FakeScanner:
+    """A fake :func:`thoth.scanner.clean_document` for the ``document`` branch (#68).
+
+    Records the calls and returns the canned cleaned bytes (or ``None`` to model the
+    no-document-quad graceful degrade), or raises ``error`` so a test proves the ingest
+    pass still files the original cleanly when the (best-effort) cleanup blows up.
+    """
+
+    def __init__(
+        self,
+        *,
+        cleaned: bytes | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """Configure the canned cleaned bytes or the error to raise."""
+        self._cleaned = cleaned
+        self._error = error
+        self.calls: list[tuple[bytes, str]] = []
+
+    def __call__(self, image_bytes: bytes, *, ext: str) -> bytes | None:
+        """Record the call and return the canned cleaned bytes (or raise)."""
+        self.calls.append((image_bytes, ext))
+        if self._error is not None:
+            raise self._error
+        return self._cleaned
 
 
 # --------------------------------------------------------------------------- #
@@ -458,12 +504,16 @@ def _build_ingestor(
     markers: MarkerStore | None = None,
     guard: Any = None,
     analyser: Any = None,
+    scanner: Any = None,
 ) -> Ingestor:
     """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes.
 
     ``analyser`` defaults to a :class:`FakeAnalyser` returning an empty analysis, so a
     binary capture's analyse pass (issue #42) makes no scripted-LLM call and leaves
-    routing/body unchanged unless a test supplies a richer fake.
+    routing/body unchanged unless a test supplies a richer fake. ``scanner`` defaults to
+    a :class:`FakeScanner` that returns ``None`` (no cleaned scan), so the OpenCV
+    optional dep is never touched and a ``document`` capture files just the original
+    unless a test injects a richer scanner (issue #68).
     """
     llm = LLM(harness.config, client=client, guard=guard)
     return Ingestor(
@@ -475,6 +525,7 @@ def _build_ingestor(
         harness.git,
         markers=markers,
         analyser=analyser if analyser is not None else FakeAnalyser(),  # type: ignore[arg-type]  # structural fake
+        scanner=scanner if scanner is not None else FakeScanner(),
     )
 
 
@@ -1019,6 +1070,41 @@ def test_pdf_capture_writes_paper_page_and_keeps_binary(
     assert "raw/assets/attention-paper.pdf" in paper.body
     # No base64 anywhere.
     assert "base64" not in paper.body.lower()
+
+
+def test_pdf_capture_never_derives_diagram_or_scan_artifacts(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """The derived-artifact branch is IMAGE-only: a PDF leaves reconstruct/scanner
+    untouched (issue #68), pinning the ``kind is CaptureKind.IMAGE`` guard against a
+    regression that moved derivation ahead of it."""
+    pdf_src = tmp_path / "doc.pdf"
+    pdf_src.write_bytes(b"%PDF-1.7\n" + b"pdf-bytes")
+    classify = _classify_json(
+        page_type="note", slug="a-paper", title="A Paper", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes", slug="a-paper", page_type="note", title="A Paper"
+    )
+    analyser = FakeAnalyser(analysis=_document_analysis(), excalidraw=_EXCALIDRAW_MD)
+    scanner = FakeScanner(cleaned=b"\x89PNG\r\n\x1a\n" + b"would-be-scan")
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+        scanner=scanner,
+    )
+
+    ingestor.ingest(Capture(path=pdf_src, filename="doc.pdf"))
+
+    # The PDF WAS analysed, but the IMAGE-only derivation branch never ran.
+    assert analyser.pdf_calls == [pdf_src.read_bytes()]
+    assert analyser.excalidraw_calls == []
+    assert scanner.calls == []
+    assert not (harness.work / "raw/assets/a-paper.excalidraw.md").exists()
+    assert not (harness.work / "raw/assets/a-paper-scan.png").exists()
 
 
 def _pdf_binary(
@@ -2484,3 +2570,367 @@ def test_url_image_analyse_defer_cleans_up_fetched_temp(
     assert report.deferred is True
     assert report.raw_paths[0].startswith("inbox/")
     assert not staged.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Issue #68: advanced image handling -- best-effort derived enhancement assets.
+# --------------------------------------------------------------------------- #
+
+
+def _diagram_analysis() -> Analysis:
+    """A canned analysis tagging the image a hand-drawn ``diagram`` (issue #68)."""
+    return Analysis(
+        text="Box A -> Box B",
+        description="A hand-drawn box-and-arrow flowchart.",
+        summary="Flowchart sketch",
+        suggested_type="note",
+        concepts=["flowchart"],
+        kind="diagram",
+    )
+
+
+def _document_analysis() -> Analysis:
+    """A canned analysis tagging the image a ``document`` scan (issue #68)."""
+    return Analysis(
+        text="# Invoice\n\n| Item | Qty |\n| --- | --- |\n| Widget | 2 |",
+        description="A photographed invoice page.",
+        summary="Widget invoice",
+        suggested_type="action",
+        concepts=["invoice"],
+        kind="document",
+    )
+
+
+_EXCALIDRAW_MD = (
+    "---\n"
+    "excalidraw-plugin: parsed\n"
+    "tags: [excalidraw]\n"
+    "---\n\n"
+    "# Excalidraw Data\n\n"
+    "## Drawing\n"
+    '```json\n{"type": "excalidraw", "elements": [{"type": "rectangle"}]}\n```\n'
+)
+
+
+def test_diagram_image_saves_excalidraw_asset_and_embeds_it(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A diagram-kind image saves ``<slug>.excalidraw.md`` next to the original and the
+    curated body embeds BOTH (issue #68).
+
+    The reconstruction is a best-effort enhancement saved as an *extra* asset; the
+    original image is always kept and listed first.
+    """
+    src = tmp_path / "flowchart.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"flow-bytes")
+    classify = _classify_json(
+        page_type="memory", slug="flow-sketch", title="Flow", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="flow-sketch",
+        page_type="note",
+        title="Flow Sketch",
+        body="A flowchart.",
+    )
+    analyser = FakeAnalyser(analysis=_diagram_analysis(), excalidraw=_EXCALIDRAW_MD)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="flowchart.png"))
+
+    # Original first, then the derived Excalidraw asset.
+    assert report.asset_paths == [
+        "raw/assets/flow-sketch.png",
+        "raw/assets/flow-sketch.excalidraw.md",
+    ]
+    # Both assets are saved on disk; the reconstruction is the deterministic envelope.
+    assert (harness.work / "raw/assets/flow-sketch.png").exists()
+    excal = (harness.work / "raw/assets/flow-sketch.excalidraw.md").read_text(
+        encoding="utf-8"
+    )
+    assert "excalidraw-plugin: parsed" in excal
+    # The reconstruction saw the SAME image bytes as the analyse call (no re-read).
+    assert analyser.excalidraw_calls == [(src.read_bytes(), "png")]
+    # The curated body embeds both the original and the reconstruction.
+    page_text = (harness.work / "notes/flow-sketch.md").read_text(encoding="utf-8")
+    assert "![[flow-sketch.png]]" in page_text
+    assert "![[flow-sketch.excalidraw.md]]" in page_text
+
+
+def test_document_image_saves_cleaned_scan_and_embeds_it(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A document-kind image saves ``<slug>-scan.png`` next to the original and the
+    curated body embeds it (issue #68)."""
+    src = tmp_path / "invoice.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"invoice-bytes")
+    classify = _classify_json(
+        page_type="memory", slug="widget-invoice", title="Invoice", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="actions",
+        slug="widget-invoice",
+        page_type="action",
+        title="Widget Invoice",
+        body="An invoice.",
+    )
+    scanner = FakeScanner(cleaned=b"\x89PNG\r\n\x1a\n" + b"cleaned-scan-bytes")
+    analyser = FakeAnalyser(analysis=_document_analysis())
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+        scanner=scanner,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="invoice.png"))
+
+    assert report.asset_paths == [
+        "raw/assets/widget-invoice.png",
+        "raw/assets/widget-invoice-scan.png",
+    ]
+    cleaned = (harness.work / "raw/assets/widget-invoice-scan.png").read_bytes()
+    assert cleaned == b"\x89PNG\r\n\x1a\n" + b"cleaned-scan-bytes"
+    # The scanner saw the SAME image bytes as the analyse call (no re-read).
+    assert scanner.calls == [(src.read_bytes(), "png")]
+    page_text = (harness.work / "actions/widget-invoice.md").read_text(encoding="utf-8")
+    assert "![[widget-invoice.png]]" in page_text
+    assert "![[widget-invoice-scan.png]]" in page_text
+
+
+def test_diagram_reconstruction_none_files_original_cleanly(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A reconstruction that gracefully degrades (None) still files the original
+    cleanly -- no extra asset, no defer (issue #68)."""
+    src = tmp_path / "sketch.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"sketch-bytes")
+    classify = _classify_json(
+        page_type="memory", slug="sketch", title="Sketch", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="sketch",
+        page_type="note",
+        title="Sketch",
+        body="x.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        # excalidraw=None -> graceful degrade.
+        analyser=FakeAnalyser(analysis=_diagram_analysis(), excalidraw=None),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="sketch.png"))
+
+    assert report.deferred is False
+    assert report.asset_paths == ["raw/assets/sketch.png"]
+    assert report.page_paths == ["notes/sketch.md"]
+
+
+def test_derived_artifact_exception_files_original_cleanly(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A reconstruction/scanner that RAISES is best-effort: the original is still filed
+    cleanly, never deferred or lost (issue #68)."""
+    src = tmp_path / "raises.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"raises-bytes")
+    classify = _classify_json(
+        page_type="memory", slug="raises", title="Raises", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes",
+        slug="raises",
+        page_type="note",
+        title="Raises",
+        body="x.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(
+            analysis=_diagram_analysis(),
+            excalidraw_error=RuntimeError("reconstruction blew up"),
+        ),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="raises.png"))
+
+    assert report.deferred is False
+    assert report.asset_paths == ["raw/assets/raises.png"]
+    assert report.page_paths == ["notes/raises.md"]
+
+
+def test_document_scanner_exception_files_original_cleanly(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A scanner that RAISES is best-effort: the original document is still filed
+    cleanly, no cleaned scan, no defer (issue #68)."""
+    src = tmp_path / "doc.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"doc-bytes")
+    classify = _classify_json(page_type="memory", slug="doc", title="Doc", concepts=[])
+    plan = _file_plan_json(
+        folder="notes",
+        slug="doc",
+        page_type="note",
+        title="Doc",
+        body="x.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(analysis=_document_analysis()),
+        scanner=FakeScanner(error=RuntimeError("cv2 exploded")),
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="doc.png"))
+
+    assert report.deferred is False
+    assert report.asset_paths == ["raw/assets/doc.png"]
+    assert report.page_paths == ["notes/doc.md"]
+
+
+def test_diagram_reingest_is_idempotent(harness: IngestHarness, tmp_path: Path) -> None:
+    """A byte-identical diagram re-ingest skips both the original and the derived
+    Excalidraw asset (the idempotency rule holds for derived assets too, issue #68)."""
+    src = tmp_path / "flow.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"flow-bytes")
+
+    def _run() -> RawCaptureResult:
+        classify = _classify_json(
+            page_type="memory", slug="flow", title="Flow", concepts=[]
+        )
+        plan = _file_plan_json(
+            folder="notes",
+            slug="flow",
+            page_type="note",
+            title="Flow",
+            body="x.",
+        )
+        ingestor = _build_ingestor(
+            harness,
+            client=_ScriptedClient(classify, plan),
+            extractor=FakeExtractor(),
+            hindsight=FakeHindsight(),
+            analyser=FakeAnalyser(
+                analysis=_diagram_analysis(), excalidraw=_EXCALIDRAW_MD
+            ),
+        )
+        ingestor.ingest(Capture(path=src, filename="flow.png"))
+        cls = Classification(page_type="note", slug="flow", title="Flow")
+        analysed = ingestor.analyse(Capture(path=src, filename="flow.png"))
+        return ingestor.capture_raw(
+            Capture(path=src, filename="flow.png"), cls, derived=analysed
+        )
+
+    first = _run()
+    assert first.asset_paths == [
+        "raw/assets/flow.png",
+        "raw/assets/flow.excalidraw.md",
+    ]
+    second = _run()
+    # Re-capture skips both byte-identical assets (no drift error, paths preserved).
+    assert second.disposition == "skipped_unchanged"
+    assert second.asset_paths == [
+        "raw/assets/flow.png",
+        "raw/assets/flow.excalidraw.md",
+    ]
+
+
+def test_diagram_reingest_with_different_reconstruction_never_aborts(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A re-ingest of the SAME diagram whose reconstruction differs must not abort.
+
+    :meth:`~thoth.analyse.Analyser.reconstruct_excalidraw` is a non-deterministic model
+    call, so a byte-identical re-ingest legitimately yields a *different*
+    ``<slug>.excalidraw.md``. The original image skips (same bytes), but the derived
+    asset would drift -- and a derived artifact is a best-effort enhancement that must
+    never lose or defer the durable primary capture (ADR 0009). So the drift is
+    swallowed and the capture still files cleanly with the original asset (the
+    pre-existing reconstruction is left untouched on disk), never raising
+    :class:`IngestError`.
+    """
+    src = tmp_path / "wb.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"whiteboard-bytes")
+
+    def _run(excalidraw: str) -> IngestReport:
+        classify = _classify_json(
+            page_type="memory", slug="wb", title="WB", concepts=[]
+        )
+        plan = _file_plan_json(
+            folder="notes", slug="wb", page_type="note", title="WB", body="x."
+        )
+        ingestor = _build_ingestor(
+            harness,
+            client=_ScriptedClient(classify, plan),
+            extractor=FakeExtractor(),
+            hindsight=FakeHindsight(),
+            analyser=FakeAnalyser(analysis=_diagram_analysis(), excalidraw=excalidraw),
+        )
+        return ingestor.ingest(Capture(path=src, filename="wb.png"))
+
+    first = _run(_EXCALIDRAW_MD)
+    assert first.asset_paths == [
+        "raw/assets/wb.png",
+        "raw/assets/wb.excalidraw.md",
+    ]
+    # A DIFFERENT reconstruction on the byte-identical re-ingest: the capture still
+    # succeeds (not deferred, no raise); the drifted derived asset is silently dropped
+    # from the merged paths while the original is skipped-unchanged.
+    second = _run(_EXCALIDRAW_MD.replace("rectangle", "ellipse"))
+    assert second.deferred is False
+    assert second.asset_paths == ["raw/assets/wb.png"]
+    # The original reconstruction is left on disk untouched (never overwritten).
+    kept = (harness.work / "raw/assets/wb.excalidraw.md").read_text(encoding="utf-8")
+    assert "rectangle" in kept
+
+
+def test_document_scanner_none_files_original_cleanly(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A scanner that finds no page (returns ``None``) -- the production-likely OpenCV
+    outcome -- still files the original document cleanly: no ``-scan`` asset, no defer
+    (issue #68). Mirrors :func:`test_diagram_reconstruction_none_files_original_cleanly`
+    for the document branch.
+    """
+    src = tmp_path / "page.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"page-bytes")
+    classify = _classify_json(
+        page_type="memory", slug="page", title="Page", concepts=[]
+    )
+    plan = _file_plan_json(
+        folder="notes", slug="page", page_type="note", title="Page", body="x."
+    )
+    scanner = FakeScanner(cleaned=None)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=FakeAnalyser(analysis=_document_analysis()),
+        scanner=scanner,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="page.png"))
+
+    assert report.deferred is False
+    assert report.asset_paths == ["raw/assets/page.png"]
+    assert report.page_paths == ["notes/page.md"]
+    # The scanner was consulted (document kind) but yielded no cleaned scan.
+    assert scanner.calls == [(src.read_bytes(), "png")]

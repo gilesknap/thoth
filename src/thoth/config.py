@@ -22,6 +22,14 @@ Documented defaults (the single source of truth):
 * ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME` (``~/.thoth``).
 * ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
   (``claude-sonnet-4-6``).
+* ``THOTH_ANALYSE_MODEL`` defaults to ``None`` -- the folded analyse/kind/transcription
+  vision call (issue #68) then resolves to :data:`DEFAULT_ANTHROPIC_MODEL` via the LLM.
+  Set it to drop the analyse call to a cheaper model (a Haiku) for document A/B work
+  without changing the default model used everywhere else.
+* ``THOTH_DIAGRAM_MODEL`` defaults to ``None`` -- the Excalidraw reconstruction call
+  (issue #68, hand-drawn diagram -> editable scene) then resolves to
+  :data:`DEFAULT_ANTHROPIC_MODEL` via the LLM. That call needs spatial reasoning plus
+  valid JSON, so it is worth pinning to a stronger model (Sonnet/Opus) independently.
 * ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``); the daemon
   entrypoint passes it to :func:`logging.basicConfig` so the appliance is no longer
   silent on the happy path (issue #52).
@@ -87,6 +95,8 @@ class Config:
     log_level: str
     anthropic_api_key: str | None
     anthropic_model: str
+    analyse_model: str | None
+    diagram_model: str | None
     slack_bot_token: str | None
     slack_app_token: str | None
     slack_summary_channel: str | None
@@ -291,6 +301,8 @@ def load_config(
         log_level=lookup("THOTH_LOG_LEVEL") or DEFAULT_LOG_LEVEL,
         anthropic_api_key=lookup("ANTHROPIC_API_KEY"),
         anthropic_model=lookup("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL,
+        analyse_model=lookup("THOTH_ANALYSE_MODEL"),
+        diagram_model=lookup("THOTH_DIAGRAM_MODEL"),
         slack_bot_token=lookup("SLACK_BOT_TOKEN"),
         slack_app_token=lookup("SLACK_APP_TOKEN"),
         slack_summary_channel=lookup("SLACK_SUMMARY_CHANNEL"),

@@ -37,6 +37,7 @@ runtime = [
     "exa-py",
     "firecrawl-py",
     "mcp",
+    "opencv-python-headless",
     "slack-bolt",
 ]
 

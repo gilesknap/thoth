@@ -321,21 +321,52 @@ def test_validate_slug_rejects(slug: str) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["motor-control-diagram-e4a408.png", "a.png", "scan-2026.jpg", "x1.webp"],
+    [
+        "motor-control-diagram-e4a408.png",
+        "a.png",
+        "scan-2026.jpg",
+        "x1.webp",
+        # Compound extensions (#68): the editable Excalidraw reconstruction and the
+        # cleaned scan are saved alongside the original and must validate as assets.
+        "motor-control-diagram-e4a408.excalidraw.md",
+        "scan-2026-a1b2c3-scan.png",
+    ],
 )
 def test_validate_asset_filename_accepts(name: str) -> None:
-    """Valid '<slug>.<ext>' asset filenames are accepted."""
+    """Valid '<slug>.<ext>' and compound '<slug>.excalidraw.md' filenames pass."""
     assert Vault.validate_asset_filename(name) == name
     assert ASSET_SLUG_RE.fullmatch(name)
 
 
 @pytest.mark.parametrize(
     "name",
-    ["no-ext", "Bad.PNG", "a b.png", "foo.PNG", ".png", "foo.", "a--b.png"],
-    ids=["no-ext", "upper-ext", "space", "upper-ext2", "no-slug", "no-ext2", "run"],
+    [
+        "no-ext",
+        "Bad.PNG",
+        "a b.png",
+        "foo.PNG",
+        ".png",
+        "foo.",
+        "a--b.png",
+        # A compound extension still must not smuggle a traversal: every dot has to be
+        # followed by a [a-z0-9] group, so an empty middle segment ('..') is rejected.
+        "foo..md",
+        "foo.excalidraw.MD",
+    ],
+    ids=[
+        "no-ext",
+        "upper-ext",
+        "space",
+        "upper-ext2",
+        "no-slug",
+        "no-ext2",
+        "run",
+        "double-dot",
+        "upper-compound-ext",
+    ],
 )
 def test_validate_asset_filename_rejects(name: str) -> None:
-    """Missing extension, uppercase, spaces, hyphen-runs -> SlugError."""
+    """Missing extension, uppercase, spaces, hyphen-runs, '..' -> SlugError."""
     with pytest.raises(SlugError):
         Vault.validate_asset_filename(name)
 

@@ -33,6 +33,7 @@ document JSON response (or injects a fake :class:`Analyser` directly).
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,16 @@ _DEFAULT_IMAGE_MEDIA_TYPE: str = "image/png"
 # is one heavier call per binary capture (issue #42), charged like any other Anthropic
 # call against the daily guard (issue #16).
 _ANALYSE_MAX_TOKENS: int = 2048
+
+# Tokens for the Excalidraw reconstruction call (issue #68): a scene of geometric
+# elements as JSON is larger than the analyse summary, so this best-effort second call
+# gets a roomier budget. It is charged against the same daily guard.
+_EXCALIDRAW_MAX_TOKENS: int = 4096
+
+# The coarse image kinds the folded analyse call may report (ADR 0009). Anything the
+# model returns outside this set is normalised to "" (unknown), so the ingest pass never
+# branches on an unexpected value.
+_VALID_KINDS: frozenset[str] = frozenset({"diagram", "document", "photo", "screenshot"})
 
 
 class AnalyseError(Exception):
@@ -101,6 +112,12 @@ class Analysis:
             the model offered no usable hint.
         entities: Named entities the model found (feed the candidate fetch).
         concepts: Named concepts the model found (feed the candidate fetch).
+        kind: The coarse image kind the model reported -- one of ``"diagram"``,
+            ``"document"``, ``"photo"`` or ``"screenshot"``, ``""`` when unknown. This
+            single vision call folds the kind detection in (ADR 0009) rather than paying
+            a separate pre-call: the ingest pass branches on it to derive best-effort
+            artifacts (an Excalidraw reconstruction of a hand-drawn ``diagram``, a
+            cleaned scan of a ``document``).
     """
 
     text: str = ""
@@ -109,6 +126,7 @@ class Analysis:
     suggested_type: str | None = None
     entities: list[str] = field(default_factory=list)
     concepts: list[str] = field(default_factory=list)
+    kind: str = ""
 
     def is_empty(self) -> bool:
         """Return ``True`` when the analysis carries no usable extracted content."""
@@ -141,17 +159,31 @@ class Analyser:
     when the cap is reached.
     """
 
-    def __init__(self, llm: LLM, *, model: str | None = None) -> None:
-        """Store the injected LLM and an optional model override.
+    def __init__(
+        self,
+        llm: LLM,
+        *,
+        model: str | None = None,
+        diagram_model: str | None = None,
+    ) -> None:
+        """Store the injected LLM and the optional per-call model overrides.
 
         Args:
             llm: The injectable Anthropic wrapper (carries the budget guard).
-            model: Optional model id overriding ``config.anthropic_model`` for the
-                analyse call (a multimodal model); ``None`` uses the configured default
-                (the Sonnet models are multimodal, so the default is fine).
+            model: Optional model id overriding ``config.anthropic_model`` for the main
+                folded analyse/kind/transcription call (a multimodal model); ``None``
+                uses the configured default (the Sonnet models are multimodal, so the
+                default is fine). The owner may drop this to a cheaper Haiku for a
+                document A/B.
+            diagram_model: Optional model id for the second
+                :meth:`reconstruct_excalidraw` vision call (issue #68). That call needs
+                spatial reasoning plus valid JSON, so it can warrant a stronger model
+                than the main pass; ``None`` falls back to ``config.anthropic_model``
+                via the LLM.
         """
         self._llm = llm
         self._model = model
+        self._diagram_model = diagram_model
 
     def analyse_image(self, image_bytes: bytes, *, ext: str) -> Analysis:
         """Analyse an image: OCR text + description + routing hints (vision block).
@@ -231,6 +263,62 @@ class Analyser:
             ) from exc
         return _analysis_from_obj(obj)
 
+    def reconstruct_excalidraw(self, image_bytes: bytes, *, ext: str) -> str | None:
+        """Reconstruct a hand-drawn diagram as an editable Excalidraw markdown scene.
+
+        This is a **second, best-effort** vision call (issue #68 / ADR 0009) made only
+        for a ``diagram``-kind image: it asks the model to re-draw the whiteboard /
+        sketch as an *idealised* Excalidraw scene and return only the element list, then
+        assembles the ``.excalidraw.md`` envelope **deterministically in code** (the
+        model is never trusted with the file wrapper). The result is an additional asset
+        saved alongside the original -- the original is always kept.
+
+        Because Excalidraw reconstruction is a pure enhancement, this method **never
+        raises and never defers**: any failure (an unparseable reply, an empty element
+        list, the budget cap, or a transport error) returns ``None`` and the capture
+        proceeds with just the original image. The model id is the injected
+        ``diagram_model`` (``None`` falls back to ``config.anthropic_model`` via the
+        LLM).
+
+        Args:
+            image_bytes: The raw image bytes of the staged asset (reused, not re-read).
+            ext: The bare image extension (selects the vision media type).
+
+        Returns:
+            The full ``.excalidraw.md`` markdown string on success, or ``None`` on any
+            failure (graceful degrade).
+
+        Raises:
+            Nothing: every failure mode is caught and turned into ``None``.
+        """
+        block = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image_media_type(ext),
+                "data": base64.standard_b64encode(image_bytes).decode("ascii"),
+            },
+        }
+        message = Message(
+            role="user",
+            content=[block, {"type": "text", "text": _EXCALIDRAW_PROMPT}],
+        )
+        try:
+            response = self._llm.complete(
+                [message],
+                max_tokens=_EXCALIDRAW_MAX_TOKENS,
+                model=self._diagram_model,
+            )
+            obj = parse_json_block(extract_text(response))
+        except Exception:  # noqa: BLE001 -- best-effort enhancement, never propagate
+            return None
+        elements = obj.get("elements")
+        if not isinstance(elements, list) or not elements:
+            return None
+        if not all(isinstance(element, dict) for element in elements):
+            return None
+        return _excalidraw_markdown(elements)
+
 
 def analyse_image_path(analyser: Analyser, path: Path, *, ext: str) -> Analysis:
     """Read a staged image file and analyse its bytes (convenience for the ingestor)."""
@@ -250,13 +338,21 @@ _RESULT_SHAPE = (
     '  "summary": "a short one-line summary",\n'
     '  "suggested_type": one of ["entity", "note", "memory", "action"],\n'
     '  "entities": ["named people/orgs/products/models"],\n'
-    '  "concepts": ["named concepts/topics"]\n'
+    '  "concepts": ["named concepts/topics"],\n'
+    '  "kind": one of ["diagram", "document", "screenshot", "photo"]\n'
     "}\n"
+    "Kind: 'diagram' = a whiteboard photo OR a hand-drawn sketch / flowchart / mindmap "
+    "/ box-and-arrow drawing; 'document' = a scan or photo of a printed or handwritten "
+    "page; 'screenshot' = a UI / app capture; 'photo' = a real-world snapshot.\n"
     "Routing: choose 'note' for anything written/diagrammed (a whiteboard, a sketch, a "
     "screenshot of notes, a document); 'action' for a todo/receipt/invoice/ticket; "
     "'entity' for a photo that is primarily a person/product/device; 'memory' only for "
     "a personal snapshot with no extractable knowledge. Prefer a knowledge type when "
-    "the asset carries legible content."
+    "the asset carries legible content.\n"
+    "Text: for a 'document', the 'text' MUST be a FAITHFUL STRUCTURED MARKDOWN "
+    "transcription -- preserve headings as markdown headings, bullet/numbered lists as "
+    "markdown lists, and tables as markdown tables -- not loose flattened OCR. For "
+    "other kinds, transcribe every legible word verbatim."
 )
 
 _IMAGE_PROMPT = (
@@ -267,6 +363,24 @@ _IMAGE_PROMPT = (
 _PDF_PROMPT = (
     "Analyse this PDF for a personal knowledge vault. Extract its text, summarise it, "
     "and suggest how to file it.\n\n" + _RESULT_SHAPE
+)
+
+# The Excalidraw reconstruction prompt (issue #68). The model returns ONLY the element
+# list -- thoth assembles the file envelope deterministically (it is never trusted with
+# the wrapper), so the prompt asks only for {"elements": [...]}.
+_EXCALIDRAW_PROMPT = (
+    "This image is a hand-drawn diagram (a whiteboard, sketch, flowchart, mindmap, or "
+    "box-and-arrow drawing). Reconstruct it as an idealised, editable Excalidraw "
+    "scene: clean up wobbly strokes into proper shapes and connectors while preserving "
+    "the structure, labels, and connections.\n"
+    "Return ONLY a single JSON object (no prose) of this exact shape:\n"
+    '{"elements": [ ... ]}\n'
+    "where each element is an Excalidraw element object. Use the Excalidraw element "
+    "types 'rectangle', 'ellipse', 'diamond', 'arrow', 'line', 'text' and 'freedraw'. "
+    "Every element MUST have at least 'type', 'x' and 'y'; add 'width' and 'height' "
+    "for shapes, 'text' for a text element, 'points' for an arrow/line/freedraw, and a "
+    "'label' where a shape carries text. Lay the elements out to mirror the diagram's "
+    "spatial arrangement."
 )
 
 
@@ -280,6 +394,7 @@ def _analysis_from_obj(obj: dict[str, Any]) -> Analysis:
         suggested_type=suggested if isinstance(suggested, str) and suggested else None,
         entities=_as_str_list(obj.get("entities")),
         concepts=_as_str_list(obj.get("concepts")),
+        kind=_as_kind(obj.get("kind")),
     )
 
 
@@ -293,3 +408,52 @@ def _as_str_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _as_kind(value: object) -> str:
+    """Normalise a reported image kind to one of the four valid values or ``""``.
+
+    Anything outside :data:`_VALID_KINDS` (a missing key, a typo, an unexpected label)
+    collapses to ``""`` so the ingest pass never branches on a surprise value.
+    """
+    if isinstance(value, str) and value in _VALID_KINDS:
+        return value
+    return ""
+
+
+def _excalidraw_markdown(elements: list[dict[str, Any]]) -> str:
+    """Assemble the ``.excalidraw.md`` envelope around model-supplied scene elements.
+
+    The model is trusted only for the ``elements`` list; thoth builds the rest of the
+    Obsidian-Excalidraw file format deterministically: YAML frontmatter that marks the
+    note as a parsed Excalidraw drawing, then a ``# Excalidraw Data`` section whose
+    ``## Drawing`` subsection holds the full scene object inside a fenced ``json`` code
+    block. The scene wraps the elements with the fixed Excalidraw scaffolding
+    (``type``/``version``/``source``/``appState``/``files``).
+
+    Args:
+        elements: The non-empty list of Excalidraw element dicts the model returned.
+
+    Returns:
+        The complete ``.excalidraw.md`` markdown string.
+    """
+    scene = {
+        "type": "excalidraw",
+        "version": 2,
+        "source": "thoth",
+        "elements": elements,
+        "appState": {"gridSize": None, "viewBackgroundColor": "#ffffff"},
+        "files": {},
+    }
+    scene_json = json.dumps(scene, indent=2)
+    return (
+        "---\n"
+        "excalidraw-plugin: parsed\n"
+        "tags: [excalidraw]\n"
+        "---\n\n"
+        "# Excalidraw Data\n\n"
+        "## Drawing\n"
+        "```json\n"
+        f"{scene_json}\n"
+        "```\n"
+    )

@@ -151,8 +151,17 @@ SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _MAX_SLUG_WORDS: int = 8
 _MAX_SLUG_LEN: int = 80
 
-ASSET_SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+$")
-"""Asset filename grammar: ``<slug>.<ext>`` (e.g. ``motor-diagram-e4a408.png``)."""
+ASSET_SLUG_RE: re.Pattern[str] = re.compile(
+    r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+)+$"
+)
+"""Asset filename grammar: ``<slug>`` plus one or more lowercase extensions.
+
+A single extension is the common case (``motor-diagram-e4a408.png``); a *compound*
+extension such as ``motor-diagram-e4a408.excalidraw.md`` is also accepted, so the
+advanced-image artifacts (issue #68) -- the editable Excalidraw reconstruction saved as
+``<slug>.excalidraw.md`` -- validate as assets. The grammar still forbids ``..`` (every
+dot must be followed by a ``[a-z0-9]`` group), a leading dot, uppercase, and spaces.
+"""
 
 REQUIRED_COMMON_FIELDS: tuple[str, ...] = (
     "title",
@@ -407,8 +416,10 @@ class Vault:
         """Return ``name`` if it matches :data:`ASSET_SLUG_RE`, else raise SlugError.
 
         Accepts ``<slug>.<ext>`` with a lowercase slug and lowercase extension (for
-        example ``motor-control-diagram-e4a408.png``); rejects a missing extension,
-        uppercase, and spaces.
+        example ``motor-control-diagram-e4a408.png``), as well as a compound extension
+        (for example ``motor-control-diagram-e4a408.excalidraw.md``, the editable
+        Excalidraw reconstruction from issue #68); rejects a missing extension, ``..``,
+        a leading dot, uppercase, and spaces.
         """
         if not ASSET_SLUG_RE.fullmatch(name):
             raise SlugError(

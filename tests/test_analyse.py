@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from thoth.analyse import (
+    _EXCALIDRAW_MAX_TOKENS,
     AnalyseError,
     Analyser,
     Analysis,
@@ -187,3 +188,168 @@ def test_module_import_is_light() -> None:
 
     for heavy in ("anthropic", "exa_py", "firecrawl", "slack_bolt", "whisper"):
         assert heavy not in sys.modules
+
+
+# --- kind detection folded into the analyse call (issue #68 / ADR 0009) ---------------
+
+
+def _analysis_json_with_kind(kind: str) -> str:
+    """The canned analysis result plus a reported image ``kind``."""
+    return json.dumps(
+        {
+            "text": "Sprint goals: ship vision pass",
+            "description": "A whiteboard photo.",
+            "summary": "Sprint whiteboard",
+            "suggested_type": "note",
+            "entities": ["Giles"],
+            "concepts": ["sprint-planning"],
+            "kind": kind,
+        }
+    )
+
+
+def test_analyse_parses_valid_kind() -> None:
+    """A valid 'kind' is parsed straight onto the Analysis."""
+    client = _CapturingClient(_analysis_json_with_kind("diagram"))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    result = analyser.analyse_image(b"bytes", ext="png")
+
+    assert result.kind == "diagram"
+
+
+def test_analyse_normalises_unknown_kind_to_empty() -> None:
+    """An unrecognised 'kind' label collapses to '' (ingest derives nothing)."""
+    client = _CapturingClient(_analysis_json_with_kind("blueprint"))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    result = analyser.analyse_image(b"bytes", ext="png")
+
+    assert result.kind == ""
+
+
+def test_analyse_missing_kind_defaults_to_empty() -> None:
+    """A reply with no 'kind' key yields '' (the four-value default)."""
+    client = _CapturingClient(_analysis_json())
+    analyser = Analyser(LLM(_config(), client=client))
+
+    result = analyser.analyse_image(b"bytes", ext="png")
+
+    assert result.kind == ""
+
+
+def test_result_shape_mentions_faithful_markdown_for_documents() -> None:
+    """The combined prompt asks for faithful structured markdown on a document."""
+    from thoth.analyse import _RESULT_SHAPE
+
+    lowered = _RESULT_SHAPE.lower()
+    assert "faithful" in lowered
+    assert "markdown" in lowered
+    # The four kinds are defined in the prompt.
+    for kind in ("diagram", "document", "screenshot", "photo"):
+        assert kind in lowered
+
+
+# --- Excalidraw reconstruction (issue #68) --------------------------------------------
+
+
+def _excalidraw_elements() -> list[dict[str, Any]]:
+    """A minimal but valid list of Excalidraw scene elements."""
+    return [
+        {"type": "rectangle", "x": 10, "y": 20, "width": 100, "height": 50},
+        {"type": "text", "x": 30, "y": 35, "text": "Idea"},
+    ]
+
+
+def _excalidraw_response() -> str:
+    """A canned model reply carrying only the element list."""
+    return json.dumps({"elements": _excalidraw_elements()})
+
+
+def _parse_excalidraw_scene(markdown: str) -> dict[str, Any]:
+    """Extract and parse the JSON scene out of the .excalidraw.md fenced block."""
+    fence = "```json\n"
+    start = markdown.index(fence) + len(fence)
+    end = markdown.index("\n```", start)
+    return json.loads(markdown[start:end])
+
+
+def test_reconstruct_excalidraw_builds_envelope() -> None:
+    """A diagram reconstruction returns a valid .excalidraw.md envelope."""
+    client = _CapturingClient(_excalidraw_response())
+    analyser = Analyser(LLM(_config(), client=client))
+
+    markdown = analyser.reconstruct_excalidraw(b"bytes", ext="png")
+
+    assert markdown is not None
+    # Frontmatter marks it as a parsed Excalidraw note.
+    assert "excalidraw-plugin: parsed" in markdown
+    assert "tags: [excalidraw]" in markdown
+    assert "# Excalidraw Data" in markdown
+    assert "## Drawing" in markdown
+    # The fenced json scene wraps the model's elements with the fixed scaffolding.
+    scene = _parse_excalidraw_scene(markdown)
+    assert scene["type"] == "excalidraw"
+    assert scene["version"] == 2
+    assert scene["source"] == "thoth"
+    assert scene["elements"] == _excalidraw_elements()
+    assert scene["appState"]["viewBackgroundColor"] == "#ffffff"
+    assert scene["files"] == {}
+
+
+def test_reconstruct_excalidraw_passes_diagram_model() -> None:
+    """The injected diagram_model is threaded through to the client kwargs."""
+    client = _CapturingClient(_excalidraw_response())
+    analyser = Analyser(LLM(_config(), client=client), diagram_model="claude-opus-4-8")
+
+    analyser.reconstruct_excalidraw(b"bytes", ext="png")
+
+    create_kwargs = client.messages.calls[-1]
+    assert create_kwargs["model"] == "claude-opus-4-8"
+    # The reconstruction call gets the roomier dedicated token budget, not the analyse
+    # one (a valid Excalidraw scene needs more headroom than OCR + a description).
+    assert create_kwargs["max_tokens"] == _EXCALIDRAW_MAX_TOKENS
+    # The image is carried as a transient base64 vision block.
+    content = create_kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "image"
+    assert content[1]["type"] == "text"
+
+
+def test_reconstruct_excalidraw_unparseable_returns_none() -> None:
+    """An unparseable model reply degrades to None (never raises)."""
+    client = _CapturingClient("sorry, can't draw that")
+    analyser = Analyser(LLM(_config(), client=client))
+
+    assert analyser.reconstruct_excalidraw(b"bytes", ext="png") is None
+
+
+def test_reconstruct_excalidraw_empty_elements_returns_none() -> None:
+    """An empty (or missing) element list degrades to None."""
+    client = _CapturingClient(json.dumps({"elements": []}))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    assert analyser.reconstruct_excalidraw(b"bytes", ext="png") is None
+
+
+def test_reconstruct_excalidraw_non_dict_elements_returns_none() -> None:
+    """Elements that are not all dicts degrade to None."""
+    client = _CapturingClient(json.dumps({"elements": ["not-a-dict"]}))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    assert analyser.reconstruct_excalidraw(b"bytes", ext="png") is None
+
+
+def test_reconstruct_excalidraw_client_error_returns_none() -> None:
+    """A transport failure on the reconstruction call degrades to None (no defer)."""
+    analyser = Analyser(LLM(_config(), client=_RaisingClient(RuntimeError("down"))))
+
+    assert analyser.reconstruct_excalidraw(b"bytes", ext="png") is None
+
+
+def test_reconstruct_excalidraw_budget_trip_returns_none() -> None:
+    """Even a budget trip degrades to None: the enhancement never defers the capture."""
+    analyser = Analyser(
+        LLM(_config(), client=_RaisingClient(BudgetExceededError("cap reached")))
+    )
+
+    assert analyser.reconstruct_excalidraw(b"bytes", ext="png") is None
