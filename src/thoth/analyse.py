@@ -396,6 +396,11 @@ _EXCALIDRAW_PROMPT = (
     "to the boxes; only use explicit 'x','y','points' for a connector that joins no "
     "shape. A connector may also carry a 'text' label for the relationship (e.g. "
     "'depends on') -- it is placed on the line itself.\n"
+    "Do NOT try to redraw pictorial/figurative drawings (a stick figure or sketched "
+    "person, an icon, a drawn object) as raw lines. Represent each such drawing as a "
+    "single 'rectangle' whose 'text' names what it depicts (e.g. a stick person "
+    "becomes a box labelled 'User' or 'Me'), and connect it with arrows like any other "
+    "box, so its relationships are kept without the messy line-art.\n"
     "Lay the coordinates out (roughly a 600-1000px canvas) to mirror the diagram's "
     "arrangement, with arrows reflecting the real connections and direction. Leave "
     "enough space between boxes that the connectors between them are clearly visible."
@@ -560,7 +565,7 @@ def _build_excalidraw_elements(
             geometry[eid] = (x, y, w, h)
             label = _spec_label(spec)
             if label:
-                label_id = f"{eid}-label"
+                label_id = _text_block_id(f"{eid}:label")
                 elements.append(_bound_text_element(label_id, label, eid, (x, y, w, h)))
                 _add_bound_element(shape, "text", label_id)
                 text_rows.append({"id": label_id, "text": label})
@@ -571,8 +576,9 @@ def _build_excalidraw_elements(
             x, y, w, h = _spec_geometry(
                 spec, default_w=_estimate_text_width(label), default_h=25.0
             )
-            elements.append(_free_text_element(eid, label, x, y))
-            text_rows.append({"id": eid, "text": label})
+            text_id = _text_block_id(f"{eid}:text")
+            elements.append(_free_text_element(text_id, label, x, y))
+            text_rows.append({"id": text_id, "text": label})
         elif etype in ("arrow", "line"):
             connectors.append({"id": eid, "spec": spec, "type": etype})
 
@@ -588,13 +594,29 @@ def _build_excalidraw_elements(
                 _add_bound_element(shapes[ref], "arrow", eid)
         label = _spec_label(spec)
         if label:
-            label_id = f"{eid}-label"
+            label_id = _text_block_id(f"{eid}:label")
             elements.append(
                 _bound_text_element(label_id, label, eid, _connector_midbox(element))
             )
             _add_bound_element(element, "text", label_id)
             text_rows.append({"id": label_id, "text": label})
     return elements, text_rows
+
+
+def _text_block_id(seed: str) -> str:
+    """A deterministic 8-character id for a text element (its ``## Text Elements`` key).
+
+    The Obsidian-Excalidraw plugin re-reads the ``## Text Elements`` markdown block as
+    the authoritative text source, parsing it with ``/\\s\\^(.{8})[\\n]+/`` and
+    advancing a fixed 12 chars (`` ^12345678\\n\\n``) per entry: the block id must be
+    **exactly 8 non-newline chars**. An id of any other length is silently skipped and
+    its entry's text bleeds into the next 8-char id (issue #68 live-verify: a 2-char
+    free-standing-label id merged into the following arrow label). So every text element
+    thoth writes -- box label, connector label, free-standing text -- gets an 8-char id
+    derived from a stable seed (the owning element id + role), used identically for the
+    element's JSON ``id``, its container's ``boundElements`` ref, and the index row.
+    """
+    return hashlib.sha256(seed.encode()).hexdigest()[:8]
 
 
 def _add_bound_element(host: dict[str, Any], etype: str, eid: str) -> None:

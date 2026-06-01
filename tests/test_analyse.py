@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ from thoth.analyse import (
     AnalyseError,
     Analyser,
     Analysis,
+    _text_block_id,
     image_media_type,
 )
 from thoth.budget import BudgetExceededError
@@ -342,12 +344,19 @@ def test_reconstruct_excalidraw_builds_envelope() -> None:
     }
     # A box label is BOUND to its box: containerId -> the box, the box's boundElements
     # -> the label, so the text is a property of the box (not a loose overlaid label).
-    n1_label = by_id["n1-label"]
+    # Text-element ids are deterministic 8-char block ids (the plugin's parser needs
+    # exactly 8 chars), keyed off the owner id + role.
+    n1_label_id = _text_block_id("n1:label")
+    n1_label = by_id[n1_label_id]
+    assert n1_label["text"] == "Shared IOC"
     assert n1_label["containerId"] == "n1"
     assert n1_label["textAlign"] == "center"
-    assert {"type": "text", "id": "n1-label"} in by_id["n1"]["boundElements"]
-    # The free-standing title is unbound.
-    assert by_id["t1"]["containerId"] is None
+    assert len(n1_label_id) == 8
+    assert {"type": "text", "id": n1_label_id} in by_id["n1"]["boundElements"]
+    # The free-standing title is unbound and also carries an 8-char block id.
+    title = by_id[_text_block_id("t1:text")]
+    assert title["text"] == "Boot architecture"
+    assert title["containerId"] is None
 
     arrow = by_type["arrow"][0]
     assert arrow["endArrowhead"] == "arrow"
@@ -426,16 +435,56 @@ def test_reconstruct_excalidraw_connector_label_is_bound_to_the_line() -> None:
     assert markdown is not None
     scene = _parse_excalidraw_scene(markdown)
     by_id = {e["id"]: e for e in scene["elements"]}
-    label = by_id["a1-label"]
+    label_id = _text_block_id("a1:label")
+    label = by_id[label_id]
     assert label["text"] == "depends on"
     assert label["containerId"] == "a1"
-    assert {"type": "text", "id": "a1-label"} in by_id["a1"]["boundElements"]
+    assert len(label_id) == 8
+    assert {"type": "text", "id": label_id} in by_id["a1"]["boundElements"]
     # The label is centred on the line's midpoint (between n1's bottom + n2's top edge).
     arrow = by_id["a1"]
     mid_y = arrow["y"] + arrow["points"][-1][1] / 2
     assert label["y"] < mid_y < label["y"] + label["height"] + 1
-    # The connector label is also indexed for Obsidian search.
-    assert "depends on ^a1-label" in markdown
+    # The connector label is also indexed for Obsidian search, with its 8-char id.
+    assert f"depends on ^{label_id}" in markdown
+
+
+def test_reconstruct_excalidraw_text_block_ids_are_all_eight_chars() -> None:
+    """Every ## Text Elements block id is EXACTLY 8 chars and ends ` ^xxxxxxxx\\n\\n`.
+
+    The Obsidian-Excalidraw parser (``/\\s\\^(.{8})[\\n]+/``, advancing a fixed 12 chars
+    per entry) only recognises 8-char ids; a shorter one (a model's ``t1``) is skipped
+    and its text bleeds into the next entry. This pins the fix: a free-standing label
+    with a 2-char model id still gets a parseable 8-char anchor, so it cannot merge."""
+    specs = [
+        {"id": "t1", "type": "text", "x": 0, "y": 0, "text": "Obsidian Vault"},
+        {
+            "id": "n1",
+            "type": "rectangle",
+            "x": 0,
+            "y": 100,
+            "width": 80,
+            "height": 40,
+            "text": "thoth",
+        },
+        {"id": "a1", "type": "arrow", "from": "n1", "to": "n1", "text": "ingest"},
+    ]
+    client = _CapturingClient(json.dumps({"elements": specs}))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    markdown = analyser.reconstruct_excalidraw(b"bytes", ext="png")
+
+    assert markdown is not None
+    section = markdown[
+        markdown.index("## Text Elements") : markdown.index("## Drawing")
+    ]
+    # Each non-empty entry matches the plugin's strict ` ^<8 chars>\n\n` shape.
+    entries = re.findall(r" \^(.+?)\n\n", section)
+    assert entries, "no text-element anchors found"
+    assert all(len(block_id) == 8 for block_id in entries)
+    # The free-standing 'Obsidian Vault' label is its own parseable entry (8-char anchor
+    # + blank line), so it cannot bleed into the following 'ingest' label.
+    assert re.search(r"Obsidian Vault \^\w{8}\n\n", section)
 
 
 def test_reconstruct_excalidraw_passes_diagram_model() -> None:
