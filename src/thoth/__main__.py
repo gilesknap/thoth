@@ -28,6 +28,7 @@ import logging
 from argparse import ArgumentParser, Namespace
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -108,9 +109,11 @@ def build_parser() -> ArgumentParser:
     )
     capture.add_argument(
         "paths",
-        nargs="+",
+        nargs="*",
         type=Path,
-        help="one or more files or directories to capture",
+        default=[],
+        help="one or more files or directories to capture; with NO path, drain the "
+        "inbox holds (re-curate each inbox/hold-* from its stored body)",
     )
     capture.add_argument(
         "--dry-run",
@@ -425,21 +428,31 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     from .budget import make_budget_guard
     from .capture_walk import walk_captures
     from .git_sync import GitSync, VaultConflictError
-    from .ingest import IngestError
+    from .inbox_drain import drain_captures
+    from .ingest import Capture, IngestError
+    from .vault import Vault
 
-    captures = walk_captures(
-        namespace.paths,
-        include=namespace.include,
-        exclude=namespace.exclude,
-        limit=namespace.limit,
-    )
+    # With NO path argument, drain the inbox holds (issue #105): re-curate each
+    # inbox/hold-* from its stored body through the SAME ingest pipeline, then remove
+    # the superseded hold once it is filed. With paths, walk the file/folder tree (#80).
+    drain_mode = not namespace.paths
 
     if namespace.dry_run:
         planned = 0
-        for capture in captures:
-            planned += 1
-            kind = "text" if capture.text is not None else "file"
-            print(f"capture (dry-run): would file {kind} {capture.filename}")
+        if drain_mode:
+            for hold_rel, _capture in drain_captures(Vault(config)):
+                planned += 1
+                print(f"capture (dry-run): would re-curate {hold_rel}")
+        else:
+            for capture in walk_captures(
+                namespace.paths,
+                include=namespace.include,
+                exclude=namespace.exclude,
+                limit=namespace.limit,
+            ):
+                planned += 1
+                kind = "text" if capture.text is not None else "file"
+                print(f"capture (dry-run): would file {kind} {capture.filename}")
         print(f"capture: dry-run, {planned} item(s) would be filed (no writes)")
         return
 
@@ -453,57 +466,124 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     git.pull()
 
     batch_size = max(1, namespace.batch_size)
-    filed = skipped = unchanged = deferred = failed = 0
+    counts = _CaptureCounts()
     since_commit = 0
     total = 0
-    for capture in captures:
-        total += 1
-        target = capture.filename or "(capture)"
-        try:
-            report = graph.ingestor.ingest(capture, commit=False, as_is=namespace.as_is)
-        except IngestError as exc:
-            # One bad file must not abort the whole import. ingest() raises IngestError
-            # on a non-deferrable failure (an unparseable/invalid model file-plan, a
-            # rejected vault write) -- but the inbound item is already durable in inbox/
-            # (pass 0b runs before the failing classify/curate), so it is recoverable on
-            # a later run. Log it, count it, and carry on with the rest of the tree; the
-            # staged hold is committed with the batch so the progress is not lost.
-            failed += 1
-            since_commit += 1
-            logger.warning("capture [%d]: %s -> FAILED (%s)", total, target, exc)
-        else:
-            if report.deferred:
-                deferred += 1
-            elif report.unchanged:
-                # Skip-on-unchanged (#95 task D): the content was already curated and
-                # nothing was re-spent or re-stamped -- count it apart from "skipped"
-                # (no page) so a re-run to finish an interrupted import shows the
-                # already-done parts cost nothing.
-                unchanged += 1
-            elif report.page_paths:
-                filed += 1
-            else:
-                skipped += 1
-            since_commit += 1
-            print(
-                f"capture [{total}]: {target} -> "
-                f"{', '.join(report.page_paths) or report.message or 'no new page'}"
+    limit = namespace.limit
+
+    # Build the (target, capture, hold_rel) stream shared by both branches: a drain hold
+    # carries its own path so a filed hold can be removed; a walked file has no hold.
+    vault = Vault(config)
+    if drain_mode:
+        stream: Iterator[tuple[str, Capture, str | None]] = (
+            (hold_rel, capture, hold_rel) for hold_rel, capture in drain_captures(vault)
+        )
+    else:
+        stream = (
+            (capture.filename or "(capture)", capture, None)
+            for capture in walk_captures(
+                namespace.paths,
+                include=namespace.include,
+                exclude=namespace.exclude,
+                limit=limit,
             )
+        )
+
+    for target, capture, hold_rel in stream:
+        if limit is not None and total >= limit:
+            break
+        total += 1
+        _ingest_one(
+            graph,
+            vault,
+            capture,
+            target=target,
+            hold_rel=hold_rel,
+            as_is=namespace.as_is,
+            index=total,
+            counts=counts,
+            ingest_error=IngestError,
+        )
+        since_commit += 1
         if since_commit >= batch_size:
             _commit_capture_batch(git, since_commit, VaultConflictError)
             since_commit = 0
     if since_commit:
         _commit_capture_batch(git, since_commit, VaultConflictError)
     print(
-        f"capture: {total} item(s) processed -- filed={filed} "
-        f"unchanged={unchanged} skipped={skipped} deferred={deferred} "
-        f"failed={failed}"
+        f"capture: {total} item(s) processed -- filed={counts.filed} "
+        f"unchanged={counts.unchanged} skipped={counts.skipped} "
+        f"deferred={counts.deferred} failed={counts.failed}"
     )
-    if failed:
+    if counts.failed:
         print(
-            f"capture: {failed} file(s) failed to curate and are held in inbox/ "
+            f"capture: {counts.failed} file(s) failed to curate and are held in inbox/ "
             "(durable) -- re-run to retry them."
         )
+
+
+@dataclass
+class _CaptureCounts:
+    """Per-run capture dispositions, shared by the file-walk and inbox-drain paths."""
+
+    filed: int = 0
+    skipped: int = 0
+    unchanged: int = 0
+    deferred: int = 0
+    failed: int = 0
+
+
+def _ingest_one(
+    graph: Any,
+    vault: Any,
+    capture: Any,
+    *,
+    target: str,
+    hold_rel: str | None,
+    as_is: bool,
+    index: int,
+    counts: _CaptureCounts,
+    ingest_error: type[Exception],
+) -> str:
+    """Ingest one capture (commit deferred), tally its disposition, print a line.
+
+    Shared by the file-walk (#80) and inbox-drain (#105) branches. Per-item failures are
+    isolated: an :class:`~thoth.ingest.IngestError` is logged, counted, and skipped
+    (the item stays durable in ``inbox/``). On a genuinely filed drain hold
+    (``page_paths`` non-empty AND a ``hold_rel`` is supplied) the now-superseded hold is
+    removed with the commit staged into the next batch; a deferred/unchanged hold stays
+    (recoverable, idempotent) so a budget re-trip never silently deletes un-filed
+    content. Returns the disposition string.
+    """
+    try:
+        report = graph.ingestor.ingest(capture, commit=False, as_is=as_is)
+    except ingest_error as exc:
+        counts.failed += 1
+        logger.warning("capture [%d]: %s -> FAILED (%s)", index, target, exc)
+        return "failed"
+    if report.deferred:
+        counts.deferred += 1
+        disposition = "deferred"
+    elif report.unchanged:
+        # Skip-on-unchanged (#95 task D): already curated, nothing re-spent/re-stamped.
+        counts.unchanged += 1
+        disposition = "unchanged"
+    elif report.page_paths:
+        counts.filed += 1
+        disposition = "filed"
+    else:
+        counts.skipped += 1
+        disposition = "skipped"
+    # Drop a drained hold ONLY once it is genuinely filed; never on deferred/unchanged
+    # (data-loss guard). remove_page is idempotent + path-confined; the removal stages
+    # into the same batch as the new page.
+    if disposition == "filed" and hold_rel is not None:
+        vault.remove_page(hold_rel)
+    print(
+        f"capture [{index}]: {target} -> "
+        f"{', '.join(report.page_paths) or report.message or 'no new page'}"
+    )
+    return disposition
 
 
 def _commit_capture_batch(
