@@ -21,7 +21,7 @@ _FOLDERS = ("entities", "notes", "memories", "actions", "inbox", "raw/assets")
 
 
 def _hold(*, source: str | None, body: str) -> str:
-    """Render a minimal ``inbox/hold-*`` page (type: inbox) with the given source/body."""
+    """Render a minimal ``inbox/hold-*`` page (type: inbox) with given source/body."""
     source_line = f"source: {source}\n" if source is not None else ""
     return (
         "---\n"

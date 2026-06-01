@@ -4,27 +4,27 @@ A budget-capped bulk import (or an LLM-unavailable capture) leaves the inbound i
 durable as ``inbox/hold-<sha12>.md`` (``type: inbox``) but never curated, so grep cannot
 see it (its :data:`thoth.query.SEARCHED_DIRS` excludes ``inbox/``) and Hindsight never
 retained it -- the content is stranded. This module is the source-independent drain: it
-walks the holds and yields one :class:`~thoth.ingest.Capture` per recoverable hold, built
-from the hold's STORED body and its threaded ``source:``, ready to feed straight through
+walks the holds and yields one :class:`~thoth.ingest.Capture` per recoverable hold,
+built from the hold's STORED body and threaded ``source:``, ready to feed straight
 the EXISTING :meth:`thoth.ingest.Ingestor.ingest` pipeline (classify/curate -> file ->
-retain). It is symmetric to :mod:`thoth.capture_walk`: a second capture source, not a new
-ingest pass.
+retain). It is symmetric to :mod:`thoth.capture_walk`: a second capture source, not a
+new ingest pass.
 
 Because :meth:`Ingestor.persist_inbound` re-derives the hold slug from the body SHA-256,
-re-persisting an identical body lands on the SAME ``inbox/hold-*`` path, so the caller can
-remove the original hold by its path once the page is filed (the re-persist and the
-original are one file). The body is passed VERBATIM -- no string-rewriting (the project's
-hard rule).
+re-persisting an identical body lands on the SAME ``inbox/hold-*`` path, so the caller
+can remove the original hold by its path once the page is filed (the re-persist and the
+original are one file). The body is passed VERBATIM -- no string-rewriting (the
+project's hard rule).
 
 Scope v1 is TEXT holds. A binary hold carries only the
-:meth:`Ingestor._binary_stub_body` provenance stub (its bytes were never recoverable), so
-it is skipped-and-logged rather than re-fed: there is nothing to re-curate. Detection is a
-content sniff on the stub's stored marker lines (kept here as a single constant) since the
-hold frontmatter carries no binary flag.
+:meth:`Ingestor._binary_stub_body` provenance stub (its bytes were never recoverable),
+so it is skipped-and-logged rather than re-fed: there is nothing to re-curate. Detection
+is a content sniff on the stub's stored marker lines (kept here as a single constant)
+since the hold frontmatter carries no binary flag.
 
 Only the standard library plus a deferred import of :data:`thoth.ingest.Capture` (inside
-the generator body, mirroring :mod:`thoth.capture_walk`'s import-safety contract) and the
-:class:`~thoth.vault.Vault` read surface are used -- no LLM, no network.
+the generator body, mirroring :mod:`thoth.capture_walk`'s import-safety contract) and
+the :class:`~thoth.vault.Vault` read surface are used -- no LLM, no network.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 # value, so one odd hold never aborts a sweep. ``import`` is a member of VALID_SOURCES.
 _FALLBACK_SOURCE: str = "import"
 
-# Sentinel lines from :meth:`thoth.ingest.Ingestor._binary_stub_body`: a hold whose body
-# is that provenance stub carries no recoverable bytes, so it is skipped (v1 text scope).
+# Sentinel lines from :meth:`thoth.ingest.Ingestor._binary_stub_body`: a hold whose
+# body is that provenance stub carries no recoverable bytes, so it is skipped (v1 text).
 # Kept here as the single place the sniff is expressed -- if the stub wording changes,
 # this constant must change with it.
 _BINARY_STUB_HEAD: str = "# Held capture"
@@ -67,8 +67,8 @@ def drain_captures(vault: Vault) -> Iterator[tuple[str, Capture]]:
     body is passed verbatim.
 
     A binary hold -- whose body is the
-    :meth:`thoth.ingest.Ingestor._binary_stub_body` provenance stub -- has no recoverable
-    bytes, so it is skipped-and-logged and NOT yielded (v1 text scope).
+    :meth:`thoth.ingest.Ingestor._binary_stub_body` provenance stub -- has no
+    recoverable bytes, so it is skipped-and-logged and NOT yielded (v1 text scope).
 
     Args:
         vault: The real, path-confined vault facade to read holds from.
