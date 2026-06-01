@@ -171,14 +171,18 @@ def test_index_dashboard_embeds_resolve_to_real_base_views() -> None:
         assert view_name in view_names, f"{base_name}#{view_name}"
 
 
-def test_index_preserves_knowledge_catalog_machinery() -> None:
-    """The dashboard keeps the catalog headings ``append_index`` / lint depend on."""
+def test_index_is_static_no_catalog_or_page_count() -> None:
+    """index.md is static (ADR 0008): just the title + dashboards, no catalog/count."""
     text = template_text("index.md")
-    # Vault.append_index writes catalog lines under these headings; lint's
-    # index-completeness check reads them, so the seed must keep them.
-    for heading in ("### Entities", "### Notes", "### Memories"):
-        assert heading in text, heading
-    assert "Total pages:" in text
+    # The agent-maintained catalog and its machinery are gone: the per-page gloss now
+    # lives in each page's own summary: frontmatter, so no code reads/writes index.md.
+    assert "## Knowledge catalog" not in text
+    assert "Total pages:" not in text
+    assert "### Entities" not in text
+    assert "Agents: read SCHEMA.md" not in text
+    # What remains is the Home title and the live Bases dashboard embeds.
+    assert "PKM Vault — Home" in text
+    assert "![[_bases/" in text
 
 
 def test_index_md_frontmatter_is_summary_type() -> None:

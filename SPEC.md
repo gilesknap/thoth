@@ -122,10 +122,9 @@ Concretely, the appliance model is handed exactly this surface (Python functions
 search_vault(query) -> [page paths + titles]      # create-vs-update decision (read-only)
 read_page(path)     -> frontmatter + body          # read-only, vault-scoped
 # ...then it RETURNS a file-plan; the harness executes:
-write_page(folder, slug, frontmatter, body)        # folder∈allowed, slug ok, schema ok
+write_page(folder, slug, frontmatter, body)        # folder∈allowed, slug ok, schema ok; reference pages carry summary:
 write_raw(subdir, slug, frontmatter, body)
 save_asset(tmp, slug)                              # move a downloaded binary into raw/assets/
-append_index(section, wikilink, summary)
 append_log(action, subject, files)
 retain(path, facts)                               # Hindsight, vault-path-keyed
 ```
@@ -142,7 +141,7 @@ Single language end-to-end (appliance + MCP + reindex) keeps the surface tiny. *
 | Module | Responsibility | ~LOC | Phase |
 |---|---|---|---|
 | `config.py` | load vault path, tokens, model ids from `.env`/`config.toml` (~a dozen vars, not 350) | 40 | 0 |
-| `vault.py` | frontmatter read/write, slug/path helpers, `obsidian://` links, `index.md`/`log.md` edits, asset embed | 280 | 1 |
+| `vault.py` | frontmatter read/write, slug/path helpers, `obsidian://` links, `log.md` edits, asset embed | 280 | 1 |
 | `bin/vault-pull`, `bin/vault-commit` (bash) + `git_sync.py` | pull-before-write / commit+push wrappers (carried fwd verbatim — Appendix → Git wrappers) + thin shell-out | 80 + 40 | 1 |
 | `llm.py` | Anthropic client + prompt caching; the system persona; the file-plan / answer schemas | 180 | 1 |
 | `extract.py` | URL→markdown (Exa find / Firecrawl extract), PDF, image save, STT hook (local whisper); read-only `web_search`/`web_extract` reused by `pkm_ask` | 160 | 2 |
@@ -245,8 +244,8 @@ Same operation as the Hermes spec, minus Hermes tool names, run as **bounded val
 4. CURATE (file-plan) second Claude call: given SCHEMA + candidate pages, RETURN a validated plan of
                       pages to create/update (full frontmatter + body, >=2 wikilinks each, image embeds,
                       confidence/provenance). Harness validates + writes via write_page/write_raw/save_asset.
-5. NAVIGATION         append_index() for new knowledge pages (life-admin is surfaced by Bases, no index edit);
-                      append_log() listing every file touched.
+5. NAVIGATION         append_log() listing every file touched (a reference page's one-line gloss rides in its
+                      own summary: frontmatter; index.md is static — no catalog edit, ADR-0008).
 6. RETAIN             hindsight.retain(path, facts) per curated page (vault-path-keyed); probe it landed.
 7. COMMIT             git_sync.commit("<subject>")  -> add -A, commit, pull --rebase, push (never --force).
 8. REPORT             reply: files touched + obsidian:// link(s) + vault path + [[wikilink]].
@@ -297,8 +296,7 @@ fabricated:
 
 ```
 query
-  -> read index.md (cheap, authoritative)
-  -> known term/acronym?  -> grep the vault (search_files)
+  -> grep the vault (search_files; scans frontmatter, so a page's summary: gloss matches here)
   -> known page?          -> follow [[wikilinks]]
   -> phrasing-independent? -> hindsight.recall(query) -> vault page paths
   -> COMPOSE answer from page(s); harness appends obsidian:// link + path + [[wikilink]]
@@ -630,8 +628,7 @@ is an implementation detail, the `type` field is the contract. Because they are 
 have real vault-relative paths and therefore real `obsidian://` deep links.
 
 The underscore-prefixed dirs (`_bases/`, `_meta/`, `_archive/`) are structural, not knowledge: they are
-**excluded from the Hindsight reindex** and from global Bases `file.ext == "md"` knowledge views; `_archive/`
-is dropped from `index.md`.
+**excluded from the Hindsight reindex** and from global Bases `file.ext == "md"` knowledge views.
 
 #### Frontmatter schema (knowledge + life-admin in one contract)
 
@@ -915,9 +912,6 @@ updated: 2026-05-30
 
 # 🏠 PKM Vault — Home
 
-> Source of truth for knowledge + life-admin. Total pages: N | Updated: YYYY-MM-DD
-> Agents: read SCHEMA.md, this index, and recent log.md before any operation.
-
 ## 📥 Inbox (needs filing)
 ![[_bases/inbox.base]]
 
@@ -929,28 +923,12 @@ updated: 2026-05-30
 
 ## 🧠 Memories
 ![[_bases/memories.base]]
-
----
-
-## Knowledge catalog
-> One line per page: [[link]] — summary. Alphabetical within section.
-
-### Entities
-- [[program-motion-controller]] — central coordinator in the motor-control stack.
-
-### Concepts
-- [[ioc-network-architecture]] — RTEMS IOC boot/VLAN/TFTP design notes.
-
-### Comparisons
-
-### Queries
-
-### People
-- [[people/jane-doe]] — collaborator on home + controls work.
 ```
 
-Scaling rule (from llm-wiki): split any knowledge section over 50 entries by first letter/sub-domain; once the
-catalog passes 200 entries, add `_meta/topic-map.md` and link it here.
+`index.md` is **static** (ADR-0008): just the title and the live `.base` dashboard embeds. No agent reads or
+writes it. A reference page's one-line gloss is its own `summary:` frontmatter field — canonical, rebuildable,
+and matched by grep (which scans frontmatter) — so there is no agent-maintained `index.md` catalog to keep in
+sync, and no `Total pages` count to police.
 
 #### log.md (seed template)
 
@@ -1725,7 +1703,7 @@ job.
 |---|---|---|
 | 1 | **Orphan pages** | Knowledge pages with zero inbound `[[wikilinks]]` (life-admin pages exempt — Bases surface them). Suggest a link or archive. |
 | 2 | **Broken wikilinks** | `[[link]]` targets that resolve to no file (respect `aliases`). Highest severity. |
-| 3 | **Index completeness** | Every knowledge page appears in `index.md`; flag missing and stale "Total pages". |
+| 3 | **Summary gloss** | Every reference page (`entity`/`note`/`memory`) carries a non-empty one-line `summary:` frontmatter gloss (the canonical, rebuildable per-page gloss; ADR-0008). Flag any missing it. |
 | 4 | **Frontmatter validation** | Required common fields present; `type` valid; type-specific required fields present (e.g. `action` has `status`); values match Metadata Menu vocab. |
 | 5 | **Stale content** | Knowledge `updated` > 90 days older than the newest source touching the same entities; **life-admin**: `action` past `due_date` and not done/cancelled; `media` `to_consume` > 180 days. |
 | 6 | **Contradictions** | Surface every page with `contested: true` or non-empty `contradictions:`; flag same-topic pages stating different facts. |

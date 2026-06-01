@@ -85,17 +85,9 @@ type: summary
 updated: 2026-05-30
 ---
 
-# Home
+# 🏠 PKM Vault — Home
 
-> Total pages: 0
-
-## Knowledge catalog
-
-### Entities
-
-### Notes
-
-### Memories
+![[_bases/home.base#Recent Captures (7d)]]
 """
 
 _LOG = """\
@@ -191,9 +183,15 @@ def _knowledge(
     updated: str = "2026-05-30",
     created: str = "2026-05-30",
     tags: list[str] | None = None,
+    summary: str | None = "what this page is about",
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """Author a curated knowledge page with the common contract satisfied."""
+    """Author a curated knowledge page with the common contract satisfied.
+
+    A reference page carries a one-line ``summary:`` gloss by default (#72), matching
+    production where the curate pass authors one; pass ``summary=None`` to author a
+    page that the summary-gloss lint check (check 3) should flag.
+    """
     meta: dict[str, Any] = {
         "title": title if title is not None else slug,
         "type": page_type,
@@ -202,34 +200,11 @@ def _knowledge(
         "source": "slack",
         "tags": tags if tags is not None else ["entity"],
     }
+    if summary is not None:
+        meta["summary"] = summary
     if extra:
         meta.update(extra)
     _write(vault, f"{folder}/{slug}.md", meta, body)
-
-
-def _index_listing(*entries: tuple[str, str]) -> str:
-    """Render an index.md whose catalog lists the given (section, wikilink) entries."""
-    sections = ("Entities", "Notes", "Memories")
-    by_section: dict[str, list[str]] = {k: [] for k in sections}
-    for section, wikilink in entries:
-        by_section[section].append(f"- [[{wikilink}]] - x")
-    parts = [
-        "---",
-        "title: Home",
-        "type: summary",
-        "updated: 2026-05-30",
-        "---",
-        "",
-        "# Home",
-        "",
-        "## Knowledge catalog",
-        "",
-    ]
-    for section in sections:
-        parts.append(f"### {section}")
-        parts.extend(by_section[section])
-        parts.append("")
-    return "\n".join(parts) + "\n"
 
 
 # --------------------------------------------------------------------------------------
@@ -278,10 +253,7 @@ def test_clean_vault_yields_no_findings(vault: Vault, config: Config) -> None:
     (vault.root / "raw/assets/diagram-ab12.png").write_bytes(b"\x89PNG\r\n")
     # A fresh raw file written by the real writer (its stored sha256 is authoritative).
     _write_matching_raw(vault, "articles", "src", "raw article text\n")
-    # index.md lists both pages and a matching total.
-    index = _index_listing(("Entities", "alpha"), ("Notes", "beta"))
-    index = index.replace("# Home\n", "# Home\n\n> Total pages: 2\n")
-    (vault.root / "index.md").write_text(index, encoding="utf-8")
+    # index.md is static (ADR 0008) -- the seeded spine needs no catalog or page-count.
 
     report = _engine(vault, config).run()
     assert report.is_clean, [f.message for f in report.findings]
@@ -423,47 +395,51 @@ def test_wikilink_resolves_by_full_path(vault: Vault, config: Config) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# check 3: index completeness
+# check 3: summary gloss (#72 / ADR 0008)
 # --------------------------------------------------------------------------------------
 
 
-def test_index_completeness_missing_and_present(vault: Vault, config: Config) -> None:
-    """A page absent from index.md is flagged; a present one is not."""
-    _knowledge(vault, "entities", "listed", page_type="entity", body="[[unlisted]]\n")
-    _knowledge(vault, "entities", "unlisted", page_type="entity", body="[[listed]]\n")
-    (vault.root / "index.md").write_text(
-        _index_listing(("Entities", "listed")), encoding="utf-8"
-    )
-    findings = _engine(vault, config).check_index_completeness()
-    flagged = {f.path for f in findings if f.name == "index-completeness"}
-    assert "entities/unlisted.md" in flagged
-    assert "entities/listed.md" not in flagged
-
-
-def test_index_total_pages_mismatch_flagged(vault: Vault, config: Config) -> None:
-    """A 'Total pages: N' line that disagrees with the real count is flagged STYLE."""
-    _knowledge(vault, "entities", "one", page_type="entity", body="[[two]]\n")
-    _knowledge(vault, "entities", "two", page_type="entity", body="[[one]]\n")
-    index = _index_listing(("Entities", "one"), ("Entities", "two"))
-    index = index.replace("# Home\n", "# Home\n\n> Total pages: 99\n")
-    (vault.root / "index.md").write_text(index, encoding="utf-8")
-    findings = _engine(vault, config).check_index_completeness()
-    total_findings = [f for f in findings if "Total pages" in f.message]
-    assert len(total_findings) == 1
-    assert total_findings[0].severity is Severity.STYLE
-    assert "99" in total_findings[0].message
-
-
-def test_missing_index_is_single_high_severity_finding(
+def test_summary_gloss_flags_reference_page_missing_summary(
     vault: Vault, config: Config
 ) -> None:
-    """A missing index.md is one BROKEN finding, not a crash."""
-    (vault.root / "index.md").unlink()
-    _knowledge(vault, "entities", "x", page_type="entity", body="y\n")
-    findings = _engine(vault, config).check_index_completeness()
-    assert len(findings) == 1
-    assert findings[0].severity is Severity.BROKEN
-    assert findings[0].path == "index.md"
+    """A reference page with no ``summary:`` is flagged; a glossed one is not."""
+    _knowledge(vault, "entities", "glossed", page_type="entity", body="[[bare]]\n")
+    _knowledge(
+        vault,
+        "entities",
+        "bare",
+        page_type="entity",
+        body="[[glossed]]\n",
+        summary=None,
+    )
+    findings = _engine(vault, config).check_summaries()
+    flagged = {f.path for f in findings if f.name == "summary-gloss"}
+    assert "entities/bare.md" in flagged
+    assert "entities/glossed.md" not in flagged
+    assert all(f.severity is Severity.STYLE for f in findings)
+
+
+def test_summary_gloss_flags_blank_summary(vault: Vault, config: Config) -> None:
+    """A reference page whose ``summary:`` is present but blank is still flagged."""
+    _knowledge(vault, "notes", "blank", page_type="note", body="x\n", summary="   ")
+    findings = _engine(vault, config).check_summaries()
+    assert {f.path for f in findings} == {"notes/blank.md"}
+
+
+def test_summary_gloss_exempts_action_pages(vault: Vault, config: Config) -> None:
+    """An action page needs no ``summary:`` (it is surfaced by the dashboards)."""
+    _knowledge(
+        vault,
+        "actions",
+        "todo",
+        page_type="action",
+        body="do it\n",
+        tags=["task"],
+        summary=None,
+        extra={"status": "todo"},
+    )
+    findings = _engine(vault, config).check_summaries()
+    assert findings == []
 
 
 # --------------------------------------------------------------------------------------

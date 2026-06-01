@@ -56,17 +56,9 @@ type: summary
 updated: 2026-05-30
 ---
 
-# Home
+# 🏠 PKM Vault — Home
 
-## Knowledge catalog
-
-### Entities
-- [[program-motion-controller]] - central coordinator in the motor-control stack.
-
-### Notes
-- [[distributed-systems]] - notes on CAP and consensus.
-
-### Memories
+![[_bases/home.base#Recent Captures (7d)]]
 """
 
 _LOG_SEED = """\
@@ -843,7 +835,9 @@ def test_ask_surfaces_vault_candidates_in_prompt(
     responses = [_text_response("answer")]
     engine = _engine(config, vault, query_engine, extractor, responses)
 
-    engine.ask("distributed-systems")
+    # A phrase unique to the distributed-systems page body so grep targets it
+    # unambiguously (the index.md catalog pass is gone; grep is pass 1 now, ADR 0008).
+    engine.ask("CAP theorem")
 
     prompt = _scripted(engine).calls[0]["messages"][0]["content"]
     assert "notes/distributed-systems.md" in prompt

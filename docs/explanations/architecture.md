@@ -69,9 +69,11 @@ flowchart TB
     hs -.-> ov
 ```
 
-`query.py` uses a cost-ordered search strategy: `index.md` summaries → grep →
-wikilink traversal → Hindsight semantic recall — cheapest first, LLM only as
-a last resort. `research.py` (the `pkm_ask` tool) runs Claude Sonnet with
+`query.py` uses a cost-ordered search strategy: grep → wikilink traversal →
+Hindsight semantic recall — cheapest first, LLM only as a last resort. grep
+scans the whole file including frontmatter, so a reference page's one-line
+`summary:` gloss is matched there; `index.md` is a static set of Bases
+dashboards that retrieval never reads. `research.py` (the `pkm_ask` tool) runs Claude Sonnet with
 read-only vault tools and optional live web calls; the model decides when to
 reach for the web and can offer to save the composed answer back to the vault
 as a `notes/` page.

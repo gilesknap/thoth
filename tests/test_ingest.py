@@ -280,7 +280,7 @@ def _file_plan_json(
     body: str = "Transformers use attention.",
     wikilinks: list[str] | None = None,
     embeds: list[str] | None = None,
-    index_entries: list[dict[str, str]] | None = None,
+    summary: str | None = "a crisp one-line gloss",
     extra_pages: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build a curate-call file-plan JSON string with one (or more) pages."""
@@ -301,12 +301,12 @@ def _file_plan_json(
         "body": body,
         "wikilinks": wikilinks or ["[[attention]]", "[[neural-networks]]"],
     }
+    if summary is not None:
+        page["summary"] = summary
     if embeds is not None:
         page["embeds"] = embeds
     pages: list[dict[str, Any]] = [page, *(extra_pages or [])]
     plan: dict[str, Any] = {"pages": pages}
-    if index_entries is not None:
-        plan["index_entries"] = index_entries
     return json.dumps(plan)
 
 
@@ -321,15 +321,9 @@ type: summary
 updated: 2026-05-30
 ---
 
-# Home
+# 🏠 PKM Vault — Home
 
-## Knowledge catalog
-
-### Entities
-
-### Notes
-
-### Memories
+![[_bases/home.base#Recent Captures (7d)]]
 """
 
 _LOG_SEED = """\
@@ -569,9 +563,12 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
     assert "notes/transformer-models.md" in harness.origin_files()
 
 
-def test_ingest_appends_index_and_log(harness: IngestHarness) -> None:
-    """A note page lands a Notes catalog line and a log block."""
+def test_ingest_does_not_touch_static_index_and_appends_log(
+    harness: IngestHarness,
+) -> None:
+    """index.md is static (ADR 0008): the gloss lands in the page, log records it."""
     doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body text")
+    index_before = (harness.work / "index.md").read_text(encoding="utf-8")
     client = _ScriptedClient(_classify_json(), _file_plan_json())
     ingestor = _build_ingestor(
         harness,
@@ -582,25 +579,18 @@ def test_ingest_appends_index_and_log(harness: IngestHarness) -> None:
 
     ingestor.ingest(Capture(url="https://e.com/a"))
 
-    index_text = (harness.work / "index.md").read_text(encoding="utf-8")
-    assert "[[transformer-models]]" in index_text
+    # No code edits index.md any more.
+    assert (harness.work / "index.md").read_text(encoding="utf-8") == index_before
+    # The log block still records the touched curated page.
     log_text = (harness.work / "log.md").read_text(encoding="utf-8")
     assert "ingest" in log_text
     assert "notes/transformer-models.md" in log_text
 
 
-def test_ingest_uses_model_supplied_index_entry(harness: IngestHarness) -> None:
-    """When the plan carries index_entries the harness applies them verbatim."""
+def test_ingest_routes_summary_into_page_frontmatter(harness: IngestHarness) -> None:
+    """A reference page's per-plan ``summary`` lands in its frontmatter (#72)."""
     doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
-    plan = _file_plan_json(
-        index_entries=[
-            {
-                "section": "Notes",
-                "wikilink": "transformer-models",
-                "summary": "attention-based sequence models",
-            }
-        ]
-    )
+    plan = _file_plan_json(summary="attention-based sequence models")
     ingestor = _build_ingestor(
         harness,
         client=_ScriptedClient(_classify_json(), plan),
@@ -610,8 +600,37 @@ def test_ingest_uses_model_supplied_index_entry(harness: IngestHarness) -> None:
 
     ingestor.ingest(Capture(url="https://e.com/a"))
 
-    index_text = (harness.work / "index.md").read_text(encoding="utf-8")
-    assert "[[transformer-models]] - attention-based sequence models" in index_text
+    page_text = (harness.work / "notes/transformer-models.md").read_text(
+        encoding="utf-8"
+    )
+    head = page_text.split("---", 2)[1]
+    assert "summary: attention-based sequence models" in head
+
+
+def test_ingest_omits_summary_for_action_pages(harness: IngestHarness) -> None:
+    """An action page gets no ``summary:`` even if the plan supplies one (#72)."""
+    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
+    plan = _file_plan_json(
+        folder="actions",
+        slug="ship-it",
+        page_type="action",
+        title="Ship it",
+        summary="should be ignored for actions",
+    )
+    # An action page needs status; inject it via a raw plan tweak.
+    plan_obj = json.loads(plan)
+    plan_obj["pages"][0]["frontmatter"]["status"] = "todo"
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), json.dumps(plan_obj)),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    ingestor.ingest(Capture(url="https://e.com/a"))
+
+    page_text = (harness.work / "actions/ship-it.md").read_text(encoding="utf-8")
+    assert "summary:" not in page_text.split("---", 2)[1]
 
 
 # --------------------------------------------------------------------------- #
@@ -1991,40 +2010,6 @@ def test_curate_reraises_after_exhausting_corrective_retry(
     assert len(client.messages.calls) == _CURATE_ATTEMPTS  # one corrective retry tried
     assert not harness.vault.page_exists("actions/transformer-models.md")
     assert not harness.vault.page_exists("notes/transformer-models.md")
-
-
-def test_apply_navigation_skips_unknown_index_section(harness: IngestHarness) -> None:
-    """A model-supplied index section that isn't a catalog section is skipped, the
-    already-written page is kept, and a correct default catalog entry is derived.
-
-    Regression: navigation used to abort the whole capture (IngestError) on an unknown
-    index section even though the curated page was already on disk.
-    """
-    doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
-    plan = _file_plan_json(
-        index_entries=[
-            {
-                "section": "Bogus / Scratch",
-                "wikilink": "transformer-models",
-                "summary": "s",
-            }
-        ],
-    )
-    ingestor = _build_ingestor(
-        harness,
-        client=_ScriptedClient(_classify_json(), plan),
-        extractor=FakeExtractor(doc=doc),
-        hindsight=FakeHindsight(),
-    )
-
-    report = ingestor.ingest(Capture(url="https://e.com/a"))
-
-    assert report.page_paths == ["notes/transformer-models.md"]
-    assert harness.vault.page_exists("notes/transformer-models.md")
-    index_text = (harness.work / "index.md").read_text(encoding="utf-8")
-    # The derived default catalog entry landed; the bogus section never did.
-    assert "[[transformer-models]]" in index_text
-    assert "Bogus" not in index_text
 
 
 def test_curate_passes_schema_md_as_system_extra(harness: IngestHarness) -> None:

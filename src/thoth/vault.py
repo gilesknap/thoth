@@ -8,7 +8,7 @@ escapes are all caught *before* any disk is touched); (b) validate the folder-by
 contract and the slug/asset-filename grammar; (c) read and write YAML frontmatter via
 ``python-frontmatter`` + ``pyyaml``; (d) stamp the required ``created``/``updated``
 (and ``ingested``/``sha256`` for raw) fields; (e) make append-only, deduplicated edits
-to ``index.md`` and ``log.md``; (f) move binary assets into ``raw/assets/`` (never
+to ``log.md``; (f) move binary assets into ``raw/assets/`` (never
 base64); and (g) redact secret-looking strings from body and frontmatter before
 filing.
 
@@ -110,8 +110,9 @@ CURATED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
 """The lifecycle-free reference folders, in catalog order (ADR 0005).
 
 Canonical here so :mod:`thoth.lint` and :mod:`thoth.summary` derive the same list
-instead of restating it. These are the pages that earn an ``index.md`` catalog entry and
-orphan / index-completeness / stale checks. They carry no ``status``/``due`` lifecycle.
+instead of restating it. These are the reference pages that carry a one-line
+``summary:`` frontmatter gloss and get the orphan / stale checks. They carry no
+``status``/``due`` lifecycle.
 """
 
 ACTIONABLE_DIRS: tuple[str, ...] = ("actions",)
@@ -163,21 +164,27 @@ REQUIRED_COMMON_FIELDS: tuple[str, ...] = (
 )
 """Frontmatter fields required on every curated/life-admin page."""
 
+SUMMARY_TYPES: frozenset[str] = REFERENCE_TYPES
+"""Page ``type`` values that carry a one-line ``summary:`` frontmatter gloss (#72).
+
+The lifecycle-free reference types (``entity``/``note``/``memory``) each carry an
+optional one-line ``summary:`` frontmatter field authored by the curate pass -- the
+canonical, rebuildable home of a page's gloss (replacing the old agent-maintained
+``index.md`` catalog; ADR 0008). ``action``/``inbox`` pages do not get one (they are
+surfaced by the Bases dashboards, not a summary). The ``summary`` is plain frontmatter
+that round-trips through :meth:`Vault.read_page` / :meth:`Vault.write_page` like any
+other field, so it needs no special write path; this constant exists so the curate
+contract (:func:`thoth.llm.file_plan_contract_text`) and the lint invariant
+(:meth:`thoth.lint.LintEngine.check_summaries`) share one definition of "which pages are
+glossed" with :data:`REFERENCE_TYPES`.
+"""
+
 # created/updated are stamped by write_page, so the caller need not supply them; the
 # remaining required common fields must be present in the input frontmatter.
 _STAMPED_FIELDS: frozenset[str] = frozenset({"created", "updated"})
 _AUTHOR_REQUIRED_FIELDS: tuple[str, ...] = tuple(
     field for field in REQUIRED_COMMON_FIELDS if field not in _STAMPED_FIELDS
 )
-
-# Headings under "## Knowledge catalog" in index.md that append_index may target.
-INDEX_SECTIONS: frozenset[str] = frozenset({"Entities", "Notes", "Memories"})
-"""Valid ``index.md`` catalog section headings :meth:`Vault.append_index` may target.
-
-Public so the curate prompt (:func:`thoth.llm.file_plan_contract_text`) can offer the
-exact section names to the model, and the contract the model is given cannot drift from
-the one :meth:`Vault.append_index` enforces.
-"""
 
 # Actions accepted by append_log (SPEC log.md seed template).
 _LOG_ACTIONS: frozenset[str] = frozenset(
@@ -711,65 +718,6 @@ class Vault:
         return True
 
     # ---- navigation edits (append-only / idempotent) ----------------------------
-
-    def append_index(self, section: str, wikilink: str, summary: str) -> None:
-        """Add ``- [[wikilink]] - summary`` under ``### <section>`` in ``index.md``.
-
-        The catalog line is kept sorted within its section and deduplicated by
-        wikilink, so calling twice with the same wikilink is idempotent (the summary
-        of the last call wins).
-
-        Args:
-            section: One of ``Entities``, ``Notes``, ``Memories``.
-            wikilink: The wikilink target (without the ``[[ ]]`` brackets).
-            summary: A one-line summary shown after the wikilink.
-
-        Raises:
-            SchemaError: if ``section`` is not a known knowledge-catalog section.
-            VaultError: if ``index.md`` is missing or lacks the named heading.
-        """
-        if section not in INDEX_SECTIONS:
-            raise SchemaError(
-                f"unknown index section {section!r}; expected one of "
-                f"{sorted(INDEX_SECTIONS)}"
-            )
-        absolute = self.resolve("index.md")
-        if not absolute.is_file():
-            raise VaultError("index.md does not exist")
-        lines = absolute.read_text(encoding="utf-8").splitlines()
-        heading = f"### {section}"
-        try:
-            start = lines.index(heading)
-        except ValueError as exc:
-            raise VaultError(f"index.md is missing the heading {heading!r}") from exc
-
-        # The section body runs to the next heading (## or ###) or end of file.
-        end = len(lines)
-        for index in range(start + 1, len(lines)):
-            if lines[index].startswith("## ") or lines[index].startswith("### "):
-                end = index
-                break
-
-        new_entry = f"- [[{wikilink}]] - {summary}"
-        entries: list[str] = []
-        seen_targets: set[str] = set()
-        for line in lines[start + 1 : end]:
-            if line.startswith("- [["):
-                target = line[len("- [[") :].split("]]", 1)[0]
-                if target == wikilink or target in seen_targets:
-                    continue
-                seen_targets.add(target)
-                entries.append(line)
-        entries.append(new_entry)
-        entries.sort(key=str.lower)
-
-        # Reassemble: heading, blank line, sorted entries, then preserve any trailing
-        # blank line that separated this section from the next.
-        rebuilt = [heading, *entries]
-        if end < len(lines):
-            rebuilt.append("")
-        new_lines = [*lines[:start], *rebuilt, *lines[end:]]
-        absolute.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     def append_log(self, action: str, subject: str, files: list[str]) -> None:
         """Append a dated action block plus the touched-file list to ``log.md``.

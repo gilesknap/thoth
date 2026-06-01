@@ -88,3 +88,7 @@ Content folders collapse 8 → 4:
 - `media` loses its dedicated folder; existing `media`-backlog logic in `summary.py`
   re-targets `actions/` filtered by the `media` tag / `to_consume` status.
 - `raw/` is untouched, consistent with ADR-0004.
+- The per-page catalog entry this ADR gave the reference types was later superseded by
+  ADR-0008: the one-line gloss moved from the agent-maintained `index.md` catalog onto
+  the page itself as a `summary:` frontmatter field (canonical + rebuildable), and
+  `index.md` became a static set of Bases dashboards.
