@@ -133,7 +133,7 @@ def test_type_constants_four_content_types_plus_inbox() -> None:
     # REFERENCE_TYPES are the lifecycle-free types: everything that is not actionable.
     assert REFERENCE_TYPES == {"entity", "note", "memory"}
     assert "action" not in REFERENCE_TYPES
-    assert VALID_SOURCES == {"slack", "mcp", "web", "manual", "cron"}
+    assert VALID_SOURCES == {"slack", "mcp", "web", "manual", "cron", "import"}
 
 
 def test_folder_type_contract_is_four_flat_folders_plus_inbox() -> None:
@@ -529,6 +529,14 @@ def test_write_page_rejects_invalid_source(vault: Vault) -> None:
     """A source outside VALID_SOURCES raises SchemaError."""
     with pytest.raises(SchemaError, match="source"):
         vault.write_page("entities", "foo", _valid_frontmatter(source="email"), "body")
+
+
+def test_write_page_accepts_import_source(vault: Vault) -> None:
+    """``source='import'`` (the thoth capture backfill, issue #80) is accepted."""
+    assert "import" in VALID_SOURCES
+    rel = vault.write_page("entities", "foo", _valid_frontmatter(source="import"), "b")
+    text = (vault.root / rel).read_text(encoding="utf-8")
+    assert "source: import" in text
 
 
 def test_write_page_non_string_type(vault: Vault) -> None:

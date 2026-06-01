@@ -88,8 +88,16 @@ life-admin families gone, "what do I know about X?" excludes the actionable ``ac
 type (todos and the to-consume media queue) by scoping to these reference types instead.
 """
 
-VALID_SOURCES: frozenset[str] = frozenset({"slack", "mcp", "web", "manual", "cron"})
-"""Every legal frontmatter ``source`` value (SPEC frontmatter contract)."""
+VALID_SOURCES: frozenset[str] = frozenset(
+    {"slack", "mcp", "web", "manual", "cron", "import"}
+)
+"""Every legal frontmatter ``source`` value (SPEC frontmatter contract).
+
+``import`` is the provenance of a page filed by the ``thoth capture <path>`` CLI
+backfill (issue #80): content that already lived on disk (a single file or a walked
+directory of Markdown + assets), fed through the same :class:`~thoth.ingest.Ingestor`
+pipeline as a Slack/MCP capture. :meth:`write_page` validates ``source`` against this
+set, so the value must live here for an imported page to be writable."""
 
 FOLDER_TYPE_CONTRACT: dict[str, frozenset[str]] = {
     "entities": frozenset({"entity"}),

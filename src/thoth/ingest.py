@@ -80,6 +80,7 @@ from thoth.llm import (
 )
 from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
 from thoth.vault import (
+    FOLDER_TYPE_CONTRACT,
     SUMMARY_TYPES,
     TYPE_ENUMERATION,
     VALID_TYPES,
@@ -114,6 +115,19 @@ _AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
 _TEXT_EXTS: frozenset[str] = frozenset(
     {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
 )
+
+# The single content folder each page ``type`` is written to (the inverse of the
+# folder->types :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`). Each content type maps to
+# exactly one folder, so the as-is import path (issue #80, ADR 0010) can route a
+# classify-chosen type to its folder without a curate-authored file-plan. Derived from
+# the same canonical contract rather than restated, so adding a folder is a one-place
+# edit. The ``inbox`` holding type is excluded -- as-is files into a content folder.
+_TYPE_FOLDER: dict[str, str] = {
+    page_type: folder
+    for folder, types in FOLDER_TYPE_CONTRACT.items()
+    if folder != "inbox"
+    for page_type in types
+}
 
 # How many curate LLM attempts before giving up: one initial call plus one corrective
 # retry that feeds the validation errors back to the model. A model that returns a
@@ -293,6 +307,10 @@ class IngestReport:
         deferred: ``True`` when the inbound item was persisted durably but the
             classify/curate pass was skipped because the LLM was unavailable; a later
             reindex/sweep re-curates the held raw item (SPEC section 6).
+        unchanged: ``True`` when this was a no-op re-run -- the raw source was
+            byte-identical to an existing one *and* a curated page already exists, so
+            the curate/navigation/retain passes were skipped (issue #95, task D). No
+            ``updated:`` date was bumped and no LLM curate call was spent.
         message: A short human-readable status line.
     """
 
@@ -305,6 +323,7 @@ class IngestReport:
     committed: bool = False
     conflict: bool = False
     deferred: bool = False
+    unchanged: bool = False
     message: str = ""
 
 
@@ -381,8 +400,27 @@ class Ingestor:
 
     # ---- the full pipeline -------------------------------------------------------
 
-    def ingest(self, capture: Capture) -> IngestReport:
+    def ingest(
+        self, capture: Capture, *, commit: bool = True, as_is: bool = False
+    ) -> IngestReport:
         """Run the bounded passes and return a structured report.
+
+        ``commit`` and ``as_is`` are the two seams the ``thoth capture`` backfill (issue
+        #80) drives; both default to the Slack/MCP behaviour, so existing callers are
+        unaffected:
+
+        * ``commit=False`` defers the git work to the caller. The per-call orient
+          (:meth:`_orient` pull) is skipped -- the batch caller pulls **once** up front
+          -- and the commit pass writes/logs to disk but does **not** call
+          :meth:`thoth.git_sync.GitSync.commit`, so staged changes accumulate in the
+          working tree for one batched commit. The returned report has
+          ``committed=False``. The deferred (LLM-unavailable) path honours it too.
+        * ``as_is=True`` is the low-touch import mode (ADR 0010): the cheap classify
+          call still runs (for routing only), but the expensive **curate** is SKIPPED.
+          The page is filed ONCE with the original body verbatim and a minimal derived
+          frontmatter into the classify-chosen folder, then indexed through the SAME
+          retain pass. No file-plan, no reshaping, no wikilink/dedup-merge, no summary
+          synthesis -- "files + indexes, skips curate" literally.
 
         Capture durability is **decoupled from the classify LLM call** (per issue #14):
         the inbound item is extracted and persisted to a durable ``inbox/`` holding page
@@ -410,7 +448,10 @@ class Ingestor:
                 LLM-availability failure is reported as deferred, not raised).
         """
         started = time.monotonic()
-        self._orient()
+        # commit=False means a batch caller (thoth capture) pulled once up front, so
+        # skip the per-call orient and let the staged changes accumulate for its commit.
+        if commit:
+            self._orient()
         holding = self.persist_inbound(capture)
         analysed = _Analysed(analysis=None)
         try:
@@ -424,17 +465,45 @@ class Ingestor:
                 fetched=analysed.fetched,
                 derived=analysed,
             )
-            candidates = self.fetch_candidates(classification)
-            plan = self.curate(
-                capture,
-                classification,
-                raw,
-                candidates,
-                analysis=analysis,
-                extracted_body=(
-                    holding.prefetched.body if holding.prefetched is not None else None
-                ),
-            )
+            # Task D (issue #95): true skip-on-unchanged short-circuit. When the raw
+            # source was byte-identical to an existing raw page (skipped_unchanged --
+            # which, because the raw path embeds the slug, means classify reproduced the
+            # prior routing) AND the curated page it produced is already on disk, the
+            # classify-routed curate work is pure churn: a re-run would re-spend the
+            # curate LLM call and bump the curated page's `updated:` date for no content
+            # change. Skip curate (and navigation/retain) entirely so a re-run to finish
+            # an interrupted import costs nothing for the parts already done. Applies to
+            # both the curate and as-is paths (each files to the same folder/slug).
+            curated = self._unchanged_curated(raw, classification)
+            if curated is not None:
+                return self._skip_unchanged(holding, classification, curated, commit)
+            if as_is:
+                # Low-touch import (ADR 0010): SKIP curate; file the original body
+                # verbatim into the classify-chosen folder. No second LLM call.
+                plan = self._file_as_is(
+                    capture,
+                    classification,
+                    raw,
+                    extracted_body=(
+                        holding.prefetched.body
+                        if holding.prefetched is not None
+                        else None
+                    ),
+                )
+            else:
+                candidates = self.fetch_candidates(classification)
+                plan = self.curate(
+                    capture,
+                    classification,
+                    raw,
+                    candidates,
+                    analysis=analysis,
+                    extracted_body=(
+                        holding.prefetched.body
+                        if holding.prefetched is not None
+                        else None
+                    ),
+                )
         except LLMUnavailableError as exc:
             # classify/curate (or the analyse call itself) deferred: capture_raw never
             # consumed the analyse-pass binary, so clean up its temp file here rather
@@ -450,7 +519,7 @@ class Ingestor:
                 exc,
                 (time.monotonic() - started) * 1000,
             )
-            return self._commit_deferred(holding, exc)
+            return self._commit_deferred(holding, exc, do_commit=commit)
 
         # Curation succeeded: the holding page is superseded by the curated/raw pages.
         if holding.result.raw_path is not None:
@@ -461,7 +530,7 @@ class Ingestor:
         self._retain_pages(page_paths, classification)
 
         report = self._build_report(capture, classification, raw, page_paths, plan)
-        committed = self._commit(report, classification)
+        committed = self._commit(report, classification, do_commit=commit)
         # Record the capture liveness marker only on a clean (non-conflict) ingest, so a
         # wedged sync leaves BOTH the capture and push markers stale -- silence is then
         # the heartbeat's diagnostic (issue #15). The push marker is recorded inside
@@ -481,6 +550,108 @@ class Ingestor:
             " [CONFLICT: unpushed]" if committed.conflict else "",
         )
         return committed
+
+    def _unchanged_curated(
+        self, raw: RawCaptureResult, cls: Classification
+    ) -> str | None:
+        """Return the existing curated path when this is a no-op re-run, else ``None``.
+
+        The skip-on-unchanged short-circuit (issue #95, task D) is only taken when BOTH
+        conditions hold, so it never skips genuine work:
+
+        * the raw-capture pass reported ``skipped_unchanged`` -- the source body was
+          byte-identical to an existing raw page. Because that raw path embeds the slug
+          (``raw/<subdir>/<slug>.md``), a match guarantees classify reproduced the prior
+          run's slug; a drifted slug would have created a fresh raw page instead.
+        * a curated page already exists at the classify-routed ``<folder>/<slug>.md``.
+
+        A type with no content folder (only ``inbox`` is excluded from
+        :data:`_TYPE_FOLDER`) or a missing curated page returns ``None`` so the caller
+        falls through to the normal curate/as-is pass -- the short-circuit is purely an
+        optimisation and is conservative by construction (a false negative just re-runs
+        curate; it never wrongly skips an absent page).
+        """
+        if raw.disposition != "skipped_unchanged":
+            return None
+        folder = _TYPE_FOLDER.get(cls.page_type)
+        if folder is None:
+            return None
+        rel = f"{folder}/{cls.slug}.md"
+        return rel if self._vault.page_exists(rel) else None
+
+    def _skip_unchanged(
+        self,
+        holding: _Holding,
+        cls: Classification,
+        curated_path: str,
+        do_commit: bool,
+    ) -> IngestReport:
+        """Terminal path for a no-op re-run: unchanged content already curated (#95 D).
+
+        Removes the (now superseded) holding page written this run by
+        :meth:`persist_inbound` -- exactly like the success path -- then returns an
+        ``unchanged`` report WITHOUT running the curate, navigation-log, or Hindsight
+        retain passes. So neither the curated page's ``updated:`` date nor the
+        ``log.md`` is churned and no LLM/index budget is re-spent for content already on
+        disk; the page stays searchable from its original retain. The holding-removal
+        deletion is committed (or, for the ``commit=False`` batch path, staged for the
+        caller's batched commit) just like a normal success, and the capture liveness
+        marker is recorded on a clean (non-conflict) run since the pipeline ran
+        healthily.
+        """
+        if holding.result.raw_path is not None:
+            self._vault.remove_page(holding.result.raw_path)
+        report = IngestReport(
+            page_paths=[],
+            raw_paths=[],
+            asset_paths=[],
+            obsidian_links=[],
+            wikilinks=[],
+            committed=False,
+            conflict=False,
+            unchanged=True,
+            message=f"Unchanged; already curated at {curated_path} (skipped).",
+        )
+        committed = self._commit_unchanged(report, cls, do_commit=do_commit)
+        if not committed.conflict:
+            self._record_marker(MARKER_CAPTURE)
+        return committed
+
+    def _commit_unchanged(
+        self, report: IngestReport, cls: Classification, *, do_commit: bool
+    ) -> IngestReport:
+        """Commit the holding-removal for a skip-on-unchanged run (issue #95, task D).
+
+        Mirrors :meth:`_commit_deferred`'s git handling but preserves the ``unchanged``
+        report's message instead of synthesising a "Filed N page(s)" line: a conflict is
+        surfaced on the report (the removal is local; never a ``--force``), a benign
+        "nothing to commit" leaves ``committed=False``, and a real push records the push
+        marker. ``do_commit=False`` defers the commit to the batch caller.
+        """
+        if not do_commit:
+            return report
+        try:
+            result = self._git.commit(cls.title or "unchanged capture")
+        except VaultConflictError as conflict:
+            return _replace_report(
+                report,
+                committed=False,
+                conflict=True,
+                message=(
+                    f"{report.message} (holding removal not pushed -- vault conflict; "
+                    f"resolve in Obsidian: {conflict})"
+                ),
+            )
+        except GitSyncError as exc:
+            raise IngestError(f"commit failed: {exc}") from exc
+        if result.committed:
+            self._record_marker(MARKER_PUSH)
+        return _replace_report(
+            report,
+            committed=result.committed,
+            conflict=False,
+            message=report.message,
+        )
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
 
@@ -957,6 +1128,94 @@ class Ingestor:
         # Unreachable: the loop either returns a written plan or re-raises on the last
         # attempt, but keep a definite terminator for the type checker.
         raise IngestError(f"file plan rejected after retries: {problems}")
+
+    # ---- pass 4 (alternative): file as-is, no curate (issue #80, ADR 0010) -------
+
+    def _file_as_is(
+        self,
+        capture: Capture,
+        cls: Classification,
+        raw: RawCaptureResult,
+        *,
+        extracted_body: str | None = None,
+    ) -> dict[str, Any]:
+        """File one page with the original body verbatim, skipping the curate LLM call.
+
+        The low-touch import mode (ADR 0010): the cheap classify call has already chosen
+        the routing (``type``/``slug``/``title``), so this writes ONE page into that
+        type's content folder with the **original body verbatim** and a minimal derived
+        frontmatter (``title``/``type``/``source``/``tags``) -- no second (curate) LLM
+        call, no reshaping, no wikilink/dedup-merge, no summary synthesis. Any saved
+        asset is embedded and any analysed OCR text appended (the same enrichment the
+        curated path applies), so a binary import is still searchable on its content.
+
+        Returns a file-plan-shaped dict (with ``_written`` and a single ``pages`` entry)
+        so the shared navigation/report tail in :meth:`ingest` treats it like a curate
+        plan; the page itself is written here through the confined
+        :meth:`thoth.vault.Vault.write_page`, which re-validates the folder/type/slug
+        contract.
+
+        Args:
+            capture: The inbound item (its ``text``/``source`` are the body/provenance).
+            cls: The validated classification (supplies folder routing, slug, title).
+            raw: The raw-capture result (its asset embeds are appended).
+            extracted_body: A pre-extracted text body (URL article / audio transcript)
+                used as the page body when the capture has no inline ``text``.
+
+        Returns:
+            A file-plan-shaped dict whose ``_written`` lists the single filed page path.
+
+        Raises:
+            IngestError: if the classification routes to an unknown type/folder or the
+                vault rejects the write.
+        """
+        folder = _TYPE_FOLDER.get(cls.page_type)
+        if folder is None:
+            raise IngestError(
+                f"as-is import: classification type {cls.page_type!r} has no content "
+                "folder"
+            )
+        body = self._as_is_body(capture, raw, extracted_body)
+        frontmatter: dict[str, Any] = {
+            "title": cls.title,
+            "type": cls.page_type,
+            "source": capture.source,
+            "tags": [],
+        }
+        try:
+            rel = self._vault.write_page(folder, cls.slug, frontmatter, body)
+        except (SchemaError, SlugError, VaultError) as exc:
+            raise IngestError(
+                f"as-is import rejected page {folder}/{cls.slug}: {exc}"
+            ) from exc
+        return {
+            "_written": [rel],
+            "pages": [{"frontmatter": dict(frontmatter)}],
+            "log": {"subject": cls.title},
+        }
+
+    def _as_is_body(
+        self,
+        capture: Capture,
+        raw: RawCaptureResult,
+        extracted_body: str | None,
+    ) -> str:
+        """Build the verbatim page body for an as-is import (no model reshaping).
+
+        Prefers the inline ``text`` (the Markdown/text upload case -- the body IS the
+        file), then a pre-extracted body (URL article / audio transcript), then a stub
+        naming the kept asset for a binary with no text. The saved-asset embeds are
+        appended so the binary renders in Obsidian.
+        """
+        if capture.text is not None:
+            body = capture.text
+        elif extracted_body and extracted_body.strip():
+            body = extracted_body
+        elif raw.asset_paths:
+            body = ""
+        else:
+            body = "_Imported with no extractable text._"
+        return self._append_embeds(body, {}, raw)
 
     def _parse_and_validate_plan(self, response: Any) -> dict[str, Any]:
         """Parse the curate response and validate it against the file-plan contract.
@@ -1628,8 +1887,16 @@ class Ingestor:
 
     # ---- pass 7: commit ----------------------------------------------------------
 
-    def _commit(self, report: IngestReport, cls: Classification) -> IngestReport:
+    def _commit(
+        self, report: IngestReport, cls: Classification, *, do_commit: bool = True
+    ) -> IngestReport:
         """Commit the batch; surface a rebase conflict as a fail-loud report.
+
+        ``do_commit=False`` (the ``thoth capture`` batch path, issue #80) defers the git
+        work to the caller: the navigation log was already appended, the pages are
+        staged in the working tree, and the caller commits+pushes the whole batch via
+        :meth:`thoth.git_sync.GitSync.commit`. This method then returns the report
+        unchanged (``committed=False``) without touching git.
 
         Returns:
             The report with ``committed``/``conflict``/``message`` populated.
@@ -1637,6 +1904,15 @@ class Ingestor:
         Raises:
             IngestError: on a non-conflict git failure.
         """
+        if not do_commit:
+            return _replace_report(
+                report,
+                committed=False,
+                conflict=False,
+                message=(
+                    f"Filed {len(report.page_paths)} page(s) (batch commit pending)."
+                ),
+            )
         subject = cls.title or "capture"
         try:
             result = self._git.commit(subject)
@@ -1665,7 +1941,7 @@ class Ingestor:
         )
 
     def _commit_deferred(
-        self, holding: _Holding, exc: LLMUnavailableError
+        self, holding: _Holding, exc: LLMUnavailableError, *, do_commit: bool = True
     ) -> IngestReport:
         """Commit the durable holding page; report deferred curation (SPEC section 6).
 
@@ -1676,9 +1952,16 @@ class Ingestor:
         report is returned so the Slack/MCP reply can say "saved raw, curation deferred"
         and a later reindex/sweep re-curates the held item.
 
+        ``do_commit=False`` (the ``thoth capture`` batch path, issue #80) keeps the
+        navigation log append (the hold is staged in the working tree) but leaves the
+        git commit to the caller's batched commit -- exactly like the non-deferred
+        :meth:`_commit`, so the deferred path is covered too.
+
         Args:
             holding: The durable pre-LLM holding write.
             exc: The :class:`LLMUnavailableError` that triggered the deferral.
+            do_commit: When ``False``, append the log but defer the git commit to the
+                caller's batch commit.
 
         Returns:
             A ``deferred`` :class:`IngestReport` naming the held raw page.
@@ -1700,10 +1983,14 @@ class Ingestor:
             conflict=False,
             deferred=True,
             message=(
-                "Saved raw, curation deferred -- LLM unavailable. A later "
-                f"reindex/sweep will re-curate the held item. ({exc})"
+                f"Saved raw, curation deferred ({exc}). The item is held durably "
+                "in inbox/ but is not re-curated automatically -- re-run the capture "
+                "to curate it once capacity is available."
             ),
         )
+        if not do_commit:
+            # The batch caller (thoth capture) commits the run; the hold is staged.
+            return report
         try:
             result = self._git.commit("deferred capture")
         except VaultConflictError as conflict:
@@ -2043,5 +2330,6 @@ def _replace_report(
         committed=committed,
         conflict=conflict,
         deferred=report.deferred,
+        unchanged=report.unchanged,
         message=message,
     )

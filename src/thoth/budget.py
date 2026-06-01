@@ -340,26 +340,35 @@ def make_budget_guard(
     *,
     alerter: BudgetAlerterLike | None = None,
     clock: Callable[[], datetime] | None = None,
+    limit: int | None = None,
 ) -> BudgetGuard:
     """Build a :class:`BudgetGuard` over the deployment's state DB and configured cap.
 
-    The cap is :attr:`thoth.config.Config.daily_llm_budget`
+    The cap defaults to :attr:`thoth.config.Config.daily_llm_budget`
     (``THOTH_DAILY_LLM_BUDGET``); a non-positive value yields a disabled guard. The same
     state DB backs every guard, so independently-constructed guards at the Slack / MCP /
     reindex entrypoints share one set of per-day counters (the DB is the coordination
     point) -- no single instance need be threaded through the graph.
 
+    ``limit`` is a **transient per-run override** (issue #80): the ``thoth capture``
+    backfill passes ``--budget N`` so a bulk import can raise (or, with ``0``, disable
+    via the guard's ``limit <= 0`` rule) the cap for that one run without mutating the
+    frozen :class:`~thoth.config.Config`. ``None`` (the default) preserves today's
+    behaviour, so the Slack / MCP / reindex callers that pass nothing are unaffected.
+
     Args:
         config: The frozen runtime configuration (the budget + the state DB path).
         alerter: The optional errors-to-Slack seam for the one-per-day notification.
         clock: An injectable current-time source forwarded to the guard.
+        limit: An optional transient override for the daily cap; ``None`` uses
+            ``config.daily_llm_budget``. A non-positive value disables the guard.
 
     Returns:
-        A wired :class:`BudgetGuard` (disabled when the budget is non-positive).
+        A wired :class:`BudgetGuard` (disabled when the effective budget is <= 0).
     """
     return BudgetGuard(
         store=BudgetStore(config.state_db_path),
-        limit=config.daily_llm_budget,
+        limit=config.daily_llm_budget if limit is None else limit,
         alerter=alerter,
         clock=clock,
     )
