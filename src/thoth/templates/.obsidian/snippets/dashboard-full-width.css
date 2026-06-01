@@ -3,9 +3,21 @@
    Seeded into <vault>/.obsidian/snippets/ by the vault spine. Enable it under
    Settings → Appearance → CSS snippets (or ship an appearance.json that lists it
    under `enabledCssSnippets`). Targets only pages with
-   `cssclasses: dashboard-full-width` in their frontmatter — i.e. index.md. */
+   `cssclasses: dashboard-full-width` in their frontmatter — i.e. index.md.
 
-/* Reading view + Live Preview content area */
+   Works under BOTH stock Obsidian and the Minimal theme, in Reading view and
+   Live Preview. The two themes constrain width differently, so we hit both:
+     - Stock Obsidian caps the scroll containers (.markdown-preview-sizer /
+       .cm-sizer / .cm-contentContainer) via --file-line-width.  → block 1
+     - Minimal leaves those containers alone and instead sizes content from the
+       --line-width (40rem) / --max-width (88%) variables declared on <body>,
+       and caps each *top-level block* (paragraphs, callouts, embeds) at
+       var(--line-width) rather than the container.  → blocks 2 + 3
+   Block 3 is what frees the embedded Bases callouts: they render inside a
+   .cm-embed-block (Live Preview) / .markdown-preview-sizer > div (Reading), so
+   widening the container alone never reached them. */
+
+/* 1. Widen the scroll / content containers (stock Obsidian's cage). */
 .dashboard-full-width .markdown-preview-sizer,
 .dashboard-full-width.markdown-preview-view,
 .markdown-source-view.mod-cm6.dashboard-full-width .cm-sizer,
@@ -14,9 +26,42 @@
   width: 100% !important;
 }
 
-/* Embedded Bases tables should use the full width too */
-.dashboard-full-width .bases-view,
+/* 1b. Inset the content from the editor edges so full-width still breathes.
+   Padding on the sizer (box-sizing: border-box) shrinks the inner content box,
+   so every 100%-wide block below respects the gutter. Tweak --dashboard-gutter
+   to taste. */
+.dashboard-full-width .markdown-preview-sizer,
+.markdown-source-view.mod-cm6.dashboard-full-width .cm-sizer {
+  --dashboard-gutter: 2.5rem;
+  padding-inline: var(--dashboard-gutter) !important;
+  box-sizing: border-box !important;
+}
+
+/* 2. Override the width variables for this page (Minimal's cage + stock's
+   readable-line-length lever). Cascades to content, tables, images, the inline
+   title and the metadata/properties block. */
+.dashboard-full-width,
+.markdown-source-view.mod-cm6.dashboard-full-width {
+  --line-width: 100% !important;
+  --max-width: 100% !important;
+  --file-line-width: 100% !important;
+}
+
+/* 3. Widen the per-block wrappers Minimal caps at var(--line-width), plus the
+   embed/callout/bases chain inside them. A base embed's wrapper is
+   .internal-embed.bases-embed (NOT .markdown-embed, which is note embeds), and
+   widening .bases-view alone is useless while its wrappers stay narrow — so
+   widen the whole chain. */
+.dashboard-full-width .markdown-preview-sizer > div,
+.markdown-source-view.mod-cm6.dashboard-full-width .cm-content > div,
+.dashboard-full-width .cm-embed-block,
+.dashboard-full-width .callout,
+.dashboard-full-width .callout-content,
+.dashboard-full-width .internal-embed,
 .dashboard-full-width .markdown-embed,
+.dashboard-full-width .bases-embed,
+.dashboard-full-width .block-language-base,
+.dashboard-full-width .bases-view,
 .dashboard-full-width table {
   width: 100% !important;
   max-width: none !important;
