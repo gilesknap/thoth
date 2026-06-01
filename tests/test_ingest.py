@@ -265,33 +265,6 @@ class FakeAnalyser:
         return self._excalidraw
 
 
-class FakeScanner:
-    """A fake :func:`thoth.scanner.clean_document` for the ``document`` branch (#68).
-
-    Records the calls and returns the canned cleaned bytes (or ``None`` to model the
-    no-document-quad graceful degrade), or raises ``error`` so a test proves the ingest
-    pass still files the original cleanly when the (best-effort) cleanup blows up.
-    """
-
-    def __init__(
-        self,
-        *,
-        cleaned: bytes | None = None,
-        error: Exception | None = None,
-    ) -> None:
-        """Configure the canned cleaned bytes or the error to raise."""
-        self._cleaned = cleaned
-        self._error = error
-        self.calls: list[tuple[bytes, str]] = []
-
-    def __call__(self, image_bytes: bytes, *, ext: str) -> bytes | None:
-        """Record the call and return the canned cleaned bytes (or raise)."""
-        self.calls.append((image_bytes, ext))
-        if self._error is not None:
-            raise self._error
-        return self._cleaned
-
-
 # --------------------------------------------------------------------------- #
 # Canned model output.
 # --------------------------------------------------------------------------- #
@@ -504,16 +477,12 @@ def _build_ingestor(
     markers: MarkerStore | None = None,
     guard: Any = None,
     analyser: Any = None,
-    scanner: Any = None,
 ) -> Ingestor:
     """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes.
 
     ``analyser`` defaults to a :class:`FakeAnalyser` returning an empty analysis, so a
     binary capture's analyse pass (issue #42) makes no scripted-LLM call and leaves
-    routing/body unchanged unless a test supplies a richer fake. ``scanner`` defaults to
-    a :class:`FakeScanner` that returns ``None`` (no cleaned scan), so the OpenCV
-    optional dep is never touched and a ``document`` capture files just the original
-    unless a test injects a richer scanner (issue #68).
+    routing/body unchanged unless a test supplies a richer fake.
     """
     llm = LLM(harness.config, client=client, guard=guard)
     return Ingestor(
@@ -525,7 +494,6 @@ def _build_ingestor(
         harness.git,
         markers=markers,
         analyser=analyser if analyser is not None else FakeAnalyser(),  # type: ignore[arg-type]  # structural fake
-        scanner=scanner if scanner is not None else FakeScanner(),
     )
 
 
@@ -1072,12 +1040,12 @@ def test_pdf_capture_writes_paper_page_and_keeps_binary(
     assert "base64" not in paper.body.lower()
 
 
-def test_pdf_capture_never_derives_diagram_or_scan_artifacts(
+def test_pdf_capture_never_derives_diagram_artifact(
     harness: IngestHarness, tmp_path: Path
 ) -> None:
-    """The derived-artifact branch is IMAGE-only: a PDF leaves reconstruct/scanner
-    untouched (issue #68), pinning the ``kind is CaptureKind.IMAGE`` guard against a
-    regression that moved derivation ahead of it."""
+    """The derived-artifact branch is IMAGE-only: a PDF leaves reconstruct untouched
+    (issue #68), pinning the ``kind is CaptureKind.IMAGE`` guard against a regression
+    that moved derivation ahead of it."""
     pdf_src = tmp_path / "doc.pdf"
     pdf_src.write_bytes(b"%PDF-1.7\n" + b"pdf-bytes")
     classify = _classify_json(
@@ -1087,14 +1055,12 @@ def test_pdf_capture_never_derives_diagram_or_scan_artifacts(
         folder="notes", slug="a-paper", page_type="note", title="A Paper"
     )
     analyser = FakeAnalyser(analysis=_document_analysis(), excalidraw=_EXCALIDRAW_MD)
-    scanner = FakeScanner(cleaned=b"\x89PNG\r\n\x1a\n" + b"would-be-scan")
     ingestor = _build_ingestor(
         harness,
         client=_ScriptedClient(classify, plan),
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
         analyser=analyser,
-        scanner=scanner,
     )
 
     ingestor.ingest(Capture(path=pdf_src, filename="doc.pdf"))
@@ -1102,9 +1068,7 @@ def test_pdf_capture_never_derives_diagram_or_scan_artifacts(
     # The PDF WAS analysed, but the IMAGE-only derivation branch never ran.
     assert analyser.pdf_calls == [pdf_src.read_bytes()]
     assert analyser.excalidraw_calls == []
-    assert scanner.calls == []
     assert not (harness.work / "raw/assets/a-paper.excalidraw.md").exists()
-    assert not (harness.work / "raw/assets/a-paper-scan.png").exists()
 
 
 def _pdf_binary(
@@ -2703,11 +2667,12 @@ def test_model_written_excalidraw_md_embed_is_normalised_not_duplicated(
     assert page_text.count("![[flow-sketch.excalidraw]]") == 1
 
 
-def test_document_image_saves_cleaned_scan_and_embeds_it(
+def test_document_image_derives_no_extra_asset(
     harness: IngestHarness, tmp_path: Path
 ) -> None:
-    """A document-kind image saves ``<slug>-scan.png`` next to the original and the
-    curated body embeds it (issue #68)."""
+    """A document-kind image files just the original -- the IMAGE-only derivation
+    branch only reconstructs ``diagram`` kinds, so a ``document`` gets no second vision
+    call and no extra asset (its value is the structured-markdown transcription)."""
     src = tmp_path / "invoice.png"
     src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"invoice-bytes")
     classify = _classify_json(
@@ -2720,30 +2685,22 @@ def test_document_image_saves_cleaned_scan_and_embeds_it(
         title="Widget Invoice",
         body="An invoice.",
     )
-    scanner = FakeScanner(cleaned=b"\x89PNG\r\n\x1a\n" + b"cleaned-scan-bytes")
-    analyser = FakeAnalyser(analysis=_document_analysis())
+    analyser = FakeAnalyser(analysis=_document_analysis(), excalidraw=_EXCALIDRAW_MD)
     ingestor = _build_ingestor(
         harness,
         client=_ScriptedClient(classify, plan),
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
         analyser=analyser,
-        scanner=scanner,
     )
 
     report = ingestor.ingest(Capture(path=src, filename="invoice.png"))
 
-    assert report.asset_paths == [
-        "raw/assets/widget-invoice.png",
-        "raw/assets/widget-invoice-scan.png",
-    ]
-    cleaned = (harness.work / "raw/assets/widget-invoice-scan.png").read_bytes()
-    assert cleaned == b"\x89PNG\r\n\x1a\n" + b"cleaned-scan-bytes"
-    # The scanner saw the SAME image bytes as the analyse call (no re-read).
-    assert scanner.calls == [(src.read_bytes(), "png")]
+    assert report.asset_paths == ["raw/assets/widget-invoice.png"]
+    # A document is NOT a diagram: the reconstruction call is never made.
+    assert analyser.excalidraw_calls == []
     page_text = (harness.work / "actions/widget-invoice.md").read_text(encoding="utf-8")
     assert "![[widget-invoice.png]]" in page_text
-    assert "![[widget-invoice-scan.png]]" in page_text
 
 
 def test_diagram_reconstruction_none_files_original_cleanly(
@@ -2782,7 +2739,7 @@ def test_diagram_reconstruction_none_files_original_cleanly(
 def test_derived_artifact_exception_files_original_cleanly(
     harness: IngestHarness, tmp_path: Path
 ) -> None:
-    """A reconstruction/scanner that RAISES is best-effort: the original is still filed
+    """A reconstruction that RAISES is best-effort: the original is still filed
     cleanly, never deferred or lost (issue #68)."""
     src = tmp_path / "raises.png"
     src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"raises-bytes")
@@ -2812,37 +2769,6 @@ def test_derived_artifact_exception_files_original_cleanly(
     assert report.deferred is False
     assert report.asset_paths == ["raw/assets/raises.png"]
     assert report.page_paths == ["notes/raises.md"]
-
-
-def test_document_scanner_exception_files_original_cleanly(
-    harness: IngestHarness, tmp_path: Path
-) -> None:
-    """A scanner that RAISES is best-effort: the original document is still filed
-    cleanly, no cleaned scan, no defer (issue #68)."""
-    src = tmp_path / "doc.png"
-    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"doc-bytes")
-    classify = _classify_json(page_type="memory", slug="doc", title="Doc", concepts=[])
-    plan = _file_plan_json(
-        folder="notes",
-        slug="doc",
-        page_type="note",
-        title="Doc",
-        body="x.",
-    )
-    ingestor = _build_ingestor(
-        harness,
-        client=_ScriptedClient(classify, plan),
-        extractor=FakeExtractor(),
-        hindsight=FakeHindsight(),
-        analyser=FakeAnalyser(analysis=_document_analysis()),
-        scanner=FakeScanner(error=RuntimeError("cv2 exploded")),
-    )
-
-    report = ingestor.ingest(Capture(path=src, filename="doc.png"))
-
-    assert report.deferred is False
-    assert report.asset_paths == ["raw/assets/doc.png"]
-    assert report.page_paths == ["notes/doc.md"]
 
 
 def test_diagram_reingest_is_idempotent(harness: IngestHarness, tmp_path: Path) -> None:
@@ -2939,38 +2865,3 @@ def test_diagram_reingest_with_different_reconstruction_never_aborts(
     # The original reconstruction is left on disk untouched (never overwritten).
     kept = (harness.work / "raw/assets/wb.excalidraw.md").read_text(encoding="utf-8")
     assert "rectangle" in kept
-
-
-def test_document_scanner_none_files_original_cleanly(
-    harness: IngestHarness, tmp_path: Path
-) -> None:
-    """A scanner that finds no page (returns ``None``) -- the production-likely OpenCV
-    outcome -- still files the original document cleanly: no ``-scan`` asset, no defer
-    (issue #68). Mirrors :func:`test_diagram_reconstruction_none_files_original_cleanly`
-    for the document branch.
-    """
-    src = tmp_path / "page.png"
-    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"page-bytes")
-    classify = _classify_json(
-        page_type="memory", slug="page", title="Page", concepts=[]
-    )
-    plan = _file_plan_json(
-        folder="notes", slug="page", page_type="note", title="Page", body="x."
-    )
-    scanner = FakeScanner(cleaned=None)
-    ingestor = _build_ingestor(
-        harness,
-        client=_ScriptedClient(classify, plan),
-        extractor=FakeExtractor(),
-        hindsight=FakeHindsight(),
-        analyser=FakeAnalyser(analysis=_document_analysis()),
-        scanner=scanner,
-    )
-
-    report = ingestor.ingest(Capture(path=src, filename="page.png"))
-
-    assert report.deferred is False
-    assert report.asset_paths == ["raw/assets/page.png"]
-    assert report.page_paths == ["notes/page.md"]
-    # The scanner was consulted (document kind) but yielded no cleaned scan.
-    assert scanner.calls == [(src.read_bytes(), "png")]

@@ -324,6 +324,7 @@ def test_reconstruct_excalidraw_builds_envelope() -> None:
     assert scene["files"] == {}
 
     elements = scene["elements"]
+    by_id = {element["id"]: element for element in elements}
     by_type: dict[str, list[dict[str, Any]]] = {}
     for element in elements:
         by_type.setdefault(element["type"], []).append(element)
@@ -331,7 +332,7 @@ def test_reconstruct_excalidraw_builds_envelope() -> None:
         assert element["id"]
         assert element["strokeColor"] == "#1e1e1e"
         assert element["isDeleted"] is False
-    # Two boxes, three text elements (two labels + the title), one arrow.
+    # Two boxes, three text elements (two box labels + the title), one arrow.
     assert len(by_type["rectangle"]) == 2
     assert len(by_type["text"]) == 3
     assert {t["text"] for t in by_type["text"]} == {
@@ -339,11 +340,31 @@ def test_reconstruct_excalidraw_builds_envelope() -> None:
         "Device",
         "Boot architecture",
     }
+    # A box label is BOUND to its box: containerId -> the box, the box's boundElements
+    # -> the label, so the text is a property of the box (not a loose overlaid label).
+    n1_label = by_id["n1-label"]
+    assert n1_label["containerId"] == "n1"
+    assert n1_label["textAlign"] == "center"
+    assert {"type": "text", "id": "n1-label"} in by_id["n1"]["boundElements"]
+    # The free-standing title is unbound.
+    assert by_id["t1"]["containerId"] is None
+
     arrow = by_type["arrow"][0]
-    # The arrow is routed between the two boxes' centres and carries a real arrowhead.
     assert arrow["endArrowhead"] == "arrow"
+    # The arrow SNAPS to the boxes' edges (not their centres): n1 spans y=100..180 and
+    # n2 spans y=300..380, both centred on x=180. The arrow leaves n1's bottom edge and
+    # reaches n2's top edge, each offset by the 8px binding gap.
+    assert arrow["x"] == 180.0
+    assert arrow["y"] == 188.0  # n1 bottom edge (180) + 8px gap
     assert arrow["points"][0] == [0.0, 0.0]
-    assert arrow["points"][1] == [0.0, 200.0]  # n1 centre -> n2 centre, straight down
+    assert arrow["points"][1] == [0.0, 104.0]  # down to n2 top edge (300) - 8px gap
+    # The bond is recorded both ways: the arrow binds to each box, and each box's
+    # boundElements references the arrow.
+    assert arrow["startBinding"]["elementId"] == "n1"
+    assert arrow["endBinding"]["elementId"] == "n2"
+    assert arrow["startBinding"]["gap"] == 8.0
+    assert {"type": "arrow", "id": "a1"} in by_id["n1"]["boundElements"]
+    assert {"type": "arrow", "id": "a1"} in by_id["n2"]["boundElements"]
 
 
 def test_reconstruct_excalidraw_dangling_connector_is_dropped() -> None:
@@ -370,6 +391,51 @@ def test_reconstruct_excalidraw_dangling_connector_is_dropped() -> None:
     scene = _parse_excalidraw_scene(markdown)
     assert not [e for e in scene["elements"] if e["type"] == "arrow"]
     assert [e for e in scene["elements"] if e["type"] == "rectangle"]
+
+
+def test_reconstruct_excalidraw_connector_label_is_bound_to_the_line() -> None:
+    """A connector that carries a 'text' label gets a text element bound to the arrow
+    (containerId -> the arrow, the arrow's boundElements -> the label), placed at the
+    line's midpoint -- so the label sits on the line it labels, not crossing it."""
+    specs = [
+        {
+            "id": "n1",
+            "type": "rectangle",
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 60,
+            "text": "A",
+        },
+        {
+            "id": "n2",
+            "type": "rectangle",
+            "x": 0,
+            "y": 300,
+            "width": 100,
+            "height": 60,
+            "text": "B",
+        },
+        {"id": "a1", "type": "arrow", "from": "n1", "to": "n2", "text": "depends on"},
+    ]
+    client = _CapturingClient(json.dumps({"elements": specs}))
+    analyser = Analyser(LLM(_config(), client=client))
+
+    markdown = analyser.reconstruct_excalidraw(b"bytes", ext="png")
+
+    assert markdown is not None
+    scene = _parse_excalidraw_scene(markdown)
+    by_id = {e["id"]: e for e in scene["elements"]}
+    label = by_id["a1-label"]
+    assert label["text"] == "depends on"
+    assert label["containerId"] == "a1"
+    assert {"type": "text", "id": "a1-label"} in by_id["a1"]["boundElements"]
+    # The label is centred on the line's midpoint (between n1's bottom + n2's top edge).
+    arrow = by_id["a1"]
+    mid_y = arrow["y"] + arrow["points"][-1][1] / 2
+    assert label["y"] < mid_y < label["y"] + label["height"] + 1
+    # The connector label is also indexed for Obsidian search.
+    assert "depends on ^a1-label" in markdown
 
 
 def test_reconstruct_excalidraw_passes_diagram_model() -> None:

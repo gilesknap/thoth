@@ -261,13 +261,12 @@ Same operation as the Hermes spec, minus Hermes tool names, run as **bounded val
 > CURATE, a binary capture (image/PDF) is run through `analyse.py`: one transient-base64 vision
 > call returns the extracted text, a suggested type, entities/concepts **and an image `kind`**
 > (`diagram` | `document` | `screenshot` | `photo`). The kind rides on that *same* call (no extra
-> classifier pre-call) and branches into best-effort *derived assets* saved alongside the original
-> and embedded with `![[…]]` — the original is always kept and a derivation failure never defers or
-> loses the capture: **(a) diagram** → a second vision call reconstructs an editable
-> `<slug>.excalidraw.md`; **(b) document** → `scanner.py` (model-free OpenCV, lazy optional dep)
-> produces a de-warped/thresholded `<slug>-scan.png`; **(c) document** → the analyse `text` is a
-> faithful structured-markdown transcription (headings/lists/tables) rather than loose OCR. Both
-> derivations reuse the bytes already read and are charged against the daily budget guard.
+> classifier pre-call) and branches into best-effort, kind-specific handling — the original is always
+> kept and a derivation failure never defers or loses the capture: **(a) diagram** → a second vision
+> call reconstructs an editable `<slug>.excalidraw.md`, saved alongside the original and embedded with
+> `![[…]]`; **(b) document** → the analyse `text` is a faithful structured-markdown transcription
+> (headings/lists/tables) rather than loose OCR. The reconstruction reuses the bytes already read and
+> is charged against the daily budget guard.
 
 > **Capture surfaces & binaries (resolved).** Binary bytes can only enter where the *server* can read them.
 > Under the **VPS deployment** (appliance + MCP server on the VPS), the channels are:

@@ -35,6 +35,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -116,9 +117,9 @@ class Analysis:
         kind: The coarse image kind the model reported -- one of ``"diagram"``,
             ``"document"``, ``"photo"`` or ``"screenshot"``, ``""`` when unknown. This
             single vision call folds the kind detection in (ADR 0009) rather than paying
-            a separate pre-call: the ingest pass branches on it to derive best-effort
-            artifacts (an Excalidraw reconstruction of a hand-drawn ``diagram``, a
-            cleaned scan of a ``document``).
+            a separate pre-call: the ingest pass branches on it to derive a best-effort
+            Excalidraw reconstruction of a hand-drawn ``diagram``, and to ask for a
+            faithful structured-markdown transcription of a ``document``.
     """
 
     text: str = ""
@@ -385,12 +386,19 @@ _EXCALIDRAW_PROMPT = (
     "- 'id': a short unique string for the element (e.g. 'n1', 'n2', 'a1').\n"
     "- 'type': one of 'rectangle', 'ellipse', 'diamond', 'text', 'arrow', 'line'.\n"
     "- shapes ('rectangle'/'ellipse'/'diamond'): 'x','y','width','height' (top-left + "
-    "size, in pixels) and 'text' for the label drawn inside the shape.\n"
-    "- 'text': 'x','y' and 'text' (a free-standing label/title).\n"
-    "- connectors ('arrow'/'line'): 'from' and 'to' set to the ids of the shapes they "
-    "join (preferred); or give explicit 'x','y' and 'points'.\n"
+    "size, in pixels) and 'text' for the label that belongs INSIDE the shape. Put any "
+    "text that sits inside a box in that box's 'text' field -- do NOT emit it as a "
+    "separate free-standing 'text' element.\n"
+    "- 'text': 'x','y' and 'text' -- ONLY for a label that is NOT inside a shape (a "
+    "title or a free-floating annotation).\n"
+    "- connectors ('arrow'/'line'): whenever the connector joins two shapes, give "
+    "'from' and 'to' as the ids of those shapes (NOT explicit points) so it attaches "
+    "to the boxes; only use explicit 'x','y','points' for a connector that joins no "
+    "shape. A connector may also carry a 'text' label for the relationship (e.g. "
+    "'depends on') -- it is placed on the line itself.\n"
     "Lay the coordinates out (roughly a 600-1000px canvas) to mirror the diagram's "
-    "arrangement, with arrows reflecting the real connections and direction."
+    "arrangement, with arrows reflecting the real connections and direction. Leave "
+    "enough space between boxes that the connectors between them are clearly visible."
 )
 
 
@@ -444,6 +452,11 @@ _EXCALIDRAW_BANNER = (
 # across plugin versions). Per-type fields are layered on top in the builders below.
 _EXCALIDRAW_TEXT_FONT_SIZE: int = 20
 _EXCALIDRAW_LINE_HEIGHT: float = 1.25
+# Padding between a bound label's text box and its container's edge (Excalidraw's own
+# default container padding), and the gap a bound arrow leaves between its endpoint and
+# the shape edge it snaps to (so the arrowhead does not sit on the border).
+_EXCALIDRAW_TEXT_PADDING: float = 5.0
+_EXCALIDRAW_BINDING_GAP: float = 8.0
 
 
 def _excalidraw_markdown(
@@ -511,19 +524,27 @@ def _build_excalidraw_elements(
     properties the renderer expects (issue #68 live-verify: the earlier minimal shapes
     with a ``label`` shorthand rendered as empty boxes). Specifically:
 
-    * A ``rectangle``/``ellipse``/``diamond`` becomes a shape element plus -- when it
-      carries a ``text`` label -- a separate ``text`` element centred over it (a plain
-      overlaid label, not a bound-container, which keeps the scene simple + valid while
-      still showing the text).
+    * A ``rectangle``/``ellipse``/``diamond`` becomes a shape element, and -- when it
+      carries a ``text`` label -- a **bound** text element: the label's ``containerId``
+      points at the shape and the shape's ``boundElements`` references the label, so the
+      text is a *property of the box* (Excalidraw centres, wraps, and moves it with the
+      box) rather than a loose overlaid label.
     * A ``text`` spec becomes a free-standing text element.
-    * An ``arrow``/``line`` is routed between the centres of the shapes named by its
-      ``from``/``to`` ids (or explicit ``x``/``y``/``points`` as a fallback), so links
-      mirror the real diagram.
+    * An ``arrow``/``line`` joining two shapes (``from``/``to`` ids) is **bound** to
+      them: its endpoints snap to the point on each box's edge facing the other box
+      (not the centre) with a small gap, it carries ``startBinding``/``endBinding``, and
+      each shape's ``boundElements`` references the connector -- so the arrow tracks the
+      boxes and never plunges into their middles. A connector with explicit
+      ``x``/``y``/``points`` (no resolvable shapes) is emitted unbound as a fallback.
+    * A connector's own ``text`` label is bound to the connector (``containerId`` = the
+      arrow), so Excalidraw places it at the line's midpoint over a masked background --
+      near the line it labels, never crossing it.
 
-    Unknown/!malformed specs are skipped. Returns ``(elements, text_index_rows)`` where
+    Unknown/malformed specs are skipped. Returns ``(elements, text_index_rows)`` where
     the rows feed the ``## Text Elements`` section.
     """
-    centres: dict[str, tuple[float, float]] = {}
+    shapes: dict[str, dict[str, Any]] = {}
+    geometry: dict[str, tuple[float, float, float, float]] = {}
     elements: list[dict[str, Any]] = []
     text_rows: list[dict[str, str]] = []
     connectors: list[dict[str, Any]] = []
@@ -533,12 +554,15 @@ def _build_excalidraw_elements(
         eid = _excalidraw_id(spec, index)
         if etype in ("rectangle", "ellipse", "diamond"):
             x, y, w, h = _spec_geometry(spec, default_w=160.0, default_h=80.0)
-            elements.append(_shape_element(eid, str(etype), x, y, w, h))
-            centres[eid] = (x + w / 2, y + h / 2)
+            shape = _shape_element(eid, str(etype), x, y, w, h)
+            elements.append(shape)
+            shapes[eid] = shape
+            geometry[eid] = (x, y, w, h)
             label = _spec_label(spec)
             if label:
                 label_id = f"{eid}-label"
-                elements.append(_text_element(label_id, label, x, y, w, h))
+                elements.append(_bound_text_element(label_id, label, eid, (x, y, w, h)))
+                _add_bound_element(shape, "text", label_id)
                 text_rows.append({"id": label_id, "text": label})
         elif etype == "text":
             label = _spec_label(spec)
@@ -547,18 +571,44 @@ def _build_excalidraw_elements(
             x, y, w, h = _spec_geometry(
                 spec, default_w=_estimate_text_width(label), default_h=25.0
             )
-            elements.append(_text_element(eid, label, x, y, w, h, centred=False))
+            elements.append(_free_text_element(eid, label, x, y))
             text_rows.append({"id": eid, "text": label})
         elif etype in ("arrow", "line"):
             connectors.append({"id": eid, "spec": spec, "type": etype})
 
     for connector in connectors:
-        element = _connector_element(
-            connector["id"], connector["type"], connector["spec"], centres
-        )
-        if element is not None:
-            elements.append(element)
+        eid = connector["id"]
+        spec = connector["spec"]
+        element = _connector_element(eid, connector["type"], spec, geometry)
+        if element is None:
+            continue
+        elements.append(element)
+        for ref in (_as_ref(spec.get("from")), _as_ref(spec.get("to"))):
+            if ref in shapes:
+                _add_bound_element(shapes[ref], "arrow", eid)
+        label = _spec_label(spec)
+        if label:
+            label_id = f"{eid}-label"
+            elements.append(
+                _bound_text_element(label_id, label, eid, _connector_midbox(element))
+            )
+            _add_bound_element(element, "text", label_id)
+            text_rows.append({"id": label_id, "text": label})
     return elements, text_rows
+
+
+def _add_bound_element(host: dict[str, Any], etype: str, eid: str) -> None:
+    """Append a ``{type, id}`` reference to ``host``'s ``boundElements`` (init to list).
+
+    A shape accrues one entry per bound label and per connector that snaps to it; an
+    arrow accrues its bound label. ``_excalidraw_base`` seeds ``boundElements`` to
+    ``None`` (Excalidraw's "nothing bound"), so the first binding promotes it to a list.
+    """
+    bound = host.get("boundElements")
+    if not isinstance(bound, list):
+        bound = []
+        host["boundElements"] = bound
+    bound.append({"type": etype, "id": eid})
 
 
 def _excalidraw_id(spec: dict[str, Any], index: int) -> str:
@@ -654,63 +704,90 @@ def _shape_element(
     return element
 
 
-def _text_element(
-    eid: str,
-    text: str,
-    x: float,
-    y: float,
-    w: float,
-    h: float,
-    *,
-    centred: bool = True,
+def _bound_text_element(
+    eid: str, text: str, container_id: str, box: tuple[float, float, float, float]
 ) -> dict[str, Any]:
-    """A text element, centred over a host shape's box (``centred``) or free-standing.
+    """A text element *bound* to a container (a shape's box, or a connector's midpoint).
 
-    A label is drawn as a plain overlaid text element rather than a bound-container
-    child -- simpler and valid, and it makes the text visible (the empty-box failure was
-    a ``label`` shorthand that Excalidraw does not render).
+    The label's ``containerId`` points at its host and the host's ``boundElements``
+    references it (set by the caller), so Excalidraw treats the text as a property of
+    the box/arrow -- centred, wrapped, and moved with it -- not a loose overlaid label.
+    ``box`` is the host's ``(x, y, w, h)``; a connector passes a zero-size box at the
+    line midpoint (see :func:`_connector_midbox`) so the same centring maths places the
+    label there.
     """
+    x, y, w, h = box
     font = _EXCALIDRAW_TEXT_FONT_SIZE
-    tw = _estimate_text_width(text)
-    th = float(font) * _EXCALIDRAW_LINE_HEIGHT
-    if centred:
-        tx = x + (w - tw) / 2
-        ty = y + (h - th) / 2
+    natural = _estimate_text_width(text)
+    # A shape container caps the label at its inner width; a connector's zero-size
+    # midpoint box does not (the label takes its natural width, centred on the line).
+    if w > 0:
+        tw = min(natural, max(w - 2 * _EXCALIDRAW_TEXT_PADDING, float(font)))
     else:
-        tx, ty = x, y
+        tw = natural
+    th = float(font) * _EXCALIDRAW_LINE_HEIGHT
+    tx = x + (w - tw) / 2
+    ty = y + (h - th) / 2
     element = _excalidraw_base(eid, "text", tx, ty, tw, th)
-    element.update(
-        {
-            "text": text,
-            "rawText": text,
-            "originalText": text,
-            "fontSize": font,
-            "fontFamily": 1,
-            "textAlign": "center" if centred else "left",
-            "verticalAlign": "middle",
-            "baseline": round(font * 0.85, 2),
-            "containerId": None,
-            "lineHeight": _EXCALIDRAW_LINE_HEIGHT,
-            "autoResize": True,
-        }
-    )
+    element.update(_text_props(text, container_id=container_id, align="center"))
     return element
 
 
-def _connector_element(
-    eid: str, etype: str, spec: dict[str, Any], centres: dict[str, tuple[float, float]]
-) -> dict[str, Any] | None:
-    """Build an arrow/line, routed between the centres named by ``from``/``to``.
+def _free_text_element(eid: str, text: str, x: float, y: float) -> dict[str, Any]:
+    """A free-standing (unbound) text element -- a title/loose label at ``x``/``y``."""
+    font = _EXCALIDRAW_TEXT_FONT_SIZE
+    tw = _estimate_text_width(text)
+    th = float(font) * _EXCALIDRAW_LINE_HEIGHT
+    element = _excalidraw_base(eid, "text", x, y, tw, th)
+    element.update(_text_props(text, container_id=None, align="left"))
+    return element
 
-    Falls back to the spec's explicit ``x``/``y``/``points`` when the endpoint ids are
-    not resolvable; returns ``None`` when neither a routable pair nor explicit points
-    are available (so a dangling connector is dropped, not emitted malformed).
+
+def _text_props(text: str, *, container_id: str | None, align: str) -> dict[str, Any]:
+    """The text-specific property set shared by bound + free-standing text elements."""
+    font = _EXCALIDRAW_TEXT_FONT_SIZE
+    return {
+        "text": text,
+        "rawText": text,
+        "originalText": text,
+        "fontSize": font,
+        "fontFamily": 1,
+        "textAlign": align,
+        "verticalAlign": "middle",
+        "baseline": round(font * 0.85, 2),
+        "containerId": container_id,
+        "lineHeight": _EXCALIDRAW_LINE_HEIGHT,
+        "autoResize": True,
+    }
+
+
+def _connector_element(
+    eid: str,
+    etype: str,
+    spec: dict[str, Any],
+    geometry: dict[str, tuple[float, float, float, float]],
+) -> dict[str, Any] | None:
+    """Build an arrow/line, snapped to the edges of the shapes named by ``from``/``to``.
+
+    When both endpoint ids resolve to shapes, the connector binds to them: each
+    endpoint is the point on that box's edge facing the *other* box (plus a small gap),
+    and ``startBinding``/``endBinding`` record the bond so Excalidraw keeps the arrow
+    snapped to the boxes' edges -- never their centres. Falls back to the spec's
+    explicit ``x``/``y``/``points`` (unbound) when the ids are not resolvable; returns
+    ``None`` when neither a routable pair nor explicit points exist (so a dangling
+    connector is dropped, not emitted malformed).
     """
-    start = centres.get(_as_ref(spec.get("from")))
-    end = centres.get(_as_ref(spec.get("to")))
-    if start is not None and end is not None:
+    from_box = geometry.get(_as_ref(spec.get("from")))
+    to_box = geometry.get(_as_ref(spec.get("to")))
+    start_binding: dict[str, Any] | None = None
+    end_binding: dict[str, Any] | None = None
+    if from_box is not None and to_box is not None:
+        start = _edge_point(from_box, _box_centre(to_box))
+        end = _edge_point(to_box, _box_centre(from_box))
         x, y = start
         points = [[0.0, 0.0], [end[0] - start[0], end[1] - start[1]]]
+        start_binding = _binding(_as_ref(spec.get("from")))
+        end_binding = _binding(_as_ref(spec.get("to")))
     else:
         points = _as_points(spec.get("points"))
         if points is None:
@@ -724,13 +801,66 @@ def _connector_element(
         {
             "points": [[round(px, 2), round(py, 2)] for px, py in points],
             "lastCommittedPoint": None,
-            "startBinding": None,
-            "endBinding": None,
+            "startBinding": start_binding,
+            "endBinding": end_binding,
             "startArrowhead": None,
             "endArrowhead": "arrow" if etype == "arrow" else None,
         }
     )
     return element
+
+
+def _box_centre(box: tuple[float, float, float, float]) -> tuple[float, float]:
+    """The centre point of an ``(x, y, w, h)`` box."""
+    x, y, w, h = box
+    return (x + w / 2, y + h / 2)
+
+
+def _edge_point(
+    box: tuple[float, float, float, float], target: tuple[float, float]
+) -> tuple[float, float]:
+    """The point on ``box``'s edge facing ``target``, pushed out by the binding gap.
+
+    Casts a ray from the box centre toward ``target`` and finds where it crosses the
+    box's bounding rectangle, then steps :data:`_EXCALIDRAW_BINDING_GAP` further along
+    that ray -- so a bound arrow starts/ends just off the shape's border (its snap
+    point) rather than at the centre. A degenerate (coincident) target returns centre.
+    """
+    cx, cy = _box_centre(box)
+    _, _, w, h = box
+    dx, dy = target[0] - cx, target[1] - cy
+    distance = math.hypot(dx, dy)
+    if distance == 0:
+        return (cx, cy)
+    scale_x = (w / 2) / abs(dx) if dx != 0 else math.inf
+    scale_y = (h / 2) / abs(dy) if dy != 0 else math.inf
+    edge = min(scale_x, scale_y)
+    gap = _EXCALIDRAW_BINDING_GAP / distance
+    return (cx + dx * (edge + gap), cy + dy * (edge + gap))
+
+
+def _binding(element_id: str) -> dict[str, Any]:
+    """An Excalidraw arrow binding to a shape (``focus`` 0 aims at the shape centre)."""
+    return {
+        "elementId": element_id,
+        "focus": 0.0,
+        "gap": _EXCALIDRAW_BINDING_GAP,
+    }
+
+
+def _connector_midbox(
+    element: dict[str, Any],
+) -> tuple[float, float, float, float]:
+    """A zero-size box at a built connector's midpoint, for centring its bound label.
+
+    Reuses the connector's absolute origin (``x``/``y``) and its relative end point so
+    the label sits at the line's midpoint; the zero width/height make
+    :func:`_bound_text_element`'s centring resolve to that exact point.
+    """
+    points = element["points"]
+    mid_x = element["x"] + points[-1][0] / 2
+    mid_y = element["y"] + points[-1][1] / 2
+    return (mid_x, mid_y, 0.0, 0.0)
 
 
 def _as_ref(value: object) -> str:

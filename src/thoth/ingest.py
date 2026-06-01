@@ -57,7 +57,6 @@ import hashlib
 import logging
 import tempfile
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -267,18 +266,11 @@ class _Analysed:
             -kind image (issue #68), or ``None``. A best-effort *enhancement* -- it is
             saved as an extra asset alongside the original, never replacing it, and
             never defers or loses the capture.
-        cleaned_scan: The model-free OpenCV-cleaned bytes for a ``document``-kind image
-            (issue #68), or ``None``. Likewise best-effort: saved as an extra asset
-            alongside the original, never replacing it.
-        cleaned_scan_ext: The bare extension for ``cleaned_scan`` (always ``"png"`` --
-            :func:`thoth.scanner.clean_document` re-encodes to PNG).
     """
 
     analysis: Analysis | None
     fetched: FetchedBinary | None = None
     excalidraw_md: str | None = None
-    cleaned_scan: bytes | None = None
-    cleaned_scan_ext: str = "png"
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +323,6 @@ class Ingestor:
         schema_md: str | None = None,
         markers: MarkerStore | None = None,
         analyser: Analyser | None = None,
-        scanner: Callable[..., bytes | None] | None = None,
     ) -> None:
         """Store the injected collaborators.
 
@@ -355,13 +346,6 @@ class Ingestor:
                 budget guard -- and configured with the ``analyse_model`` /
                 ``diagram_model`` knobs (issue #68); a test can inject a fake to drive
                 analysis with no real model call.
-            scanner: Optional model-free document-cleanup callable with the signature
-                ``(image_bytes, *, ext) -> bytes | None`` (issue #68). When ``None``
-                (the default) a lazy wrapper over
-                :func:`thoth.scanner.clean_document` is used, so the optional OpenCV
-                dependency is imported only at runtime (never at import/collection time,
-                and absent in CI); a test injects a fake to drive the ``document``
-                branch with no OpenCV install.
         """
         self._config = config
         self._vault = vault
@@ -380,7 +364,6 @@ class Ingestor:
                 diagram_model=config.diagram_model,
             )
         )
-        self._scanner = scanner if scanner is not None else _default_scanner
 
     def _record_marker(self, name: str) -> None:
         """Record a liveness marker (best-effort; never lets bookkeeping break ingest).
@@ -614,14 +597,11 @@ class Ingestor:
         # reported image kind, reusing the SAME bytes already in hand (no second
         # read/fetch). Each is purely additive: any failure leaves the original asset
         # filed cleanly and NEVER defers or loses the capture.
-        excalidraw_md, cleaned_scan = self._derive_artifacts(
-            kind, analysis, image_bytes, ext
-        )
+        excalidraw_md = self._derive_artifacts(kind, analysis, image_bytes, ext)
         return _Analysed(
             analysis=analysis,
             fetched=fetched,
             excalidraw_md=excalidraw_md,
-            cleaned_scan=cleaned_scan,
         )
 
     def _derive_artifacts(
@@ -630,40 +610,28 @@ class Ingestor:
         analysis: Analysis | None,
         image_bytes: bytes,
         ext: str,
-    ) -> tuple[str | None, bytes | None]:
-        """Best-effort derive the per-kind enhancement artifacts (issue #68, ADR 0009).
+    ) -> str | None:
+        """Best-effort derive the per-kind enhancement artifact (issue #68, ADR 0009).
 
-        Branches on the analysed image ``kind`` for an IMAGE capture only (a PDF gets no
-        Excalidraw/scan derivation):
+        For an IMAGE capture only (a PDF gets no derivation), a ``diagram``-kind image
+        is reconstructed as an editable Excalidraw scene via
+        :meth:`thoth.analyse.Analyser.reconstruct_excalidraw` (a second vision call).
 
-        * ``diagram`` -> an editable Excalidraw reconstruction via
-          :meth:`thoth.analyse.Analyser.reconstruct_excalidraw` (a second vision call).
-        * ``document`` -> a model-free OpenCV-cleaned scan via the injected ``scanner``.
-
-        Both are pure *enhancements* saved alongside the kept original, so every
-        failure mode -- ``None``, a raised exception, or a budget trip -- is swallowed
-        and turned into ``None`` here: the primary capture is already durable, never
+        This is a pure *enhancement* saved alongside the kept original, so every failure
+        mode -- ``None``, a raised exception, or a budget trip -- is swallowed and
+        turned into ``None`` here: the primary capture is already durable, never
         deferred or lost by a best-effort artifact (the second vision call already
-        returns ``None`` on its own failures, but the scanner and any surprise are
-        guarded too). Returns ``(excalidraw_md, cleaned_scan)``.
+        returns ``None`` on its own failures, but any surprise is guarded too). Returns
+        ``excalidraw_md``.
         """
         if kind is not CaptureKind.IMAGE or analysis is None:
-            return None, None
-        excalidraw_md: str | None = None
-        cleaned_scan: bytes | None = None
+            return None
         if analysis.kind == "diagram":
             try:
-                excalidraw_md = self._analyser.reconstruct_excalidraw(
-                    image_bytes, ext=ext
-                )
+                return self._analyser.reconstruct_excalidraw(image_bytes, ext=ext)
             except Exception:  # noqa: BLE001 - enhancement only, never lose the capture
-                excalidraw_md = None
-        elif analysis.kind == "document":
-            try:
-                cleaned_scan = self._scanner(image_bytes, ext=ext)
-            except Exception:  # noqa: BLE001 - enhancement only, never lose the capture
-                cleaned_scan = None
-        return excalidraw_md, cleaned_scan
+                return None
+        return None
 
     def _analyse_bytes(
         self, capture: Capture, kind: CaptureKind
@@ -1271,7 +1239,6 @@ class Ingestor:
 
         * ``<slug>.excalidraw.md`` -- an editable Excalidraw reconstruction of a hand-
           drawn ``diagram`` (the original is kept, never replaced).
-        * ``<slug>-scan.png`` -- a model-free OpenCV-cleaned scan of a ``document``.
 
         Each derived asset goes through :meth:`_store_asset`, so it keeps the same
         bytes-SHA-256 idempotency/drift behaviour as the original (a byte-identical
@@ -1317,12 +1284,6 @@ class Ingestor:
             )
             if rel is not None and rel not in asset_paths:
                 asset_paths.append(rel)
-        if derived.cleaned_scan is not None:
-            rel = self._store_bytes_asset(
-                f"{cls.slug}-scan.{derived.cleaned_scan_ext}", derived.cleaned_scan
-            )
-            if rel is not None and rel not in asset_paths:
-                asset_paths.append(rel)
         return RawCaptureResult(
             raw_path=original.raw_path,
             disposition=original.disposition,
@@ -1347,27 +1308,6 @@ class Ingestor:
         """
         with tempfile.NamedTemporaryFile(delete=False) as handle:
             handle.write(text.encode("utf-8"))
-            staged = Path(handle.name)
-        try:
-            result = self._store_asset(staged, asset_name)
-        except IngestError:
-            return None
-        return result.asset_paths[0] if result.asset_paths else None
-
-    def _store_bytes_asset(self, asset_name: str, data: bytes) -> str | None:
-        """Stage a derived *binary* artifact and store it under ``raw/assets``.
-
-        Used for the ``<slug>-scan.png`` cleaned scan (issue #68). The bytes are written
-        to a fresh tmp file and handed to :meth:`_store_asset`, so the same idempotency/
-        drift/temp-cleanup behaviour as the original asset applies. Returns the stored
-        vault-relative path, or ``None`` if the (best-effort) write fails.
-
-        Like :meth:`_store_text_asset`, a derived-asset :class:`IngestError` (drift or a
-        vault rejection) is swallowed to ``None`` so a best-effort enhancement can never
-        abort the already-durable primary capture (ADR 0009).
-        """
-        with tempfile.NamedTemporaryFile(delete=False) as handle:
-            handle.write(data)
             staged = Path(handle.name)
         try:
             result = self._store_asset(staged, asset_name)
@@ -1955,21 +1895,6 @@ def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
     if ext in _AUDIO_EXTS:
         return CaptureKind.AUDIO
     return default
-
-
-def _default_scanner(image_bytes: bytes, *, ext: str) -> bytes | None:
-    """Lazy wrapper over :func:`thoth.scanner.clean_document` (the OpenCV cleanup).
-
-    The OpenCV dependency is a lazy-imported runtime optional (issue #68, ADR 0009): it
-    is *not* installed in CI and must never be imported at module/collection time. This
-    wrapper defers ``import thoth.scanner`` (which itself lazy-imports ``cv2``) to the
-    first ``document``-kind capture, so importing :mod:`thoth.ingest` stays safe whether
-    or not OpenCV is present. It is the default ``scanner`` seam on :class:`Ingestor`; a
-    test injects a fake instead.
-    """
-    from thoth.scanner import clean_document
-
-    return clean_document(image_bytes, ext=ext)
 
 
 def _str_list(value: object) -> list[str]:

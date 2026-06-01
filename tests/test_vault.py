@@ -326,10 +326,9 @@ def test_validate_slug_rejects(slug: str) -> None:
         "a.png",
         "scan-2026.jpg",
         "x1.webp",
-        # Compound extensions (#68): the editable Excalidraw reconstruction and the
-        # cleaned scan are saved alongside the original and must validate as assets.
+        # Compound extension (#68): the editable Excalidraw reconstruction is saved
+        # alongside the original and must validate as an asset.
         "motor-control-diagram-e4a408.excalidraw.md",
-        "scan-2026-a1b2c3-scan.png",
     ],
 )
 def test_validate_asset_filename_accepts(name: str) -> None:
