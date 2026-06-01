@@ -426,7 +426,14 @@ class Ingestor:
             )
             candidates = self.fetch_candidates(classification)
             plan = self.curate(
-                capture, classification, raw, candidates, analysis=analysis
+                capture,
+                classification,
+                raw,
+                candidates,
+                analysis=analysis,
+                extracted_body=(
+                    holding.prefetched.body if holding.prefetched is not None else None
+                ),
             )
         except LLMUnavailableError as exc:
             # classify/curate (or the analyse call itself) deferred: capture_raw never
@@ -863,6 +870,7 @@ class Ingestor:
         candidates: list[str],
         *,
         analysis: Analysis | None = None,
+        extracted_body: str | None = None,
     ) -> dict[str, Any]:
         """Run the curate call, validate the file-plan, and write every page.
 
@@ -878,12 +886,22 @@ class Ingestor:
         real meaning** of the asset (and cross-links it), instead of a blind stub around
         the ``![[asset]]`` embed.
 
+        ``extracted_body`` plays the same role for a *text-bearing* capture whose body
+        was extracted before classify -- an audio transcript or a URL article's markdown
+        (it lives in ``raw/`` but the model cannot read files, only the prompt). Without
+        it an audio capture reached the model as a bare ``File: clip.m4a`` line and got
+        filed as a content-free "no transcript yet" stub, even though whisper had
+        transcribed it. Inlined only when the capture has no inline ``text`` (which is
+        already shown), so a plain-text capture is never duplicated.
+
         Args:
             capture: The inbound item (for context).
             cls: The validated classification.
             raw: The raw-capture result (its path/embeds are offered to the model).
             candidates: Existing candidate page paths.
             analysis: Optional content analysis of a binary capture (image/PDF).
+            extracted_body: Optional pre-extracted text body (audio transcript / URL
+                article markdown) to inline so curate sees the real content.
 
         Returns:
             The validated file-plan object (with a private list of written page paths
@@ -893,7 +911,14 @@ class Ingestor:
             IngestError: if the model output is unparseable, the plan fails validation,
                 or a vault write rejects a page.
         """
-        prompt = self._curate_prompt(capture, cls, raw, candidates, analysis=analysis)
+        prompt = self._curate_prompt(
+            capture,
+            cls,
+            raw,
+            candidates,
+            analysis=analysis,
+            extracted_body=extracted_body,
+        )
         messages: list[Message] = [Message(role="user", content=prompt)]
         problems = ""
         for attempt in range(_CURATE_ATTEMPTS):
@@ -1797,6 +1822,7 @@ class Ingestor:
         candidates: list[str],
         *,
         analysis: Analysis | None = None,
+        extracted_body: str | None = None,
     ) -> str:
         """Build the curate-call prompt (the file-plan contract + classification + raw).
 
@@ -1806,11 +1832,16 @@ class Ingestor:
         the model return a *valid* plan: with only a vague "return a file plan"
         instruction the model guessed the envelope and every capture was rejected. A
         binary capture's analysis (issue #42) is included so the curated body holds the
-        asset's real OCR'd/extracted content.
+        asset's real OCR'd/extracted content; ``extracted_body`` does the same for an
+        audio transcript / URL article body (which the model cannot read off the raw
+        page path).
         """
         candidate_block = "\n".join(f"- {path}" for path in candidates) or "(none)"
         raw_block = raw.raw_path or "(no raw page)"
         asset_block = ", ".join(raw.asset_paths) or "(none)"
+        summary = self._capture_summary(
+            capture, analysis=analysis, extracted_body=extracted_body
+        )
         return (
             "Given the SCHEMA (in the system prompt) and the captured item below, file "
             "it into the vault.\n\n"
@@ -1819,17 +1850,25 @@ class Ingestor:
             f"Raw source page: {raw_block}\n"
             f"Saved assets (embed with ![[name]]): {asset_block}\n"
             f"Existing candidate pages to maybe update:\n{candidate_block}\n\n"
-            f"Captured item:\n{self._capture_summary(capture, analysis=analysis)}"
+            f"Captured item:\n{summary}"
         )
 
     @staticmethod
-    def _capture_summary(capture: Capture, *, analysis: Analysis | None = None) -> str:
+    def _capture_summary(
+        capture: Capture,
+        *,
+        analysis: Analysis | None = None,
+        extracted_body: str | None = None,
+    ) -> str:
         """Render a compact textual summary of the capture for a prompt.
 
         For a binary capture the analysis (issue #42) is appended so the model sees the
         asset's OCR'd/extracted content, description, and routing hints -- the load-
         bearing fix: previously a binary reached the model as a bare ``File: name`` line
-        and was filed blind.
+        and was filed blind. ``extracted_body`` (an audio transcript / URL article body
+        extracted before curate) is appended for the same reason, but only when the
+        capture has no inline ``text`` -- which is already shown verbatim -- so a plain
+        text capture is never duplicated.
         """
         parts: list[str] = []
         if capture.url is not None:
@@ -1841,6 +1880,9 @@ class Ingestor:
         summary = "\n".join(parts) or "(empty capture)"
         if analysis is not None and not analysis.is_empty():
             summary += "\n\n" + _analysis_summary(analysis)
+        if capture.text is None and extracted_body and extracted_body.strip():
+            label = "Extracted text (transcript / article body)"
+            summary += f"\n\n{label}:\n{extracted_body.strip()}"
         return summary
 
     # ---- shared parse helper -----------------------------------------------------

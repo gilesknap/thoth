@@ -2010,6 +2010,53 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         assert token in prompt, f"curate prompt missing {token!r}"
 
 
+def test_curate_prompt_inlines_extracted_body_for_audio(
+    harness: IngestHarness,
+) -> None:
+    """An audio transcript is inlined into the curate prompt so the page isn't a stub.
+
+    The transcript lives in ``raw/transcripts`` and the model cannot read files -- only
+    the prompt. Without inlining the body the model saw just ``File: clip.m4a`` plus a
+    raw-page *path* and filed a content-free "no transcript yet" placeholder even though
+    whisper had transcribed the clip.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="action", slug="milk", title="Milk")
+    raw = RawCaptureResult(raw_path="raw/transcripts/milk.md", disposition="created")
+    capture = Capture(path=Path("/tmp/clip.m4a"), filename="clip.m4a")
+
+    prompt = ingestor._curate_prompt(
+        capture, cls, raw, [], extracted_body="Remind me to get milk on Saturday"
+    )
+
+    assert "Remind me to get milk on Saturday" in prompt
+    assert "Extracted text" in prompt
+
+
+def test_curate_prompt_does_not_duplicate_inline_text(harness: IngestHarness) -> None:
+    """A plain-text capture shows its body, so extracted_body is not re-added."""
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+
+    prompt = ingestor._curate_prompt(
+        Capture(text="hello"), cls, raw, [], extracted_body="hello"
+    )
+
+    assert "Extracted text" not in prompt
+    assert prompt.count("hello") == 1
+
+
 def test_curate_retries_then_succeeds_on_corrective_plan(
     harness: IngestHarness,
 ) -> None:

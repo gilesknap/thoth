@@ -493,17 +493,24 @@ def test_max_download_bytes_constant() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_transcribe_returns_stdout(
+def test_transcribe_reads_output_file(
     config: Config, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """transcribe shells whisper (mocked) and returns the transcript stdout."""
+    """transcribe shells whisper (mocked) and returns the written ``.txt`` file.
+
+    The real CLI writes ``<output_dir>/<stem>.txt``; the fake honours the
+    ``--output_dir`` argv passed by :meth:`transcribe` rather than relying on stdout
+    (which is the verbose timestamped dump, not the clean transcript).
+    """
     audio = tmp_path / "memo.wav"
     audio.write_bytes(b"fake-audio")
     recorded: dict[str, list[str]] = {}
 
     def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         recorded["argv"] = argv
-        return subprocess.CompletedProcess(argv, 0, stdout="hello world\n", stderr="")
+        out_dir = Path(argv[argv.index("--output_dir") + 1])
+        (out_dir / f"{audio.stem}.txt").write_text("hello world\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout="[00:00] noise\n", stderr="")
 
     monkeypatch.setattr("thoth.extract.subprocess.run", fake_run)
     extractor = Extractor(config, whisper_bin="whisper")
@@ -515,6 +522,30 @@ def test_transcribe_returns_stdout(
     assert str(audio) in recorded["argv"]
     assert "--model" in recorded["argv"]
     assert "small" in recorded["argv"]
+    assert "--output_dir" in recorded["argv"]
+
+
+def test_transcribe_no_output_file_raises(
+    config: Config, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 0-exit that writes no transcript file raises (the silent-skip case).
+
+    Whisper catches a write/decode error, logs ``Skipping ...`` and exits 0; without a
+    produced ``.txt`` we must surface a failure rather than return an empty transcript.
+    """
+    audio = tmp_path / "memo.wav"
+    audio.write_bytes(b"x")
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="", stderr="Skipping memo.wav due to OSError"
+        )
+
+    monkeypatch.setattr("thoth.extract.subprocess.run", fake_run)
+    extractor = Extractor(config, whisper_bin="whisper")
+    with pytest.raises(TranscriptionError) as exc_info:
+        extractor.transcribe(audio)
+    assert "no transcript" in str(exc_info.value)
 
 
 def test_transcribe_nonzero_exit_raises(
