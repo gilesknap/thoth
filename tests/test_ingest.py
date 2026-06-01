@@ -2912,3 +2912,91 @@ def test_diagram_reingest_with_different_reconstruction_never_aborts(
     # The original reconstruction is left on disk untouched (never overwritten).
     kept = (harness.work / "raw/assets/wb.excalidraw.md").read_text(encoding="utf-8")
     assert "rectangle" in kept
+
+
+# --------------------------------------------------------------------------- #
+# CLI capture seams (issue #80): as-is import + deferred (batched) commit.
+# --------------------------------------------------------------------------- #
+
+
+class _RecordingGitSync(GitSync):
+    """A real GitSync that records whether pull/commit were called (issue #80).
+
+    Used to prove that ``ingest(commit=False)`` neither orients (pulls) nor commits
+    inside ``ingest`` -- the batch caller owns git -- without touching the real bare
+    repo for those steps.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Build the real GitSync and add call recorders."""
+        super().__init__(*args, **kwargs)
+        self.pull_calls = 0
+        self.commit_calls = 0
+
+    def pull(self, *, timeout: float = 120.0) -> Any:  # noqa: D102 - recorder
+        self.pull_calls += 1
+        return super().pull(timeout=timeout)
+
+    def commit(self, message: str, *, timeout: float = 120.0) -> Any:  # noqa: D102
+        self.commit_calls += 1
+        return super().commit(message, timeout=timeout)
+
+
+def test_ingest_as_is_skips_curate_and_files_verbatim(harness: IngestHarness) -> None:
+    """``as_is=True`` runs classify only and files the body verbatim (#80)."""
+    # Only the classify response is scripted: if curate were called the fake client
+    # would pop past the single response (it repeats the last), but we assert exactly
+    # ONE create call below, so a curate call is provably absent.
+    client = _ScriptedClient(_classify_json(page_type="note", slug="my-note"))
+    hindsight = FakeHindsight()
+    ingestor = _build_ingestor(
+        harness, client=client, extractor=FakeExtractor(), hindsight=hindsight
+    )
+    original = "# My Note\n\nThis is the original verbatim body.\n"
+
+    report = ingestor.ingest(
+        Capture(text=original, source="import", filename="my-note.md"), as_is=True
+    )
+
+    # Exactly one LLM create call (classify); curate was NOT called.
+    assert len(client.messages.calls) == 1
+    # The page is filed into the classify-chosen folder with the body verbatim.
+    assert report.page_paths == ["notes/my-note.md"]
+    page_text = (harness.work / "notes/my-note.md").read_text(encoding="utf-8")
+    assert "This is the original verbatim body." in page_text
+    body = page_text.split("---", 2)[2]
+    assert body.strip() == original.strip()
+    # Imported provenance is recorded.
+    assert "source: import" in page_text.split("---", 2)[1]
+    # The filed page was indexed through the same retain pass.
+    assert [r.rel_path for r in hindsight.retained] == ["notes/my-note.md"]
+
+
+def test_ingest_commit_false_defers_git(harness: IngestHarness) -> None:
+    """``commit=False`` skips the orient pull and the git commit inside ingest (#80)."""
+    git = _RecordingGitSync(harness.config, env=harness.env)
+    llm = LLM(harness.config, client=_ScriptedClient(_classify_json()))
+    ingestor = Ingestor(
+        harness.config,
+        harness.vault,
+        llm,
+        FakeExtractor(),  # type: ignore[arg-type]  # structural fake
+        FakeHindsight(),  # type: ignore[arg-type]  # structural fake
+        git,
+        analyser=FakeAnalyser(),  # type: ignore[arg-type]  # structural fake
+    )
+
+    report = ingestor.ingest(
+        Capture(text="body", source="import", filename="x.md"),
+        commit=False,
+        as_is=True,
+    )
+
+    # Neither the per-call orient pull nor the commit ran inside ingest.
+    assert git.pull_calls == 0
+    assert git.commit_calls == 0
+    assert report.committed is False
+    assert report.conflict is False
+    # The page is staged on disk for the caller's batch commit.
+    assert report.page_paths == ["notes/transformer-models.md"]
+    assert harness.vault.page_exists("notes/transformer-models.md")

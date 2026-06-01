@@ -28,6 +28,7 @@ import logging
 from argparse import ArgumentParser, Namespace
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from . import __version__
@@ -44,8 +45,11 @@ def build_parser() -> ArgumentParser:
     Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
     ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
     stdio MCP server), ``reindex`` (nightly incremental, ``--full-rebuild`` for
-    recovery), ``summary`` (``daily`` / ``weekly`` Slack digest), and ``lint`` (the
-    13-check vault maintenance scan, ``--no-log`` to suppress the log entry).
+    recovery), ``summary`` (``daily`` / ``weekly`` Slack digest), ``lint`` (the
+    13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
+    ``capture`` (backfill files/folders through the ingest pipeline -- ``--as-is`` for
+    a low-touch import, ``--budget`` for a transient cap override, plus
+    ``--dry-run``/``--limit``/``--batch-size``/``--include``/``--exclude``, issue #80).
     ``-v/--version`` prints the version and exits.
 
     Returns:
@@ -59,7 +63,7 @@ def build_parser() -> ArgumentParser:
         version=__version__,
     )
     sub = parser.add_subparsers(
-        dest="command", metavar="{init,slack,mcp,reindex,summary,lint}"
+        dest="command", metavar="{init,slack,mcp,reindex,summary,lint,capture}"
     )
 
     init = sub.add_parser("init", help="seed the vault spine + dashboards (idempotent)")
@@ -96,6 +100,62 @@ def build_parser() -> ArgumentParser:
         "--no-log",
         action="store_true",
         help="print the report but do not append a log.md entry",
+    )
+
+    capture = sub.add_parser(
+        "capture",
+        help="backfill files/folders into the vault through the ingest pipeline",
+    )
+    capture.add_argument(
+        "paths",
+        nargs="+",
+        type=Path,
+        help="one or more files or directories to capture",
+    )
+    capture.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list what would be filed; write nothing, commit nothing, no LLM call",
+    )
+    capture.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="process at most N walked items (a trial run)",
+    )
+    capture.add_argument(
+        "--as-is",
+        action="store_true",
+        help="low-touch import: classify-for-routing but SKIP the curate pass; file "
+        "the original body verbatim and index it (ADR 0010)",
+    )
+    capture.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="override THOTH_DAILY_LLM_BUDGET for THIS run only (transient); "
+        "0 = unlimited for this import",
+    )
+    capture.add_argument(
+        "--batch-size",
+        type=int,
+        default=25,
+        help="commit+push every N ingested files plus a final flush (default 25)",
+    )
+    capture.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="only capture files whose vault-relative path matches (repeatable)",
+    )
+    capture.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="skip files whose path matches, in addition to the always-skipped "
+        ".obsidian/.git/_bases/spine (repeatable)",
     )
 
     return parser
@@ -150,6 +210,7 @@ def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
         "reindex": run_reindex,
         "summary": run_summary,
         "lint": run_lint,
+        "capture": run_capture,
     }
     handlers[command](namespace, config)
 
@@ -319,6 +380,120 @@ def run_lint(namespace: Namespace, config: Config) -> None:
     print(f"lint: {report.total} issue(s) found")
 
 
+def run_capture(namespace: Namespace, config: Config) -> None:
+    """Backfill files/folders into the vault (``thoth capture <path>... [flags]``).
+
+    The CLI capture path (issue #80): a thin walker
+    (:func:`thoth.capture_walk.walk_captures`) yields one
+    :class:`~thoth.ingest.Capture` per eligible file under each ``paths`` entry
+    (Markdown/text -> a ``text`` capture; image/PDF/audio -> a ``path`` capture; every
+    one ``source="import"``), honouring the ``--include``/``--exclude`` globs, the
+    always-skipped machinery/spine, and the overall ``--limit``. Each capture is fed
+    through the EXISTING :meth:`thoth.ingest.Ingestor.ingest` pipeline with commits
+    deferred, and git is driven in batches:
+
+    * The budget guard is built with the ``--budget`` transient override (issue #80):
+      ``None`` uses ``THOTH_DAILY_LLM_BUDGET``; a positive value caps THIS run; ``0``
+      disables the cap (the unlimited-import escape hatch). The same guard is injected
+      into the ingest graph so it covers analyse/classify/curate and the retain pass.
+    * ``--dry-run`` lists what would be filed and writes/commits NOTHING (no LLM call,
+      no vault pull): the walker is iterated and each planned filing is printed.
+    * Otherwise the vault is pulled ONCE up front, each capture is ingested with
+      ``commit=False`` (and ``as_is=--as-is``), and ``GitSync.commit`` is called every
+      ``--batch-size`` ingested files plus a final flush -- not one commit per file. A
+      :class:`~thoth.git_sync.VaultConflictError` from a batch commit is surfaced loudly
+      and stops the run (content is filed locally; never ``--force``).
+
+    Idempotency leans entirely on the existing ``raw/``/``inbox/`` SHA-256 machinery: a
+    second run over an unchanged tree re-derives the same slugs/digests and the raw
+    layer skips, so no page is duplicated.
+
+    Args:
+        namespace: The parsed args (``paths`` and the capture flags).
+        config: The frozen runtime config.
+    """
+    from .alerts import make_alerter
+    from .budget import make_budget_guard
+    from .capture_walk import walk_captures
+    from .git_sync import GitSync, VaultConflictError
+
+    captures = walk_captures(
+        namespace.paths,
+        include=namespace.include,
+        exclude=namespace.exclude,
+        limit=namespace.limit,
+    )
+
+    if namespace.dry_run:
+        planned = 0
+        for capture in captures:
+            planned += 1
+            kind = "text" if capture.text is not None else "file"
+            print(f"capture (dry-run): would file {kind} {capture.filename}")
+        print(f"capture: dry-run, {planned} item(s) would be filed (no writes)")
+        return
+
+    guard = make_budget_guard(
+        config, alerter=make_alerter(config), limit=namespace.budget
+    )
+    graph = _build_graph(config, guard=guard)
+    git = GitSync(config)
+    # Pull ONCE up front so every batched write lands on current state; the per-call
+    # orient is skipped (commit=False) so we do not pull per file.
+    git.pull()
+
+    batch_size = max(1, namespace.batch_size)
+    filed = skipped = deferred = 0
+    since_commit = 0
+    total = 0
+    for capture in captures:
+        total += 1
+        report = graph.ingestor.ingest(capture, commit=False, as_is=namespace.as_is)
+        if report.deferred:
+            deferred += 1
+        elif report.page_paths:
+            filed += 1
+        else:
+            skipped += 1
+        since_commit += 1
+        target = capture.filename or "(capture)"
+        print(
+            f"capture [{total}]: {target} -> "
+            f"{', '.join(report.page_paths) or report.message or 'no new page'}"
+        )
+        if since_commit >= batch_size:
+            _commit_capture_batch(git, since_commit, VaultConflictError)
+            since_commit = 0
+    if since_commit:
+        _commit_capture_batch(git, since_commit, VaultConflictError)
+    print(
+        f"capture: {total} item(s) processed -- filed={filed} "
+        f"skipped={skipped} deferred={deferred}"
+    )
+
+
+def _commit_capture_batch(
+    git: Any, count: int, conflict_error: type[Exception]
+) -> None:
+    """Commit + push one batch of imported files; surface a conflict loudly and stop.
+
+    :meth:`thoth.git_sync.GitSync.commit` does add -A + commit + rebase + push in one
+    call and returns ``committed=False`` on "nothing to commit", so a flush with no
+    pending changes is a safe no-op. A :class:`~thoth.git_sync.VaultConflictError`
+    aborts the import (the content is filed locally; the operator re-runs once the
+    remote is reconciled -- the run is idempotent) rather than ever forcing the push.
+    """
+    try:
+        result = git.commit(f"import: batch ({count} file(s))")
+    except conflict_error as exc:
+        raise SystemExit(
+            "capture: VAULT CONFLICT on a batch commit -- content is filed locally "
+            f"but the push was refused. Resolve in Obsidian and re-run. ({exc})"
+        ) from exc
+    if result.committed:
+        print(f"capture: committed batch of {count} file(s)")
+
+
 # ---- unattended observability (issue #15) ------------------------------------------
 
 
@@ -370,13 +545,19 @@ class _Graph:
         self.research = research
 
 
-def _build_graph(config: Config) -> _Graph:
+def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
     """Wire the full ingest/query/research collaborator graph from ``config``.
 
     Mirrors the graph :func:`thoth.mcp_server.run` builds (vault, llm, extractor,
     hindsight, git, ingestor, query engine, research engine) so the Slack daemon and the
     MCP server share one construction shape. All heavy imports are local to this
     function.
+
+    ``guard`` lets a caller inject an already-built :class:`~thoth.budget.BudgetGuard`
+    so the same cap reaches both the LLM (classify/analyse/curate) and Hindsight
+    (retain). The ``thoth capture`` handler passes one built with its ``--budget``
+    transient override (issue #80); ``None`` (the default) builds the standard
+    config-driven guard, so the Slack/MCP callers are unaffected.
     """
     from .alerts import make_alerter
     from .budget import make_budget_guard
@@ -394,8 +575,10 @@ def _build_graph(config: Config) -> _Graph:
     # The daily cost guard (issue #16): one shared cap over the Anthropic calls (via the
     # LLM) and the Gemini fact-extraction (via Hindsight retain), persisted in state.db
     # and keyed by the London day. It alerts once per day through the errors-to-Slack
-    # target. A non-positive THOTH_DAILY_LLM_BUDGET disables it.
-    guard = make_budget_guard(config, alerter=make_alerter(config))
+    # target. A non-positive THOTH_DAILY_LLM_BUDGET disables it. A caller may inject a
+    # guard carrying a transient --budget override (thoth capture, issue #80).
+    if guard is None:
+        guard = make_budget_guard(config, alerter=make_alerter(config))
     llm = LLM(config, guard=guard)
     extractor = Extractor(config)
     hindsight = Hindsight(config, guard=guard)

@@ -759,3 +759,379 @@ def test_main_routes_lint_through_dispatch(
 
     __main__.main(["lint", "--no-log"])
     assert seen == [(True, broken_vault_config)]
+
+
+# === thoth capture (issue #80) =====================================================
+
+
+def test_build_parser_capture_flags() -> None:
+    """``capture`` parses every flag; bare ``capture x`` uses the defaults."""
+    parser = __main__.build_parser()
+    ns = parser.parse_args(
+        [
+            "capture",
+            "a",
+            "b",
+            "--dry-run",
+            "--limit",
+            "3",
+            "--as-is",
+            "--budget",
+            "0",
+            "--batch-size",
+            "10",
+            "--include",
+            "*.md",
+            "--exclude",
+            "drafts/*",
+        ]
+    )
+    assert [str(p) for p in ns.paths] == ["a", "b"]
+    assert ns.dry_run is True
+    assert ns.limit == 3
+    assert ns.as_is is True
+    assert ns.budget == 0
+    assert ns.batch_size == 10
+    assert ns.include == ["*.md"]
+    assert ns.exclude == ["drafts/*"]
+
+    bare = parser.parse_args(["capture", "x"])
+    assert [str(p) for p in bare.paths] == ["x"]
+    assert bare.dry_run is False
+    assert bare.limit is None
+    assert bare.as_is is False
+    assert bare.budget is None
+    assert bare.batch_size == 25
+    assert bare.include == []
+    assert bare.exclude == []
+
+
+def test_build_parser_recognises_capture_subcommand() -> None:
+    """``capture`` is a recognised subcommand setting ``command``."""
+    parser = __main__.build_parser()
+    assert parser.parse_args(["capture", "x"]).command == "capture"
+
+
+def test_main_dispatches_capture(
+    monkeypatch: pytest.MonkeyPatch, stub_config: Config
+) -> None:
+    """``thoth capture x`` routes to run_capture with the loaded config."""
+    seen: list[Config] = []
+    monkeypatch.setattr(__main__, "run_capture", lambda ns, cfg: seen.append(cfg))
+    __main__.main(["capture", "x"])
+    assert seen == [stub_config]
+
+
+# --- the walker (thoth.capture_walk.walk_captures) ---------------------------------
+
+
+def test_walk_captures_single_file_builds_one_text_capture(tmp_path: Path) -> None:
+    """A single .md -> one text Capture; a single .png -> one path Capture (#80)."""
+    from thoth.capture_walk import walk_captures
+
+    md = tmp_path / "note.md"
+    md.write_text("# Note\n", encoding="utf-8")
+    text_caps = list(walk_captures([md]))
+    assert len(text_caps) == 1
+    assert text_caps[0].text == "# Note\n"
+    assert text_caps[0].path is None
+    assert text_caps[0].source == "import"
+    assert text_caps[0].filename == "note.md"
+
+    png = tmp_path / "pic.png"
+    png.write_bytes(b"\x89PNG\r\n")
+    img_caps = list(walk_captures([png]))
+    assert len(img_caps) == 1
+    assert img_caps[0].path == png
+    assert img_caps[0].text is None
+    assert img_caps[0].source == "import"
+
+
+def test_walk_captures_recurses_and_skips_machinery(tmp_path: Path) -> None:
+    """A tree yields only content; machinery dirs + spine files are skipped (#80)."""
+    from thoth.capture_walk import walk_captures
+
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "a.md").write_text("a", encoding="utf-8")
+    (tmp_path / "b.png").write_bytes(b"png")
+    for spine in ("index.md", "SCHEMA.md", "log.md"):
+        (tmp_path / spine).write_text("spine", encoding="utf-8")
+    for machinery in (".obsidian", ".git", "_bases"):
+        (tmp_path / machinery).mkdir()
+        (tmp_path / machinery / "x").write_text("skip", encoding="utf-8")
+    (tmp_path / "_bases" / "z.base").write_text("skip", encoding="utf-8")
+    # An unknown extension is skipped (never guessed as an image).
+    (tmp_path / "weird.xyz").write_bytes(b"binary")
+
+    captures = list(walk_captures([tmp_path]))
+    names = sorted(c.filename or "" for c in captures)
+    assert names == ["a.md", "b.png"]
+
+
+def test_walk_captures_include_exclude_and_limit(tmp_path: Path) -> None:
+    """include/exclude globs filter on the relative path; limit caps the count (#80)."""
+    from thoth.capture_walk import walk_captures
+
+    (tmp_path / "drafts").mkdir()
+    (tmp_path / "keep.md").write_text("k", encoding="utf-8")
+    (tmp_path / "skip.txt").write_text("s", encoding="utf-8")
+    (tmp_path / "drafts" / "wip.md").write_text("w", encoding="utf-8")
+
+    only_md = sorted(
+        c.filename or "" for c in walk_captures([tmp_path], include=["*.md"])
+    )
+    assert only_md == ["keep.md", "wip.md"]
+
+    no_drafts = sorted(
+        c.filename or "" for c in walk_captures([tmp_path], exclude=["drafts/*"])
+    )
+    assert no_drafts == ["keep.md", "skip.txt"]
+
+    capped = list(walk_captures([tmp_path], limit=1))
+    assert len(capped) == 1
+
+
+# --- run_capture against fakes -----------------------------------------------------
+
+
+class _FakeIngestReport:
+    """A minimal IngestReport-shaped object the run_capture loop reads."""
+
+    def __init__(
+        self, page_paths: list[str], *, deferred: bool = False, message: str = ""
+    ) -> None:
+        self.page_paths = page_paths
+        self.deferred = deferred
+        self.message = message
+
+
+class _RecordingIngestor:
+    """Records every ingest() call (the capture/kind/source assertions, #80)."""
+
+    def __init__(self, *, skip: bool = False) -> None:
+        self.calls: list[tuple[Any, bool, bool]] = []
+        self.reports: list[_FakeIngestReport] = []
+        self._skip = skip
+
+    def ingest(self, capture: Any, *, commit: bool = True, as_is: bool = False) -> Any:
+        self.calls.append((capture, commit, as_is))
+        if self._skip:
+            report = _FakeIngestReport([], message="skipped_unchanged")
+        else:
+            slug = (capture.filename or "x").rsplit(".", 1)[0]
+            report = _FakeIngestReport([f"notes/{slug}.md"])
+        self.reports.append(report)
+        return report
+
+
+class _RecordingGit:
+    """A fake GitSync recording pull/commit (asserts batch cadence, #80)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.pull_calls = 0
+        self.commit_messages: list[str] = []
+
+    def pull(self, **kwargs: Any) -> Any:
+        self.pull_calls += 1
+        return None
+
+    def commit(self, message: str, **kwargs: Any) -> Any:
+        self.commit_messages.append(message)
+
+        class _R:
+            committed = True
+
+        return _R()
+
+
+def _wire_capture_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ingestor: _RecordingIngestor,
+    git: _RecordingGit,
+) -> None:
+    """Inject the fake ingestor graph + fake GitSync into the run_capture handler."""
+    import thoth.alerts as alerts_mod
+    import thoth.budget as budget_mod
+    import thoth.git_sync as git_mod
+
+    monkeypatch.setattr(
+        __main__,
+        "_build_graph",
+        lambda cfg, *, guard=None: __main__._Graph(
+            ingestor=ingestor, query_engine=None, research=None
+        ),
+    )
+    monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: git)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+    monkeypatch.setattr(budget_mod, "make_budget_guard", lambda cfg, **kw: object())
+
+
+def _seed_capture_tree(root: Path, count: int) -> None:
+    """Write ``count`` Markdown files under ``root`` for a capture run."""
+    for i in range(count):
+        (root / f"n{i}.md").write_text(f"# Note {i}\n", encoding="utf-8")
+
+
+def test_run_capture_builds_one_capture_per_file_correct_kind_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One Capture per file: text for md, path for png, source import (#80)."""
+    (tmp_path / "a.md").write_text("alpha", encoding="utf-8")
+    (tmp_path / "b.png").write_bytes(b"png")
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    __main__.run_capture(ns, config)
+
+    assert len(ingestor.calls) == 2
+    by_name = {c.filename: c for c, _, _ in ingestor.calls}
+    assert by_name["a.md"].text == "alpha" and by_name["a.md"].path is None
+    assert by_name["b.png"].path is not None and by_name["b.png"].text is None
+    assert all(c.source == "import" for c, _, _ in ingestor.calls)
+    # All ingested with commits deferred.
+    assert all(commit is False for _, commit, _ in ingestor.calls)
+
+
+def test_run_capture_batches_commits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """>batch-size files: pull once, batched commits + final flush, not per file."""
+    _seed_capture_tree(tmp_path, 5)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(
+        ["capture", str(tmp_path), "--batch-size", "2"]
+    )
+    __main__.run_capture(ns, config)
+
+    assert git.pull_calls == 1
+    # 5 files, batch 2 -> commits after files 2 and 4, plus a final flush of file 5 = 3.
+    assert len(git.commit_messages) == 3
+    assert len(ingestor.calls) == 5
+    # Definitely NOT one commit per file.
+    assert len(git.commit_messages) < len(ingestor.calls)
+
+
+def test_run_capture_dry_run_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run lists planned filings but never ingests, pulls, or commits (#80)."""
+    _seed_capture_tree(tmp_path, 3)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--dry-run"])
+    __main__.run_capture(ns, config)
+
+    assert ingestor.calls == []
+    assert git.pull_calls == 0
+    assert git.commit_messages == []
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert out.count("would file") == 3
+
+
+def test_run_capture_limit_caps_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--limit 2 over a 5-file tree -> exactly 2 ingest calls (#80)."""
+    _seed_capture_tree(tmp_path, 5)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--limit", "2"])
+    __main__.run_capture(ns, config)
+    assert len(ingestor.calls) == 2
+
+
+def test_run_capture_as_is_threads_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--as-is reaches Ingestor.ingest(as_is=True) for every file (#80)."""
+    _seed_capture_tree(tmp_path, 2)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--as-is"])
+    __main__.run_capture(ns, config)
+    assert all(as_is is True for _, _, as_is in ingestor.calls)
+
+
+def test_run_capture_budget_override_reaches_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--budget N`` reaches make_budget_guard with the supplied limit (#80)."""
+    _seed_capture_tree(tmp_path, 1)
+    recorded: list[Any] = []
+
+    import thoth.alerts as alerts_mod
+    import thoth.budget as budget_mod
+    import thoth.git_sync as git_mod
+
+    def _record_guard(cfg: Config, **kw: Any) -> Any:
+        recorded.append(kw.get("limit", "MISSING"))
+        return object()
+
+    monkeypatch.setattr(budget_mod, "make_budget_guard", _record_guard)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+    monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: _RecordingGit())
+    monkeypatch.setattr(
+        __main__,
+        "_build_graph",
+        lambda cfg, *, guard=None: __main__._Graph(
+            ingestor=_RecordingIngestor(), query_engine=None, research=None
+        ),
+    )
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    for flag, expected in (("7", 7), ("0", 0)):
+        recorded.clear()
+        ns = __main__.build_parser().parse_args(
+            ["capture", str(tmp_path), "--budget", flag]
+        )
+        __main__.run_capture(ns, config)
+        assert recorded == [expected]
+
+    # No flag -> limit None (use the config value).
+    recorded.clear()
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    __main__.run_capture(ns, config)
+    assert recorded == [None]
+
+
+def test_run_capture_idempotent_on_rerun(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A second run over an unchanged tree files no new pages (skip), not duplicates."""
+    _seed_capture_tree(tmp_path, 3)
+    git = _RecordingGit()
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    # First run files three pages (one Capture per file).
+    first = _RecordingIngestor(skip=False)
+    _wire_capture_fakes(monkeypatch, ingestor=first, git=git)
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    __main__.run_capture(ns, config)
+    assert len(first.calls) == 3
+    assert all(report.page_paths for report in first.reports)
+
+    # Second run: the raw sha256 layer reports skipped_unchanged -> no new page paths,
+    # so re-capturing an unchanged tree duplicates nothing.
+    second = _RecordingIngestor(skip=True)
+    _wire_capture_fakes(monkeypatch, ingestor=second, git=git)
+    __main__.run_capture(ns, config)
+    assert len(second.calls) == 3
+    assert all(report.page_paths == [] for report in second.reports)
