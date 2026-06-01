@@ -5,10 +5,13 @@
 
 # thoth
 
-agent PKM with semantic index, slack connector and MCP
-
-This is where you should write a short paragraph that describes what your module does,
-how it does it, and why people should use it.
+**A personal, single-user "second brain" appliance.** Capture anything — a URL, a PDF,
+an image, a voice memo, or a quick note — by dropping it into one private Slack channel,
+and thoth files it into a git-backed [Obsidian](https://obsidian.md) vault: classified,
+curated into clean Markdown, cross-linked to your existing pages, and indexed for semantic
+recall. Ask a question in the same channel and it answers **from your vault** (and,
+optionally, the web), citing the pages it actually used. The same knowledge is exposed to
+AI assistants over [MCP](https://modelcontextprotocol.io).
 
 What            | Where
 :---:           | :---:
@@ -16,20 +19,49 @@ Source          | <https://github.com/gilesknap/thoth>
 Documentation   | <https://gilesknap.github.io/thoth>
 Releases        | <https://github.com/gilesknap/thoth/releases>
 
-This is where you should put some images or code snippets that illustrate
-some relevant examples. If it is a library then you might put some
-introductory code here:
+## What it does
 
-```python
-from thoth import __version__
+- **Capture from Slack.** Post a link, upload a file, or jot a note in a private channel;
+  thoth fetches/transcribes/OCRs it, decides what kind of thing it is, writes a tidy page,
+  and links it to related notes — replying in-thread with an `obsidian://` link.
+- **Retrieve from Slack.** Ask a question and get a conversational answer grounded in your
+  vault, with a short `Sources:` list of the pages it used (web-blended when you ask it to
+  research).
+- **Your knowledge is plain Markdown in git.** The Obsidian vault is the single source of
+  truth — open it in Obsidian, edit it by hand, grep it, diff it. No lock-in.
+- **Semantic recall.** A rebuildable vector index
+  ([Hindsight](https://hindsight.vectorize.io)) sits over the vault so retrieval finds
+  things by meaning, not just keywords. It is **disposable** — re-derived from the vault at
+  any time.
+- **MCP server.** Exposes `pkm_*` tools (search, ask, ingest, recent, todos, write) so
+  Claude Desktop or any MCP client can read and write the same vault.
 
-print(f"Hello thoth {__version__}")
-```
+## How it works
 
-Or if it is a commandline tool then you might put some example commands here:
+A small set of injected boundaries do the heavy lifting: **Claude** classifies, curates,
+and answers; **Whisper** (local) transcribes audio; **Exa** + **Firecrawl** handle web
+search and URL→Markdown extraction; **Hindsight** provides the semantic index; and the
+**Obsidian vault** (a two-way-synced git repo) is the canonical store. It runs unattended
+on a small VPS as a single long-running Slack daemon (`thoth slack`) plus a handful of cron
+jobs.
 
-```
-python -m thoth --version
+See the [architecture explanation](https://gilesknap.github.io/thoth/explanations/architecture.html)
+for the full picture, and the [design decisions](https://gilesknap.github.io/thoth/explanations/decisions.html)
+for the why.
+
+## Get started
+
+- **Deploy the appliance** (the main path) — a full, dependency-by-dependency setup
+  including every API key and the `.env`:
+  [Deploy the thoth appliance](https://gilesknap.github.io/thoth/how-to/deploy-appliance.html).
+- **Set up the Slack app** —
+  [Slack setup](https://gilesknap.github.io/thoth/how-to/slack-setup.html).
+- **First-light smoke checklist** — verify each live boundary after deploy:
+  [First light](https://gilesknap.github.io/thoth/how-to/first-light.html).
+
+```console
+$ thoth --version    # confirm the CLI is on your PATH
+$ thoth slack        # run the capture/retrieve daemon (Socket Mode)
 ```
 
 <!-- README only content. Anything below this line won't be included in index.md -->
