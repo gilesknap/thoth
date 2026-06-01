@@ -78,7 +78,11 @@ version_file = "src/thoth/_version.py"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"thoth" = ["templates/*.md", "templates/_bases/*.base"]
+"thoth" = [
+    "templates/*.md",
+    "templates/_bases/*.base",
+    "templates/.obsidian/**/*",
+]
 
 [tool.pyright]
 typeCheckingMode = "standard"

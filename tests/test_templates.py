@@ -22,6 +22,7 @@ import yaml
 
 from thoth.templates import (
     BASE_NAMES,
+    OBSIDIAN_NAMES,
     SPINE_NAMES,
     TemplateError,
     base_names,
@@ -274,7 +275,11 @@ def test_iter_templates_returns_all_templates_non_empty() -> None:
         "_bases/entities.base",
         "_bases/notes.base",
         "_bases/personal.base",
+        *OBSIDIAN_NAMES,
     ]
+    # The discovered .obsidian tail includes the snippet and the seeded config.
+    assert ".obsidian/snippets/dashboard-full-width.css" in OBSIDIAN_NAMES
+    assert ".obsidian/appearance.json" in OBSIDIAN_NAMES
     for name, text in items:
         assert text.strip(), name
     # Each listed text round-trips through the single-name accessor.
@@ -286,7 +291,9 @@ def test_iter_templates_returns_independent_list() -> None:
     """``iter_templates`` returns a fresh list each call (no shared mutation)."""
     first = iter_templates()
     first.clear()
-    assert len(iter_templates()) == len(SPINE_NAMES) + len(BASE_NAMES)
+    assert len(iter_templates()) == len(SPINE_NAMES) + len(BASE_NAMES) + len(
+        OBSIDIAN_NAMES
+    )
 
 
 # --------------------------------------------------------------------------- #

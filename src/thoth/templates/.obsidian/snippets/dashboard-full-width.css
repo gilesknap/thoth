@@ -1,0 +1,23 @@
+/* thoth Home dashboard — fill the full editor width.
+
+   Seeded into <vault>/.obsidian/snippets/ by the vault spine. Enable it under
+   Settings → Appearance → CSS snippets (or ship an appearance.json that lists it
+   under `enabledCssSnippets`). Targets only pages with
+   `cssclasses: dashboard-full-width` in their frontmatter — i.e. index.md. */
+
+/* Reading view + Live Preview content area */
+.dashboard-full-width .markdown-preview-sizer,
+.dashboard-full-width.markdown-preview-view,
+.markdown-source-view.mod-cm6.dashboard-full-width .cm-sizer,
+.markdown-source-view.mod-cm6.dashboard-full-width .cm-contentContainer {
+  max-width: none !important;
+  width: 100% !important;
+}
+
+/* Embedded Bases tables should use the full width too */
+.dashboard-full-width .bases-view,
+.dashboard-full-width .markdown-embed,
+.dashboard-full-width table {
+  width: 100% !important;
+  max-width: none !important;
+}
