@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>3. Slack free-text intent gate (route prose to the right engine) &#8212; thoth 0.1.dev83+g3a1c1afb9 documentation</title>
+    <title>10. CLI capture: an as-is low-touch import mode and a transient budget override &#8212; thoth 0.1.dev83+g3a1c1afb9 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=30646c52"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0003-slack-free-text-intent-gate';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0010-capture-as-is-low-touch-import';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="4. Index all content in the embedding store, scope recall by tag" href="0004-index-all-content-with-tag-scoped-recall.html" />
-    <link rel="prev" title="2. Adopt python-copier-template for project structure" href="0002-switched-to-python-copier-template.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="9. Kind-aware advanced image handling: derived assets from one vision call" href="0009-advanced-image-handling-kind-aware-derived-assets.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -426,14 +426,14 @@
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../decisions.html">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">3. Slack free-text intent gate (route prose to the right engine)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l2"><a class="reference internal" href="0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
 </ul>
 </details></li>
 </ul>
@@ -482,7 +482,7 @@
     
     <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">3. Slack free-text intent gate (route prose to the right engine)</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">10. CLI capture: an as-is low-touch import mode and a transient budget override</span></li>
   </ul>
 </nav>
 </div>
@@ -499,71 +499,84 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="slack-free-text-intent-gate-route-prose-to-the-right-engine">
-<h1>3. Slack free-text intent gate (route prose to the right engine)<a class="headerlink" href="#slack-free-text-intent-gate-route-prose-to-the-right-engine" title="Link to this heading">#</a></h1>
-<p>Date: 2026-05-31</p>
+  <section id="cli-capture-an-as-is-low-touch-import-mode-and-a-transient-budget-override">
+<h1>10. CLI capture: an as-is low-touch import mode and a transient budget override<a class="headerlink" href="#cli-capture-an-as-is-low-touch-import-mode-and-a-transient-budget-override" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-01</p>
 <section id="status">
 <h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
 <p>Accepted</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
-<p>The Slack surface (<code class="docutils literal notranslate"><span class="pre">thoth.slack_app.Handlers.handle_message</span></code>) routes a message with a
-deterministic <code class="docutils literal notranslate"><span class="pre">if/elif</span></code> ladder: a pending “save?” affirmative, a
-<code class="docutils literal notranslate"><span class="pre">capture:</span></code>/<code class="docutils literal notranslate"><span class="pre">note:</span></code>/<code class="docutils literal notranslate"><span class="pre">save:</span></code> prefix, a bare URL, a shared file — and historically
-<em>everything else</em> (bare free text) defaulted to the blended ask
-(<code class="docutils literal notranslate"><span class="pre">ResearchEngine.ask</span></code>), falling back to the vault-only query when no research engine
-was wired.</p>
-<p>The consequence was a sharp UX edge: any free text that was not a URL/file/prefixed
-note was treated as a <em>question</em>. Typing “remind me to call the dentist tomorrow” as
-plain prose got <em>answered</em>, not <em>filed</em>; to capture a free thought you had to prefix it.</p>
-<p>Two options were considered:</p>
-<ul class="simple">
-<li><p><strong>Option A — fold a <code class="docutils literal notranslate"><span class="pre">capture</span></code> tool into the ask path.</strong> Rejected: it would break the
-deliberate engine separation. Ingest does git commit/rebase/push, LLM classification,
-and validated vault writes; the ask/research path is <strong>read-only</strong>. Giving the ask
-model write access (or blending the two engines) widens the surface and breaks
-least-privilege (SPEC §3, §12).</p></li>
-<li><p><strong>Option B — an intent gate at the routing site.</strong> A cheap classifier that only
-<em>chooses</em> an engine, never blends them.</p></li>
-</ul>
-<p>This decision is <strong>Slack-only</strong>. MCP already exposes explicit tools (<code class="docutils literal notranslate"><span class="pre">pkm_ingest</span></code>,
-<code class="docutils literal notranslate"><span class="pre">pkm_ask</span></code>, <code class="docutils literal notranslate"><span class="pre">pkm_todos</span></code>, …), so the calling agent does its own dispatch and needs no
-gate.</p>
+<p><code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span> <span class="pre">&lt;path&gt;...</span></code> (issue #80) backfills content that already lives on disk —
+most concretely an existing, already-clean Obsidian vault (a tree of Markdown plus
+image/PDF attachments) — by walking it and feeding each file through the <em>existing</em>
+<code class="docutils literal notranslate"><span class="pre">Ingestor.ingest</span></code> pipeline.</p>
+<p>Two design questions had to be resolved before that path could be built:</p>
+<ol class="arabic simple">
+<li><p><strong>Re-curate vs import-as-is.</strong> Running every existing note through the curate LLM
+gives thoth’s value-add (the 4-folder classification, a <code class="docutils literal notranslate"><span class="pre">summary:</span></code>, wikilinks,
+dedup-merge), but it costs an LLM call <em>per file</em> and may reshape notes that were
+already good. For an already-clean Markdown vault a low-touch mode that files and
+indexes the page without re-authoring it is often preferable.</p></li>
+<li><p><strong>The cost of a bulk import.</strong> A vault import is a real spend burst: with curate it is
+two LLM calls per file (classify + curate). The #16 daily budget guard would defer the
+tail of a large import to the next day — correct for unattended capture, but a
+foot-gun for a deliberate, supervised one-shot backfill the operator <em>wants</em> to run to
+completion now.</p></li>
+</ol>
 </section>
 <section id="decision">
 <h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
-<p>Add a <code class="docutils literal notranslate"><span class="pre">thoth.intent.IntentClassifier</span></code> collaborator, injected onto <code class="docutils literal notranslate"><span class="pre">Handlers</span></code> alongside
-<code class="docutils literal notranslate"><span class="pre">ingestor</span></code> / <code class="docutils literal notranslate"><span class="pre">query_engine</span></code> / <code class="docutils literal notranslate"><span class="pre">research</span></code>. It is consulted <strong>only</strong> for bare free text
-that hits none of the deterministic short-circuits — those run first and unchanged, and
-the prefixes remain the explicit escape hatch when the model guesses wrong.</p>
+<p><strong>Support both, default to curate.</strong> <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code> curates by default (the full
+value-add). <code class="docutils literal notranslate"><span class="pre">--as-is</span></code> selects a low-touch mode with these exact semantics:</p>
 <ul class="simple">
-<li><p>One cheap model call (a Haiku, <code class="docutils literal notranslate"><span class="pre">DEFAULT_INTENT_MODEL</span></code>, overridable without a redeploy
-via <code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code>) returns <code class="docutils literal notranslate"><span class="pre">{intent:</span> <span class="pre">capture</span> <span class="pre">|</span> <span class="pre">ask</span> <span class="pre">|</span> <span class="pre">query,</span> <span class="pre">confidence}</span></code>.</p></li>
-<li><p>The classifier is <strong>total</strong>: any model/network/parse failure returns the safe default
-(route to ask) rather than raising.</p></li>
-<li><p><strong>Low confidence falls back to ask.</strong> Answering a misfiled note is harmless; silently
-filing a real question as a note is the annoying failure, so the gate defaults to ask
-whenever it is unsure (<code class="docutils literal notranslate"><span class="pre">IntentDecision.route</span></code> collapses a <code class="docutils literal notranslate"><span class="pre">low</span></code> verdict to <code class="docutils literal notranslate"><span class="pre">ask</span></code>).</p></li>
-<li><p>A gate-routed <em>capture</em> confirmation carries a one-line recoverable hint
-(“filed as a note — send it again as a question if you meant to ask”).</p></li>
+<li><p>The cheap <strong>classify</strong> call still runs (one routing call → <code class="docutils literal notranslate"><span class="pre">type</span></code>/<code class="docutils literal notranslate"><span class="pre">slug</span></code>/<code class="docutils literal notranslate"><span class="pre">title</span></code>,
+validated through <code class="docutils literal notranslate"><span class="pre">Vault</span></code>), so the page is routed into the flat 4-folder model.</p></li>
+<li><p>The expensive <strong>curate</strong> call is <strong>SKIPPED</strong>. Instead of a model-authored file-plan,
+the page is written <strong>once</strong> via <code class="docutils literal notranslate"><span class="pre">Vault.write_page</span></code> with the <strong>original file body
+verbatim</strong> as the body and a minimal derived frontmatter (<code class="docutils literal notranslate"><span class="pre">title</span></code> from classify,
+<code class="docutils literal notranslate"><span class="pre">type</span></code>/<code class="docutils literal notranslate"><span class="pre">source:</span> <span class="pre">import</span></code>/<code class="docutils literal notranslate"><span class="pre">tags:</span> <span class="pre">[]</span></code>), routed into the classify-chosen folder
+(<code class="docutils literal notranslate"><span class="pre">entities</span></code>/<code class="docutils literal notranslate"><span class="pre">notes</span></code>/<code class="docutils literal notranslate"><span class="pre">memories</span></code>/<code class="docutils literal notranslate"><span class="pre">actions</span></code>). A saved asset is still embedded and any
+analysed OCR text appended, so a binary import stays searchable.</p></li>
+<li><p>The durable <code class="docutils literal notranslate"><span class="pre">raw/</span></code> source page and the <code class="docutils literal notranslate"><span class="pre">inbox/</span></code> holding are written exactly as today
+(durability and idempotency unchanged), then the filed page is indexed through the
+<strong>same</strong> Hindsight retain pass. So “files + indexes, skips curate” is literally true:
+no curate call, no reshaping, no wikilink/dedup-merge pass, no summary synthesis.</p></li>
+<li><p>The <strong>flat-folder model is an invariant</strong> (ADR 0005): <code class="docutils literal notranslate"><span class="pre">--as-is</span></code> changes only <em>whether
+curate runs</em>, never the folder model. The source folder hierarchy is <strong>not</strong> preserved
+and a pre-existing non-vocabulary <code class="docutils literal notranslate"><span class="pre">type</span></code> in a note’s frontmatter is <strong>not</strong> honoured —
+the page is re-routed by classify.</p></li>
 </ul>
-<p>The gate only routes; the ingest and ask engines are untouched, and the read-only ask
-path never gains write access.</p>
+<p><strong>A transient <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">N</span></code> override.</strong> <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span> <span class="pre">--budget</span> <span class="pre">N</span></code> overrides
+<code class="docutils literal notranslate"><span class="pre">THOTH_DAILY_LLM_BUDGET</span></code> for <strong>this run only</strong>. It is threaded into <code class="docutils literal notranslate"><span class="pre">make_budget_guard</span></code>
+and never written back to the frozen <code class="docutils literal notranslate"><span class="pre">Config</span></code>. Per the existing <code class="docutils literal notranslate"><span class="pre">BudgetGuard</span></code> rule a
+non-positive limit disables the guard, so <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">0</span></code> is the “unlimited for this import”
+escape hatch and <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">50</span></code> caps the run at 50 combined calls. With no flag the
+configured daily budget applies unchanged. The guard still covers the analyse + classify
+(and, in the default mode, curate) calls and the retain pass.</p>
+<p><strong>Batched commits.</strong> <code class="docutils literal notranslate"><span class="pre">Ingestor.ingest</span></code> grew a <code class="docutils literal notranslate"><span class="pre">commit:</span> <span class="pre">bool</span></code> seam: <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code> pulls
+the vault once up front, ingests each file with <code class="docutils literal notranslate"><span class="pre">commit=False</span></code>, and commits+pushes via
+<code class="docutils literal notranslate"><span class="pre">GitSync.commit</span></code> every <code class="docutils literal notranslate"><span class="pre">--batch-size</span></code> files plus a final flush — instead of one commit
+per file — to keep history sane. A <code class="docutils literal notranslate"><span class="pre">VaultConflictError</span></code> on a batch commit stops the run
+loudly (content is filed locally; never <code class="docutils literal notranslate"><span class="pre">--force</span></code>).</p>
 </section>
 <section id="consequences">
 <h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>Plain prose like a reminder or a stray fact is now <em>filed</em> instead of <em>answered</em>,
-without requiring a <code class="docutils literal notranslate"><span class="pre">note:</span></code> prefix.</p></li>
-<li><p>One extra small model call is made <strong>per bare free-text message only</strong> — prefixed /
-URL / file messages skip the gate. It reuses the cached persona prefix, so the
-marginal cost is small.</p></li>
-<li><p>The classifier is an injectable seam with fakes, so routing is unit-tested with no
-live model or socket; the deterministic short-circuits keep their existing tests.</p></li>
-<li><p>A new failure mode (the model misclassifies) is bounded: the prefixes override it, the
-capture hint makes a misfile recoverable in one reply, and low confidence always
-defaults to the harmless ask.</p></li>
+<li><p>A vault import is <strong>one cheap classify call per file</strong> in <code class="docutils literal notranslate"><span class="pre">--as-is</span></code> (still
+budget-guarded) instead of two; pages keep their original prose; they are searchable
+immediately via the retain pass.</p></li>
+<li><p>A later <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code> / reindex never re-curates an as-is page — it is a normal
+curated-folder page, not an inbox hold — so the import is stable.</p></li>
+<li><p>Re-running <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code> over an unchanged tree is a no-op: the existing <code class="docutils literal notranslate"><span class="pre">raw/</span></code> and
+<code class="docutils literal notranslate"><span class="pre">inbox/</span></code> SHA-256 skip means no page is duplicated; only the analyse/classify calls are
+re-spent (and <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">0</span></code> can lift the cap for a deliberate re-run).</p></li>
+<li><p>A crash or Ctrl-C mid-run leaves an uncommitted (dirty) working tree, but the durable
+<code class="docutils literal notranslate"><span class="pre">inbox/</span></code>/<code class="docutils literal notranslate"><span class="pre">raw/</span></code> writes are on disk and a re-run is idempotent, so nothing is lost — the
+vault is simply uncommitted until the next run or a manual commit.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">import</span></code> is added to the legal frontmatter <code class="docutils literal notranslate"><span class="pre">source</span></code> vocabulary (<code class="docutils literal notranslate"><span class="pre">VALID_SOURCES</span></code>) so an
+imported page is writable and distinguishable by provenance.</p></li>
 </ul>
 </section>
 </section>
@@ -579,20 +592,20 @@ defaults to the harmless ask.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="0002-switched-to-python-copier-template.html"
+       href="0009-advanced-image-handling-kind-aware-derived-assets.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">2. Adopt python-copier-template for project structure</p>
+        <p class="prev-next-title">9. Kind-aware advanced image handling: derived assets from one vision call</p>
       </div>
     </a>
     <a class="right-next"
-       href="0004-index-all-content-with-tag-scoped-recall.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">4. Index all content in the embedding store, scope recall by tag</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -626,7 +639,7 @@ defaults to the harmless ask.</p></li>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0003-slack-free-text-intent-gate.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0010-capture-as-is-low-touch-import.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -641,7 +654,7 @@ defaults to the harmless ask.</p></li>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/explanations/decisions/0003-slack-free-text-intent-gate.md.txt">
+    <a href="../../_sources/explanations/decisions/0010-capture-as-is-low-touch-import.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
