@@ -39,8 +39,25 @@ single compact block per page, so per-page index cost stays **bounded** (no fact
 fan-out). The construction is a shared helper (`thoth.hindsight.page_record_text`) used
 by both retain paths — capture (`ingest._retain_facts`) and full reindex
 (`reindex_from_vault`) — so a rebuild stores the same record capture does. Reindex has no
-classification, so its record omits the `entities`/`concepts` lines (title + summary +
-tags still anchor what the page is about).
+classification (it is the cheap body-hash-skip path and runs no classify call), so its
+record omits the `entities`/`concepts` lines (title + summary + tags still anchor what the
+page is about).
+
+We deliberately do **not** persist the classify `entities`/`concepts` into page
+frontmatter to give reindex parity, because the markdown is already the source of truth
+and the residual gap is negligible:
+
+- The page's **own** classification is recoverable from its path. Every retain prepends
+  an in-band `SOURCE: <vault-rel-path>` line (`hindsight.retain_text`) and attaches the
+  same path as the primary `--document-tags` value, so the extractor already sees the
+  folder (which implies the page *type*: `memories/…` ⟹ memory) and the keyword-dense
+  slug (`black-curly-dog-gingham-bed`, effectively a restatement of the title). Reindex
+  also reads `type:` and passes `page_type` independently.
+- The **mentioned** entities/concepts are already in the **body** as `[[wikilinks]]`
+  (dangling or resolved — both are body text), and reindex retains the body. The only
+  thing absent on reindex is a *normalized* classify term that never made it into the
+  body, slug, summary, or tags — a sliver that does not justify writing transient
+  classify output back into the canonical vault.
 
 Phrasing the retained text — not a CLI flag — is the mechanism because Hindsight offers
 no non-extraction retain mode to bypass extraction with. This is **Direction 1** of the
