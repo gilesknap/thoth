@@ -404,6 +404,15 @@ def run_capture(namespace: Namespace, config: Config) -> None:
       :class:`~thoth.git_sync.VaultConflictError` from a batch commit is surfaced loudly
       and stops the run (content is filed locally; never ``--force``).
 
+    Per-file failures are isolated: a file whose ingest raises
+    :class:`~thoth.ingest.IngestError` (an unparseable/invalid model file-plan, a
+    rejected vault write) is logged, counted (``failed``), and skipped -- the run
+    carries on. The failing item is already durable in ``inbox/`` (pass 0b runs before
+    the failing classify/curate), so it is recoverable on a later run rather than
+    aborting a large import on one bad file. (A batch-commit
+    :class:`~thoth.git_sync.VaultConflictError` still stops the run -- a diverged remote
+    affects every file, not one.)
+
     Idempotency leans entirely on the existing ``raw/``/``inbox/`` SHA-256 machinery: a
     second run over an unchanged tree re-derives the same slugs/digests and the raw
     layer skips, so no page is duplicated.
@@ -416,6 +425,7 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     from .budget import make_budget_guard
     from .capture_walk import walk_captures
     from .git_sync import GitSync, VaultConflictError
+    from .ingest import IngestError
 
     captures = walk_captures(
         namespace.paths,
@@ -443,24 +453,36 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     git.pull()
 
     batch_size = max(1, namespace.batch_size)
-    filed = skipped = deferred = 0
+    filed = skipped = deferred = failed = 0
     since_commit = 0
     total = 0
     for capture in captures:
         total += 1
-        report = graph.ingestor.ingest(capture, commit=False, as_is=namespace.as_is)
-        if report.deferred:
-            deferred += 1
-        elif report.page_paths:
-            filed += 1
-        else:
-            skipped += 1
-        since_commit += 1
         target = capture.filename or "(capture)"
-        print(
-            f"capture [{total}]: {target} -> "
-            f"{', '.join(report.page_paths) or report.message or 'no new page'}"
-        )
+        try:
+            report = graph.ingestor.ingest(capture, commit=False, as_is=namespace.as_is)
+        except IngestError as exc:
+            # One bad file must not abort the whole import. ingest() raises IngestError
+            # on a non-deferrable failure (an unparseable/invalid model file-plan, a
+            # rejected vault write) -- but the inbound item is already durable in inbox/
+            # (pass 0b runs before the failing classify/curate), so it is recoverable on
+            # a later run. Log it, count it, and carry on with the rest of the tree; the
+            # staged hold is committed with the batch so the progress is not lost.
+            failed += 1
+            since_commit += 1
+            logger.warning("capture [%d]: %s -> FAILED (%s)", total, target, exc)
+        else:
+            if report.deferred:
+                deferred += 1
+            elif report.page_paths:
+                filed += 1
+            else:
+                skipped += 1
+            since_commit += 1
+            print(
+                f"capture [{total}]: {target} -> "
+                f"{', '.join(report.page_paths) or report.message or 'no new page'}"
+            )
         if since_commit >= batch_size:
             _commit_capture_batch(git, since_commit, VaultConflictError)
             since_commit = 0
@@ -468,8 +490,13 @@ def run_capture(namespace: Namespace, config: Config) -> None:
         _commit_capture_batch(git, since_commit, VaultConflictError)
     print(
         f"capture: {total} item(s) processed -- filed={filed} "
-        f"skipped={skipped} deferred={deferred}"
+        f"skipped={skipped} deferred={deferred} failed={failed}"
     )
+    if failed:
+        print(
+            f"capture: {failed} file(s) failed to curate and are held in inbox/ "
+            "(durable) -- re-run to retry them."
+        )
 
 
 def _commit_capture_batch(

@@ -1019,6 +1019,51 @@ def test_run_capture_batches_commits(
     assert len(git.commit_messages) < len(ingestor.calls)
 
 
+class _OneBadFileIngestor:
+    """Fake ingestor that raises IngestError on the file named ``bad`` (#80)."""
+
+    def __init__(self, bad: str) -> None:
+        self.calls: list[Any] = []
+        self._bad = bad
+
+    def ingest(self, capture: Any, *, commit: bool = True, as_is: bool = False) -> Any:
+        self.calls.append(capture)
+        if capture.filename == self._bad:
+            from thoth.ingest import IngestError
+
+            raise IngestError("could not parse file plan from model output")
+        slug = (capture.filename or "x").rsplit(".", 1)[0]
+        return _FakeIngestReport([f"notes/{slug}.md"])
+
+
+def test_run_capture_one_bad_file_does_not_abort_the_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An IngestError on one file is isolated: the run finishes the rest (#80).
+
+    A real bug found live-verifying #80: an unparseable curate response raised
+    IngestError straight out of the loop and killed a 200-file import. The handler must
+    log+count the failure and carry on, so a single bad file never aborts the batch.
+    """
+    for name in ("n0.md", "bad.md", "n2.md"):
+        (tmp_path / name).write_text(f"# {name}\n", encoding="utf-8")
+    ingestor = _OneBadFileIngestor(bad="bad.md")
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    # Must not raise: the bad file is logged + counted, the other two are filed.
+    __main__.run_capture(ns, config)
+
+    assert len(ingestor.calls) == 3  # every file was attempted, none skipped after fail
+    out = capsys.readouterr().out
+    assert "filed=2" in out and "failed=1" in out
+    assert "held in inbox/" in out
+    # The good work was still committed (batch flush ran despite the failure).
+    assert git.commit_messages != []
+
+
 def test_run_capture_dry_run_writes_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
