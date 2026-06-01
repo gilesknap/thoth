@@ -43,6 +43,8 @@ def test_happy_path_minimal() -> None:
     assert cfg.vault_path == Path("/opt/pkm-vault")
     assert cfg.vault_name == DEFAULT_OBSIDIAN_VAULT_NAME == "pkm-vault"
     assert cfg.anthropic_model == DEFAULT_ANTHROPIC_MODEL == "claude-sonnet-4-6"
+    assert cfg.analyse_model is None
+    assert cfg.diagram_model is None
     assert str(cfg.thoth_home).endswith(".thoth")
     assert cfg.anthropic_api_key is None
     assert cfg.slack_bot_token is None
@@ -66,6 +68,8 @@ def test_all_fields_populated() -> None:
         "THOTH_HOME": "/tmp/h",
         "ANTHROPIC_API_KEY": FAKE_TOKEN,
         "ANTHROPIC_MODEL": "claude-x-1",
+        "THOTH_ANALYSE_MODEL": "claude-analyse-1",
+        "THOTH_DIAGRAM_MODEL": "claude-diagram-1",
         "SLACK_BOT_TOKEN": FAKE_SHORT,
         "SLACK_APP_TOKEN": FAKE_SHORT,
         "SLACK_SUMMARY_CHANNEL": "D0B61LKA3NV",
@@ -84,6 +88,8 @@ def test_all_fields_populated() -> None:
     assert cfg.thoth_home == Path("/tmp/h")
     assert cfg.anthropic_api_key == FAKE_TOKEN
     assert cfg.anthropic_model == "claude-x-1"
+    assert cfg.analyse_model == "claude-analyse-1"
+    assert cfg.diagram_model == "claude-diagram-1"
     assert cfg.slack_bot_token == FAKE_SHORT
     assert cfg.slack_app_token == FAKE_SHORT
     assert cfg.slack_summary_channel == "D0B61LKA3NV"
@@ -380,3 +386,29 @@ def test_empty_optional_falls_back_to_default() -> None:
     """An empty-string ANTHROPIC_MODEL falls back to the documented default."""
     cfg = load_config({"PKM_VAULT": "/x", "ANTHROPIC_MODEL": ""})
     assert cfg.anthropic_model == DEFAULT_ANTHROPIC_MODEL
+
+
+def test_advanced_image_model_knobs_default_none() -> None:
+    """THOTH_ANALYSE_MODEL / THOTH_DIAGRAM_MODEL default to None when unset (#68).
+
+    A None knob lets the analyse/Excalidraw calls fall back to ``anthropic_model`` via
+    the LLM rather than pinning a model; an empty string is treated as unset too.
+    """
+    cfg = load_config(
+        {"PKM_VAULT": "/x", "THOTH_ANALYSE_MODEL": "", "THOTH_DIAGRAM_MODEL": ""}
+    )
+    assert cfg.analyse_model is None
+    assert cfg.diagram_model is None
+
+
+def test_advanced_image_model_knobs_parsed() -> None:
+    """THOTH_ANALYSE_MODEL / THOTH_DIAGRAM_MODEL map onto their Config fields (#68)."""
+    cfg = load_config(
+        {
+            "PKM_VAULT": "/x",
+            "THOTH_ANALYSE_MODEL": "claude-haiku-4-5",
+            "THOTH_DIAGRAM_MODEL": "claude-opus-4-1",
+        }
+    )
+    assert cfg.analyse_model == "claude-haiku-4-5"
+    assert cfg.diagram_model == "claude-opus-4-1"
