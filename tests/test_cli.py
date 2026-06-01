@@ -898,10 +898,16 @@ class _FakeIngestReport:
     """A minimal IngestReport-shaped object the run_capture loop reads."""
 
     def __init__(
-        self, page_paths: list[str], *, deferred: bool = False, message: str = ""
+        self,
+        page_paths: list[str],
+        *,
+        deferred: bool = False,
+        unchanged: bool = False,
+        message: str = "",
     ) -> None:
         self.page_paths = page_paths
         self.deferred = deferred
+        self.unchanged = unchanged
         self.message = message
 
 
@@ -916,7 +922,10 @@ class _RecordingIngestor:
     def ingest(self, capture: Any, *, commit: bool = True, as_is: bool = False) -> Any:
         self.calls.append((capture, commit, as_is))
         if self._skip:
-            report = _FakeIngestReport([], message="skipped_unchanged")
+            # A no-op re-run: unchanged content already curated (issue #95, task D).
+            report = _FakeIngestReport(
+                [], unchanged=True, message="Unchanged; already curated (skipped)."
+            )
         else:
             slug = (capture.filename or "x").rsplit(".", 1)[0]
             report = _FakeIngestReport([f"notes/{slug}.md"])
@@ -1211,7 +1220,12 @@ def test_run_capture_vault_conflict_stops_run(
 def test_run_capture_idempotent_on_rerun(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A second run over an unchanged tree files no new pages (skip), not duplicates."""
+    """A second run over an unchanged tree files no new pages, not duplicates.
+
+    The re-run hits the skip-on-unchanged short-circuit (issue #95, task D): each item
+    is reported ``unchanged`` with no new page path, so nothing is duplicated or
+    re-spent.
+    """
     _seed_capture_tree(tmp_path, 3)
     git = _RecordingGit()
     config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
@@ -1231,6 +1245,7 @@ def test_run_capture_idempotent_on_rerun(
     __main__.run_capture(ns, config)
     assert len(second.calls) == 3
     assert all(report.page_paths == [] for report in second.reports)
+    assert all(report.unchanged for report in second.reports)
 
 
 # --- run_capture against a REAL graph (the budget seam end-to-end) ------------------

@@ -307,6 +307,10 @@ class IngestReport:
         deferred: ``True`` when the inbound item was persisted durably but the
             classify/curate pass was skipped because the LLM was unavailable; a later
             reindex/sweep re-curates the held raw item (SPEC section 6).
+        unchanged: ``True`` when this was a no-op re-run -- the raw source was
+            byte-identical to an existing one *and* a curated page already exists, so
+            the curate/navigation/retain passes were skipped (issue #95, task D). No
+            ``updated:`` date was bumped and no LLM curate call was spent.
         message: A short human-readable status line.
     """
 
@@ -319,6 +323,7 @@ class IngestReport:
     committed: bool = False
     conflict: bool = False
     deferred: bool = False
+    unchanged: bool = False
     message: str = ""
 
 
@@ -460,6 +465,18 @@ class Ingestor:
                 fetched=analysed.fetched,
                 derived=analysed,
             )
+            # Task D (issue #95): true skip-on-unchanged short-circuit. When the raw
+            # source was byte-identical to an existing raw page (skipped_unchanged --
+            # which, because the raw path embeds the slug, means classify reproduced the
+            # prior routing) AND the curated page it produced is already on disk, the
+            # classify-routed curate work is pure churn: a re-run would re-spend the
+            # curate LLM call and bump the curated page's `updated:` date for no content
+            # change. Skip curate (and navigation/retain) entirely so a re-run to finish
+            # an interrupted import costs nothing for the parts already done. Applies to
+            # both the curate and as-is paths (each files to the same folder/slug).
+            curated = self._unchanged_curated(raw, classification)
+            if curated is not None:
+                return self._skip_unchanged(holding, classification, curated, commit)
             if as_is:
                 # Low-touch import (ADR 0010): SKIP curate; file the original body
                 # verbatim into the classify-chosen folder. No second LLM call.
@@ -533,6 +550,108 @@ class Ingestor:
             " [CONFLICT: unpushed]" if committed.conflict else "",
         )
         return committed
+
+    def _unchanged_curated(
+        self, raw: RawCaptureResult, cls: Classification
+    ) -> str | None:
+        """Return the existing curated path when this is a no-op re-run, else ``None``.
+
+        The skip-on-unchanged short-circuit (issue #95, task D) is only taken when BOTH
+        conditions hold, so it never skips genuine work:
+
+        * the raw-capture pass reported ``skipped_unchanged`` -- the source body was
+          byte-identical to an existing raw page. Because that raw path embeds the slug
+          (``raw/<subdir>/<slug>.md``), a match guarantees classify reproduced the prior
+          run's slug; a drifted slug would have created a fresh raw page instead.
+        * a curated page already exists at the classify-routed ``<folder>/<slug>.md``.
+
+        A type with no content folder (only ``inbox`` is excluded from
+        :data:`_TYPE_FOLDER`) or a missing curated page returns ``None`` so the caller
+        falls through to the normal curate/as-is pass -- the short-circuit is purely an
+        optimisation and is conservative by construction (a false negative just re-runs
+        curate; it never wrongly skips an absent page).
+        """
+        if raw.disposition != "skipped_unchanged":
+            return None
+        folder = _TYPE_FOLDER.get(cls.page_type)
+        if folder is None:
+            return None
+        rel = f"{folder}/{cls.slug}.md"
+        return rel if self._vault.page_exists(rel) else None
+
+    def _skip_unchanged(
+        self,
+        holding: _Holding,
+        cls: Classification,
+        curated_path: str,
+        do_commit: bool,
+    ) -> IngestReport:
+        """Terminal path for a no-op re-run: unchanged content already curated (#95 D).
+
+        Removes the (now superseded) holding page written this run by
+        :meth:`persist_inbound` -- exactly like the success path -- then returns an
+        ``unchanged`` report WITHOUT running the curate, navigation-log, or Hindsight
+        retain passes. So neither the curated page's ``updated:`` date nor the
+        ``log.md`` is churned and no LLM/index budget is re-spent for content already on
+        disk; the page stays searchable from its original retain. The holding-removal
+        deletion is committed (or, for the ``commit=False`` batch path, staged for the
+        caller's batched commit) just like a normal success, and the capture liveness
+        marker is recorded on a clean (non-conflict) run since the pipeline ran
+        healthily.
+        """
+        if holding.result.raw_path is not None:
+            self._vault.remove_page(holding.result.raw_path)
+        report = IngestReport(
+            page_paths=[],
+            raw_paths=[],
+            asset_paths=[],
+            obsidian_links=[],
+            wikilinks=[],
+            committed=False,
+            conflict=False,
+            unchanged=True,
+            message=f"Unchanged; already curated at {curated_path} (skipped).",
+        )
+        committed = self._commit_unchanged(report, cls, do_commit=do_commit)
+        if not committed.conflict:
+            self._record_marker(MARKER_CAPTURE)
+        return committed
+
+    def _commit_unchanged(
+        self, report: IngestReport, cls: Classification, *, do_commit: bool
+    ) -> IngestReport:
+        """Commit the holding-removal for a skip-on-unchanged run (issue #95, task D).
+
+        Mirrors :meth:`_commit_deferred`'s git handling but preserves the ``unchanged``
+        report's message instead of synthesising a "Filed N page(s)" line: a conflict is
+        surfaced on the report (the removal is local; never a ``--force``), a benign
+        "nothing to commit" leaves ``committed=False``, and a real push records the push
+        marker. ``do_commit=False`` defers the commit to the batch caller.
+        """
+        if not do_commit:
+            return report
+        try:
+            result = self._git.commit(cls.title or "unchanged capture")
+        except VaultConflictError as conflict:
+            return _replace_report(
+                report,
+                committed=False,
+                conflict=True,
+                message=(
+                    f"{report.message} (holding removal not pushed -- vault conflict; "
+                    f"resolve in Obsidian: {conflict})"
+                ),
+            )
+        except GitSyncError as exc:
+            raise IngestError(f"commit failed: {exc}") from exc
+        if result.committed:
+            self._record_marker(MARKER_PUSH)
+        return _replace_report(
+            report,
+            committed=result.committed,
+            conflict=False,
+            message=report.message,
+        )
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
 
@@ -2211,5 +2330,6 @@ def _replace_report(
         committed=committed,
         conflict=conflict,
         deferred=report.deferred,
+        unchanged=report.unchanged,
         message=message,
     )

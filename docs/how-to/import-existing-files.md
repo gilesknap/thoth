@@ -75,6 +75,11 @@ relative to the walk root; `--exclude` wins over `--include`.
 
 The vault is pulled once up front and commits are **batched**: `--batch-size N` (default
 25) commits+pushes every N files plus a final flush, instead of one commit per file.
-Re-running over an unchanged tree is a **no-op** — the existing `raw/` / `inbox/`
-SHA-256 idempotency skips unchanged files, so pages are never duplicated. A Ctrl-C
-mid-run leaves the vault uncommitted (but durable on disk); just re-run.
+Re-running over an unchanged tree is a true **no-op**. When a file's `raw/` source is
+byte-identical to what's already on disk (the SHA-256 idempotency layer) **and** its
+curated page already exists, the import short-circuits before the classify-routed
+curate pass: nothing is re-spent against the budget and no page's `updated:` date is
+bumped — the re-run reports those files as `unchanged`. So a re-run to finish an
+import that tripped the daily budget cap (or that you Ctrl-C'd) costs nothing for the
+parts already done and resumes only the rest. A Ctrl-C mid-run leaves the vault
+uncommitted (but durable on disk); just re-run.

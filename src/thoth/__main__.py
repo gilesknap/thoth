@@ -453,7 +453,7 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     git.pull()
 
     batch_size = max(1, namespace.batch_size)
-    filed = skipped = deferred = failed = 0
+    filed = skipped = unchanged = deferred = failed = 0
     since_commit = 0
     total = 0
     for capture in captures:
@@ -474,6 +474,12 @@ def run_capture(namespace: Namespace, config: Config) -> None:
         else:
             if report.deferred:
                 deferred += 1
+            elif report.unchanged:
+                # Skip-on-unchanged (#95 task D): the content was already curated and
+                # nothing was re-spent or re-stamped -- count it apart from "skipped"
+                # (no page) so a re-run to finish an interrupted import shows the
+                # already-done parts cost nothing.
+                unchanged += 1
             elif report.page_paths:
                 filed += 1
             else:
@@ -490,7 +496,8 @@ def run_capture(namespace: Namespace, config: Config) -> None:
         _commit_capture_batch(git, since_commit, VaultConflictError)
     print(
         f"capture: {total} item(s) processed -- filed={filed} "
-        f"skipped={skipped} deferred={deferred} failed={failed}"
+        f"unchanged={unchanged} skipped={skipped} deferred={deferred} "
+        f"failed={failed}"
     )
     if failed:
         print(

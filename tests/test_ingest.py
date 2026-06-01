@@ -802,6 +802,96 @@ def test_capture_raw_detects_drift(harness: IngestHarness) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# True skip-on-unchanged short-circuit (issue #95, task D).
+# --------------------------------------------------------------------------- #
+
+
+def test_ingest_skips_curate_when_unchanged_and_already_curated(
+    harness: IngestHarness,
+) -> None:
+    """A re-run of an already-curated, unchanged capture skips curate + retain (#95).
+
+    The first ingest writes the raw + curated pages and retains once. The second ingest
+    sees ``skipped_unchanged`` raw AND an existing curated page, so it must NOT call the
+    curate LLM, NOT re-retain, and NOT rewrite (bump ``updated:`` on) the curated page.
+    """
+    doc = ExtractedDoc(
+        source_url="https://example.com/transformers",
+        title="Transformer Models",
+        markdown="Transformers use attention to weigh tokens.",
+    )
+    # classify, curate (first run) then classify only (second run short-circuits before
+    # curate); the scripted client repeats its last response, so the third call returns
+    # the classify JSON rather than a stale curate plan.
+    client = _ScriptedClient(_classify_json(), _file_plan_json(), _classify_json())
+    hindsight = FakeHindsight()
+    ingestor = _build_ingestor(
+        harness, client=client, extractor=FakeExtractor(doc=doc), hindsight=hindsight
+    )
+
+    first = ingestor.ingest(Capture(url="https://example.com/transformers"))
+    assert first.unchanged is False
+    assert first.page_paths == ["notes/transformer-models.md"]
+    assert len(client.messages.calls) == 2  # classify + curate
+    assert len(hindsight.retained) == 1
+    page = harness.work / "notes/transformer-models.md"
+    text_before = page.read_text(encoding="utf-8")
+
+    second = ingestor.ingest(Capture(url="https://example.com/transformers"))
+
+    # Short-circuited: flagged unchanged, no curated page re-reported, clean run.
+    assert second.unchanged is True
+    assert second.page_paths == []
+    assert second.conflict is False
+    assert "notes/transformer-models.md" in second.message
+    # Curate LLM was NOT called again (only one extra classify call), the page was not
+    # rewritten (no `updated:` churn), and Hindsight was not re-retained.
+    assert len(client.messages.calls) == 3  # +1 classify, NO second curate
+    assert page.read_text(encoding="utf-8") == text_before
+    assert len(hindsight.retained) == 1
+    # No holding leaked behind in inbox/.
+    assert not any((harness.work / "inbox").glob("hold-*.md"))
+
+
+def test_ingest_recurates_when_raw_unchanged_but_curated_page_gone(
+    harness: IngestHarness,
+) -> None:
+    """The short-circuit is conservative: a missing curated page still re-curates (#95).
+
+    ``skipped_unchanged`` raw alone is not enough -- if the curated page it produced
+    is no longer on disk, the re-run must fall through to curate and recreate it rather
+    than wrongly report ``unchanged``.
+    """
+    doc = ExtractedDoc(
+        source_url="https://example.com/transformers",
+        title="Transformer Models",
+        markdown="Transformers use attention to weigh tokens.",
+    )
+    client = _ScriptedClient(
+        _classify_json(), _file_plan_json(), _classify_json(), _file_plan_json()
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    ingestor.ingest(Capture(url="https://example.com/transformers"))
+    page = harness.work / "notes/transformer-models.md"
+    assert page.exists()
+    page.unlink()  # the raw page survives; only the curated page is gone
+
+    report = ingestor.ingest(Capture(url="https://example.com/transformers"))
+
+    # Curated page absent -> not a no-op: curate ran again and recreated it.
+    assert report.unchanged is False
+    assert report.page_paths == ["notes/transformer-models.md"]
+    assert page.exists()
+    assert len(client.messages.calls) == 4  # classify+curate twice
+
+
+# --------------------------------------------------------------------------- #
 # Image capture: bytes -> save_asset, embed, never base64.
 # --------------------------------------------------------------------------- #
 
@@ -851,8 +941,10 @@ def test_image_reingest_same_bytes_is_skipped_not_overwrite(
     """A second ingest of the same image URL/slug is idempotent (no VaultError).
 
     SPEC section 6 step 2: 'Skip if sha256 exists'. The first ingest commits the asset;
-    the second must report ``skipped_unchanged`` for the asset rather than letting
-    ``save_asset`` raise 'refusing to overwrite' and crash the pipeline.
+    the second must not let ``save_asset`` raise 'refusing to overwrite' and crash the
+    pipeline. The asset bytes are skipped (same sha256) and -- since the curated page
+    already exists -- the whole re-ingest now short-circuits as ``unchanged`` (issue
+    #95, task D): no curate call, no re-report of the asset, no rewrite.
     """
     classify = _classify_json(
         page_type="memory", slug="beach-day", title="Beach Day", concepts=[]
@@ -893,7 +985,10 @@ def test_image_reingest_same_bytes_is_skipped_not_overwrite(
     report2 = second.ingest(
         Capture(url="https://example.com/pic", filename="pic.png", source="slack")
     )
-    assert report2.asset_paths == ["raw/assets/beach-day.png"]
+    # Unchanged + already curated -> no-op short-circuit (issue #95, task D): nothing is
+    # re-reported and the curate pass never runs.
+    assert report2.unchanged is True
+    assert report2.asset_paths == []
     # The asset bytes on disk were not rewritten.
     assert asset.stat().st_mtime_ns == mtime_before
     # The fetched tmp file was consumed (skip path cleans it up; no leak).
@@ -2903,12 +2998,14 @@ def test_diagram_reingest_with_different_reconstruction_never_aborts(
         "raw/assets/wb.png",
         "raw/assets/wb.excalidraw.md",
     ]
-    # A DIFFERENT reconstruction on the byte-identical re-ingest: the capture still
-    # succeeds (not deferred, no raise); the drifted derived asset is silently dropped
-    # from the merged paths while the original is skipped-unchanged.
+    # A DIFFERENT reconstruction on the byte-identical re-ingest: capture_raw still runs
+    # (and swallows the derived-asset drift, ADR 0009) so the capture never raises or
+    # defers; the original image then skips-unchanged AND the curated page already
+    # exists, so the whole re-ingest short-circuits as a no-op (issue #95, task D).
     second = _run(_EXCALIDRAW_MD.replace("rectangle", "ellipse"))
     assert second.deferred is False
-    assert second.asset_paths == ["raw/assets/wb.png"]
+    assert second.unchanged is True
+    assert second.asset_paths == []
     # The original reconstruction is left on disk untouched (never overwritten).
     kept = (harness.work / "raw/assets/wb.excalidraw.md").read_text(encoding="utf-8")
     assert "rectangle" in kept
