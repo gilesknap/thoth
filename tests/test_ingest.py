@@ -2666,6 +2666,43 @@ def test_diagram_image_saves_excalidraw_asset_and_embeds_it(
     assert "![[flow-sketch.excalidraw.md]]" not in page_text
 
 
+def test_model_written_excalidraw_md_embed_is_normalised_not_duplicated(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """When the curate model embeds the drawing by its on-disk name
+    (``![[<slug>.excalidraw.md]]``, which renders as raw JSON), it is rewritten to the
+    render form and NOT duplicated by the harness's own embed (issue #68)."""
+    src = tmp_path / "flowchart.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"flow-bytes")
+    classify = _classify_json(
+        page_type="memory", slug="flow-sketch", title="Flow", concepts=[]
+    )
+    # The model's body already embeds the excalidraw asset by its full .md filename.
+    plan = _file_plan_json(
+        folder="notes",
+        slug="flow-sketch",
+        page_type="note",
+        title="Flow",
+        body="A sketch. Redraw: ![[flow-sketch.excalidraw.md]]",
+    )
+    analyser = FakeAnalyser(analysis=_diagram_analysis(), excalidraw=_EXCALIDRAW_MD)
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    ingestor.ingest(Capture(path=src, filename="flowchart.png"))
+
+    page_text = (harness.work / "notes/flow-sketch.md").read_text(encoding="utf-8")
+    # The .md embed is rewritten to the render form...
+    assert "![[flow-sketch.excalidraw.md]]" not in page_text
+    # ...and there is EXACTLY ONE excalidraw embed (no redundant harness-appended copy).
+    assert page_text.count("![[flow-sketch.excalidraw]]") == 1
+
+
 def test_document_image_saves_cleaned_scan_and_embeds_it(
     harness: IngestHarness, tmp_path: Path
 ) -> None:

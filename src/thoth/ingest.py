@@ -1535,11 +1535,20 @@ class Ingestor:
         """Append Obsidian ``![[asset]]`` embeds for saved assets not already in body.
 
         Uses the asset filename (Obsidian resolves embeds vault-wide), never a base64
-        blob. Embeds already present in the model's body are left as-is.
+        blob. Embeds already present in the model's body are left as-is -- except one
+        the curate model wrote by an asset's *on-disk* filename, which is rewritten to
+        its render form: for an Excalidraw drawing the model often emits
+        ``![[<slug>.excalidraw.md]]`` (which renders as the raw JSON note), so it is
+        normalised to ``![[<slug>.excalidraw]]`` (issue #68 live-verify). The rewrite
+        runs before the de-dupe, so the harness never appends a second, redundant embed.
         """
         embeds: list[str] = []
         for asset_rel in raw.asset_paths:
-            embed = f"![[{_embed_name(PurePosixPath(asset_rel).name)}]]"
+            name = PurePosixPath(asset_rel).name
+            embed_name = _embed_name(name)
+            if embed_name != name:
+                body = body.replace(f"![[{name}]]", f"![[{embed_name}]]")
+            embed = f"![[{embed_name}]]"
             if embed not in body and embed not in embeds:
                 embeds.append(embed)
         if not embeds:
