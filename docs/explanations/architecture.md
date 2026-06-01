@@ -24,19 +24,19 @@ validated passes. Critically, the raw content is persisted to the vault *before*
 any LLM call — so nothing is lost if the process restarts mid-flight.
 
 ```{mermaid}
-flowchart LR
-    slack(["Slack\n(Bolt Socket-Mode)"])
-    slack --> sa["slack_app.py\nhandler · dedup"]
-    sa --> ig{"intent.py\nClaude Haiku\nclassify intent"}
-    ig -->|capture| ing["ingest.py\n8-pass pipeline"]
+flowchart TB
+    slack(["Slack<br>(Bolt Socket-Mode)"])
+    slack --> sa["slack_app.py<br>handler · dedup"]
+    sa --> ig{"intent.py<br>Claude Haiku<br>classify intent"}
+    ig -->|capture| ing["ingest.py<br>8-pass pipeline"]
     ig -->|query| qry["query.py"]
     ig -->|ask| res["research.py"]
-    ing --> ext["extract.py\nExa · Firecrawl · Whisper\nfetch URLs · transcribe audio"]
-    ing --> llm["llm.py\nClaude Sonnet API\nclassify · curate · vision"]
-    ing --> va["vault.py\npath-confined writes\nschema validation"]
-    ing --> hs["hindsight.py\nHindsight CLI\nsemantic index"]
-    va --> gs["git_sync.py\nvault-pull · vault-commit"]
-    gs --> ov[("Obsidian vault\ngit-backed Markdown")]
+    ing --> ext["extract.py<br>Exa · Firecrawl · Whisper<br>fetch URLs · transcribe audio"]
+    ing --> llm["llm.py<br>Claude Sonnet API<br>classify · curate · vision"]
+    ing --> va["vault.py<br>path-confined writes<br>schema validation"]
+    ing --> hs["hindsight.py<br>Hindsight CLI<br>semantic index"]
+    va --> gs["git_sync.py<br>vault-pull · vault-commit"]
+    gs --> ov[("Obsidian vault<br>git-backed Markdown")]
     hs -.-> ov
 ```
 
@@ -56,16 +56,16 @@ over FastMCP (stdio). The same path-confinement and schema-validation rules
 apply here as in ingest — the MCP surface cannot escape the vault either.
 
 ```{mermaid}
-flowchart LR
-    cc(["Claude Code\nor claude.ai"])
-    cc --> mcp["mcp_server.py\nFastMCP · 7 pkm_* tools"]
-    mcp --> qry["query.py\nvault-only retrieval\ncost-ordered search"]
-    mcp --> res["research.py\nblended web+vault Q&A"]
-    qry --> va["vault.py\nread-only"]
-    qry --> hs["hindsight.py\nHindsight CLI recall"]
-    res --> llm["llm.py\nClaude Sonnet API"]
-    res --> ext["extract.py\nExa · Firecrawl\nweb search · extract"]
-    va --> ov[("Obsidian vault\ngit-backed Markdown")]
+flowchart TB
+    cc(["Claude Code<br>or claude.ai"])
+    cc --> mcp["mcp_server.py<br>FastMCP · 7 pkm_* tools"]
+    mcp --> qry["query.py<br>vault-only retrieval<br>cost-ordered search"]
+    mcp --> res["research.py<br>blended web+vault Q&A"]
+    qry --> va["vault.py<br>read-only"]
+    qry --> hs["hindsight.py<br>Hindsight CLI recall"]
+    res --> llm["llm.py<br>Claude Sonnet API"]
+    res --> ext["extract.py<br>Exa · Firecrawl<br>web search · extract"]
+    va --> ov[("Obsidian vault<br>git-backed Markdown")]
     hs -.-> ov
 ```
 
