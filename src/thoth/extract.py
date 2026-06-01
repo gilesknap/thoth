@@ -595,9 +595,18 @@ class Extractor:
         """Transcribe an audio file by shelling out to the ``whisper`` CLI.
 
         The binary named by ``whisper_bin`` is invoked with ``--model`` and
-        ``--output_format txt``; its stdout is returned as the transcript text. No
-        ``whisper`` Python package is imported (it stays a subprocess), so this code
-        path is import-safe in CI. Tests monkeypatch :func:`subprocess.run`.
+        ``--output_format txt`` into a throwaway ``--output_dir`` temp directory, and
+        the transcript is read back from the ``<stem>.txt`` file it writes there. We do
+        NOT scrape stdout: the whisper CLI's stdout is the verbose timestamped segment
+        dump, and it always writes its real output to a file. Directing that file to a
+        temp dir (rather than letting it default to the process cwd) is what makes this
+        work on the appliance, where the systemd unit runs with ``WorkingDirectory``
+        under a ``ProtectSystem=strict`` read-only mount: a default-cwd write would fail
+        with ``OSError: Read-only file system`` -- and whisper *catches* that, logs
+        ``Skipping ...``, and still exits 0, so the failure would otherwise pass
+        silently as an empty transcript. No ``whisper`` Python package is imported (it
+        stays a subprocess), so this code path is import-safe in CI. Tests monkeypatch
+        :func:`subprocess.run`.
 
         Args:
             audio_path: Path to the local audio file to transcribe.
@@ -610,28 +619,41 @@ class Extractor:
             TranscriptionError: if ``whisper`` is not installed (``FileNotFoundError``)
                 or exits non-zero (stderr surfaced in the message).
         """
-        argv = [
-            self._whisper_bin,
-            str(audio_path),
-            "--model",
-            model,
-            "--output_format",
-            "txt",
-        ]
-        try:
-            completed = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise TranscriptionError(
-                f"whisper binary {self._whisper_bin!r} not found: {exc}"
-            ) from exc
-        if completed.returncode != 0:
-            raise TranscriptionError(
-                f"whisper failed (exit {completed.returncode}): "
-                f"{completed.stderr.strip()!r}"
-            )
-        return completed.stdout.rstrip()
+        with tempfile.TemporaryDirectory(prefix="thoth-whisper-") as out_dir:
+            argv = [
+                self._whisper_bin,
+                str(audio_path),
+                "--model",
+                model,
+                "--output_format",
+                "txt",
+                "--output_dir",
+                out_dir,
+            ]
+            try:
+                completed = subprocess.run(
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise TranscriptionError(
+                    f"whisper binary {self._whisper_bin!r} not found: {exc}"
+                ) from exc
+            if completed.returncode != 0:
+                raise TranscriptionError(
+                    f"whisper failed (exit {completed.returncode}): "
+                    f"{completed.stderr.strip()!r}"
+                )
+            # whisper writes ``<output_dir>/<audio-stem>.txt``. A missing file means
+            # whisper skipped the input (e.g. it caught a write/decode error and still
+            # exited 0); surface that as a failure rather than an empty transcript.
+            transcript_file = Path(out_dir) / f"{audio_path.stem}.txt"
+            try:
+                return transcript_file.read_text(encoding="utf-8").rstrip()
+            except FileNotFoundError as exc:
+                raise TranscriptionError(
+                    f"whisper wrote no transcript for {audio_path.name!r} "
+                    f"(exit 0); stderr: {completed.stderr.strip()!r}"
+                ) from exc
