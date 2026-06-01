@@ -17,7 +17,8 @@ Two kinds of template ship:
   the ``## Tag Taxonomy`` section that :func:`thoth.lint.parse_taxonomy_tags`
   reads as its single source of truth; ``log.md`` is the append-only action log.
 * **Bases dashboards** -- :data:`BASE_NAMES` (``home``, ``actions``, ``memories``,
-  ``inbox``, ``entities``, ``notes``): YAML ``.base`` files under ``_bases/`` used by
+  ``inbox``, ``entities``, ``notes``, ``personal``): YAML ``.base`` files under
+  ``_bases/`` used by
   ``index.md``. Every ``filters:`` block is an object keyed by exactly one of
   ``and:`` / ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
 
@@ -62,7 +63,7 @@ __all__ = [
     "iter_templates",
 ]
 
-#: The six Bases dashboard names (without the ``.base`` suffix), in the order
+#: The Bases dashboard names (without the ``.base`` suffix), in the order
 #: ``index.md`` embeds them.
 BASE_NAMES: tuple[str, ...] = (
     "home",
@@ -71,6 +72,7 @@ BASE_NAMES: tuple[str, ...] = (
     "inbox",
     "entities",
     "notes",
+    "personal",
 )
 
 #: The three vault-spine file names shipped as package data.
@@ -89,7 +91,7 @@ class TemplateError(Exception):
 
 
 def base_names() -> tuple[str, ...]:
-    """Return the six Bases dashboard names (no ``.base`` suffix)."""
+    """Return the Bases dashboard names (no ``.base`` suffix)."""
     return BASE_NAMES
 
 
@@ -155,7 +157,7 @@ def base_text(name: str) -> str:
 def iter_templates() -> list[tuple[str, str]]:
     """Return ``(relative-name, text)`` for every packaged template.
 
-    The result lists the three spine files followed by the six ``_bases/*.base``
+    The result lists the three spine files followed by the ``_bases/*.base``
     dashboards, each paired with its UTF-8 text.
     """
     items: list[tuple[str, str]] = []

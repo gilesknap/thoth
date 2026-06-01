@@ -53,6 +53,12 @@ Add a tag HERE before using it (prevents sprawl). Seed set:
 - People/Orgs: person, org, product, model
 - Actionable: task, media, recurring, errand
 - Quality: contested, prediction, controversy
+- Sensitivity: personal
+
+Apply `personal` when the item is about the owner's private life, personal interests,
+or specific individuals (books/films to-consume, personal errands, people) — NOT work,
+technical reference, or general knowledge (a whiteboard photo is not personal).
+Cross-cutting: any page may also carry it.
 
 ## Page Thresholds
 - CREATE a page when an entity/concept appears in 2+ sources OR is central to one.

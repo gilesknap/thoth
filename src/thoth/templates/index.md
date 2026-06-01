@@ -43,3 +43,10 @@ updated: 2026-05-30
 > The latest activity across the whole vault.
 >
 > ![[_bases/home.base#Recent Captures (7d)]]
+
+> [!abstract]- 🙂 Personal
+> Personal actions and to-consume items, kept out of the work dashboards above.
+>
+> ![[_bases/personal.base#Open Personal]]
+>
+> ![[_bases/personal.base#Personal Media — To Consume]]

@@ -1,0 +1,35 @@
+filters:
+  and:
+    - file.inFolder("actions")
+    - file.ext == "md"
+    - tags.contains("personal")
+properties:
+  status:     { displayName: Status }
+  due_date:   { displayName: Due }
+  priority:   { displayName: Priority }
+  project:    { displayName: Project }
+  recurrence: { displayName: Repeat }
+  media_type: { displayName: Media Type }
+  creator:    { displayName: Creator }
+  url:        { displayName: URL }
+views:
+  - type: table
+    name: Open Personal
+    filters:
+      and:
+        - status != "done"
+        - status != "completed"
+        - status != "cancelled"
+        - "!tags.contains(\"media\")"
+    order: [file.name, due_date, priority, status, project, recurrence]
+    sort:
+      - { property: priority, direction: ASC }
+      - { property: due_date, direction: ASC }
+  - type: table
+    name: Personal Media — To Consume
+    filters:
+      and:
+        - tags.contains("media")
+        - status == "to_consume"
+    order: [file.name, media_type, creator, priority]
+    sort: [{ property: priority, direction: ASC }]

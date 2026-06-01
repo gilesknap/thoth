@@ -259,8 +259,8 @@ def test_base_text_unknown_dashboard_raises() -> None:
         base_text("does-not-exist")
 
 
-def test_iter_templates_returns_all_nine_non_empty() -> None:
-    """``iter_templates`` yields all 9 templates, spine first, each non-empty."""
+def test_iter_templates_returns_all_templates_non_empty() -> None:
+    """``iter_templates`` yields every template, spine first, each non-empty."""
     items = iter_templates()
     names = [name for name, _ in items]
     assert names == [
@@ -273,6 +273,7 @@ def test_iter_templates_returns_all_nine_non_empty() -> None:
         "_bases/inbox.base",
         "_bases/entities.base",
         "_bases/notes.base",
+        "_bases/personal.base",
     ]
     for name, text in items:
         assert text.strip(), name
@@ -285,7 +286,7 @@ def test_iter_templates_returns_independent_list() -> None:
     """``iter_templates`` returns a fresh list each call (no shared mutation)."""
     first = iter_templates()
     first.clear()
-    assert len(iter_templates()) == 9
+    assert len(iter_templates()) == len(SPINE_NAMES) + len(BASE_NAMES)
 
 
 # --------------------------------------------------------------------------- #
