@@ -79,6 +79,15 @@ SEARCHED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
 # Cap on bytes read per page during grep so a pathological file cannot blow up a scan.
 _MAX_GREP_BYTES: int = 1_000_000
 
+# grep token-match placement weights (issue #96): a token hitting the high-weight
+# haystack (the filename + the page's frontmatter title/summary gloss) outscores one
+# hitting only the body, so for the SAME token count a title match ranks above a
+# body-only match. These weights only ever break ties *within* a token-count tier --
+# the ranking key is (distinct tokens matched, placement-weight sum), so the count of
+# matched words always dominates and more words beats a single better-placed one.
+_HIGH_WEIGHT: int = 2
+_LOW_WEIGHT: int = 1
+
 # Excerpt length used for the deterministic (no-LLM) answer fallback.
 _EXCERPT_CHARS: int = 600
 
@@ -263,43 +272,73 @@ class QueryEngine:
     # ---- pass 1: lexical scan over the curated folders --------------------------
 
     def grep(self, term: str, *, limit: int = 20) -> list[str]:
-        """Lexically scan :data:`SEARCHED_DIRS` ``*.md`` for ``term`` (filename + body).
+        """Lexically scan :data:`SEARCHED_DIRS` ``*.md`` for ``term``, ranked by hits.
 
-        The match is case-insensitive over both the filename and the page body. Any
-        whitespace-separated token of ``term`` matching is enough (so a multi-word query
-        still finds a page that mentions one of its words). Results are returned as
-        vault-relative paths in a stable order (folder order, then filename order),
-        deduplicated, capped at ``limit``.
+        Each candidate page is scored by **how many distinct query tokens it matches**,
+        so a natural-language query (``"black curly dog gingham bed"``) surfaces the
+        page that hits the most words first -- even when it lives in a folder scanned
+        last (issue #96). Tokens are matched on **word boundaries** (a regex
+        ``\\b<token>\\b``), case-insensitively, so ``"bed"`` no longer matches
+        ``embedded`` and ``"do"`` no longer matches ``window``/``document`` -- substring
+        noise that used to flood the results is gone.
+
+        A token hitting the **filename or the page's frontmatter** (its ``title:`` /
+        ``summary:`` gloss -- #72 / ADR 0008) weighs more than one hitting only the
+        body, so a page whose title matches a word outranks a page that merely mentions
+        it in prose for the same token count. The ranking key is a pair -- ``(distinct
+        tokens matched, placement-weight sum)`` -- so token *count* dominates (a page
+        matching more words always wins) and placement only breaks ties within a count
+        tier, each token adding :data:`_HIGH_WEIGHT` for a filename/frontmatter hit or
+        :data:`_LOW_WEIGHT` for a body-only hit.
+
+        Candidates are gathered in the existing stable order (folder order from
+        :data:`SEARCHED_DIRS`, then filename order) and **stable-sorted by that key
+        descending**, so two pages with an identical key keep that original order (the
+        pre-#96 tie-break). The ranked list is then deduplicated-by-construction and
+        capped at ``limit``.
 
         Args:
             term: The search text; split into case-insensitive tokens.
             limit: Maximum number of paths to return.
 
         Returns:
-            Matching vault-relative ``.md`` paths, ordered and capped.
+            Matching vault-relative ``.md`` paths, ranked best-first and capped.
         """
         tokens = _tokenize(term)
         if not tokens or limit < 1:
             return []
-        hits: list[str] = []
+        patterns = [_token_pattern(token) for token in tokens]
+        # Gather every matching page with its ranking key in the existing stable scan
+        # order (folder order, then filename order). The sort below is stable, so pages
+        # with an identical key keep this order -- preserving the pre-#96 tie-break.
+        scored: list[tuple[int, int, str]] = []
         for folder in SEARCHED_DIRS:
             directory = self._vault.root / folder
             if not directory.is_dir():
                 continue
             for entry in sorted(directory.glob("*.md")):
                 rel = f"{folder}/{entry.name}"
-                name_hay = entry.name.lower()
-                if any(token in name_hay for token in tokens):
-                    hits.append(rel)
-                    if len(hits) >= limit:
-                        return hits
-                    continue
-                body = self._safe_read(entry).lower()
-                if any(token in body for token in tokens):
-                    hits.append(rel)
-                    if len(hits) >= limit:
-                        return hits
-        return hits
+                # The filename and the page's frontmatter are the high-weight haystack;
+                # the body is the low-weight one. _safe_read returns the raw text with
+                # the leading "---" frontmatter block intact (#72), which we split off.
+                raw = self._safe_read(entry).lower()
+                front, body = _split_frontmatter(raw)
+                high_hay = f"{entry.name.lower()}\n{front}"
+                matched = 0
+                weight = 0
+                for pattern in patterns:
+                    if pattern.search(high_hay):
+                        matched += 1
+                        weight += _HIGH_WEIGHT
+                    elif pattern.search(body):
+                        matched += 1
+                        weight += _LOW_WEIGHT
+                if matched:
+                    scored.append((matched, weight, rel))
+        # Rank by distinct-token count first, then placement weight; stable, so equal
+        # keys keep their scan order. (matched, weight) descending = best page first.
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [rel for _matched, _weight, rel in scored[:limit]]
 
     # ---- pass 2: graph navigation -----------------------------------------------
 
@@ -549,6 +588,41 @@ class QueryEngine:
 def _tokenize(text: str) -> list[str]:
     """Split a query into lowercase, non-empty whitespace-separated tokens."""
     return [token for token in text.lower().split() if token]
+
+
+def _token_pattern(token: str) -> re.Pattern[str]:
+    """Compile a case-insensitive, word-boundary matcher for one query token (#96).
+
+    Word boundaries (``\\b<token>\\b``) stop the substring noise the old ``token in
+    haystack`` scan produced: ``"bed"`` no longer matches ``embedded`` and ``"do"`` no
+    longer matches ``window``/``document``. The token is regex-escaped so punctuation in
+    a slug-like token (``"drive-control-module"``) matches literally, and a leading or
+    trailing word boundary is only asserted when the token *starts*/*ends* with a word
+    character (so a token like ``"c++"`` still matches at its non-word edge).
+    """
+    body = re.escape(token)
+    left = r"\b" if token[:1].isalnum() or token[:1] == "_" else ""
+    right = r"\b" if token[-1:].isalnum() or token[-1:] == "_" else ""
+    return re.compile(f"{left}{body}{right}", re.IGNORECASE)
+
+
+def _split_frontmatter(raw: str) -> tuple[str, str]:
+    """Split a page's raw text into its YAML frontmatter and its body (#96 weighting).
+
+    A vault page opens with a ``---`` fence, the YAML frontmatter, a closing ``---``
+    fence, then the body (the same shape ``python-frontmatter`` writes). This returns
+    ``(frontmatter, body)`` so grep can weight a token hitting the title/summary gloss
+    above one hitting only prose. When the text has no well-formed frontmatter block the
+    whole thing is treated as body (empty frontmatter), so a malformed or fence-less
+    page never crashes the scan and simply matches at the lower body weight.
+    """
+    if not raw.startswith("---"):
+        return "", raw
+    # Find the closing fence: a line that is exactly "---" after the opening one.
+    closing = re.search(r"\n---[ \t]*(?:\n|$)", raw)
+    if closing is None:
+        return "", raw
+    return raw[3 : closing.start()], raw[closing.end() :]
 
 
 def _split_used(raw: str, consulted: list[Citation]) -> tuple[str, list[Citation]]:
