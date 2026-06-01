@@ -207,7 +207,7 @@ title: Human Readable Title
 type: entity            # entity|concept|comparison|query|summary|action|media|memory|inbox
 created: 2026-05-30
 updated: 2026-05-30
-source: slack           # slack | mcp | web | manual | cron
+source: slack           # slack | mcp | web | manual | cron | import
 tags: [kebab-case, from-taxonomy]
 ---
 ```
@@ -655,7 +655,7 @@ title: Human Readable Title
 type: entity            # entity|concept|comparison|query|summary|action|media|memory|inbox
 created: 2026-05-30
 updated: 2026-05-30
-source: slack           # slack | mcp | web | manual | cron
+source: slack           # slack | mcp | web | manual | cron | import
 tags: [kebab-case, from-taxonomy]
 ---
 ```

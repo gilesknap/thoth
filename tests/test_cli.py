@@ -759,3 +759,670 @@ def test_main_routes_lint_through_dispatch(
 
     __main__.main(["lint", "--no-log"])
     assert seen == [(True, broken_vault_config)]
+
+
+# === thoth capture (issue #80) =====================================================
+
+
+def test_build_parser_capture_flags() -> None:
+    """``capture`` parses every flag; bare ``capture x`` uses the defaults."""
+    parser = __main__.build_parser()
+    ns = parser.parse_args(
+        [
+            "capture",
+            "a",
+            "b",
+            "--dry-run",
+            "--limit",
+            "3",
+            "--as-is",
+            "--budget",
+            "0",
+            "--batch-size",
+            "10",
+            "--include",
+            "*.md",
+            "--exclude",
+            "drafts/*",
+        ]
+    )
+    assert [str(p) for p in ns.paths] == ["a", "b"]
+    assert ns.dry_run is True
+    assert ns.limit == 3
+    assert ns.as_is is True
+    assert ns.budget == 0
+    assert ns.batch_size == 10
+    assert ns.include == ["*.md"]
+    assert ns.exclude == ["drafts/*"]
+
+    bare = parser.parse_args(["capture", "x"])
+    assert [str(p) for p in bare.paths] == ["x"]
+    assert bare.dry_run is False
+    assert bare.limit is None
+    assert bare.as_is is False
+    assert bare.budget is None
+    assert bare.batch_size == 25
+    assert bare.include == []
+    assert bare.exclude == []
+
+
+def test_build_parser_recognises_capture_subcommand() -> None:
+    """``capture`` is a recognised subcommand setting ``command``."""
+    parser = __main__.build_parser()
+    assert parser.parse_args(["capture", "x"]).command == "capture"
+
+
+def test_main_dispatches_capture(
+    monkeypatch: pytest.MonkeyPatch, stub_config: Config
+) -> None:
+    """``thoth capture x`` routes to run_capture with the loaded config."""
+    seen: list[Config] = []
+    monkeypatch.setattr(__main__, "run_capture", lambda ns, cfg: seen.append(cfg))
+    __main__.main(["capture", "x"])
+    assert seen == [stub_config]
+
+
+# --- the walker (thoth.capture_walk.walk_captures) ---------------------------------
+
+
+def test_walk_captures_single_file_builds_one_text_capture(tmp_path: Path) -> None:
+    """A single .md -> one text Capture; a single .png -> one path Capture (#80)."""
+    from thoth.capture_walk import walk_captures
+
+    md = tmp_path / "note.md"
+    md.write_text("# Note\n", encoding="utf-8")
+    text_caps = list(walk_captures([md]))
+    assert len(text_caps) == 1
+    assert text_caps[0].text == "# Note\n"
+    assert text_caps[0].path is None
+    assert text_caps[0].source == "import"
+    assert text_caps[0].filename == "note.md"
+
+    png = tmp_path / "pic.png"
+    png.write_bytes(b"\x89PNG\r\n")
+    img_caps = list(walk_captures([png]))
+    assert len(img_caps) == 1
+    assert img_caps[0].path == png
+    assert img_caps[0].text is None
+    assert img_caps[0].source == "import"
+
+
+def test_walk_captures_recurses_and_skips_machinery(tmp_path: Path) -> None:
+    """A tree yields only content; machinery dirs + spine files are skipped (#80)."""
+    from thoth.capture_walk import walk_captures
+
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "a.md").write_text("a", encoding="utf-8")
+    (tmp_path / "b.png").write_bytes(b"png")
+    for spine in ("index.md", "SCHEMA.md", "log.md"):
+        (tmp_path / spine).write_text("spine", encoding="utf-8")
+    for machinery in (".obsidian", ".git", "_bases"):
+        (tmp_path / machinery).mkdir()
+        (tmp_path / machinery / "x").write_text("skip", encoding="utf-8")
+    (tmp_path / "_bases" / "z.base").write_text("skip", encoding="utf-8")
+    # An unknown extension is skipped (never guessed as an image).
+    (tmp_path / "weird.xyz").write_bytes(b"binary")
+
+    captures = list(walk_captures([tmp_path]))
+    names = sorted(c.filename or "" for c in captures)
+    assert names == ["a.md", "b.png"]
+
+
+def test_walk_captures_include_exclude_and_limit(tmp_path: Path) -> None:
+    """include/exclude globs filter on the relative path; limit caps the count (#80)."""
+    from thoth.capture_walk import walk_captures
+
+    (tmp_path / "drafts").mkdir()
+    (tmp_path / "keep.md").write_text("k", encoding="utf-8")
+    (tmp_path / "skip.txt").write_text("s", encoding="utf-8")
+    (tmp_path / "drafts" / "wip.md").write_text("w", encoding="utf-8")
+
+    only_md = sorted(
+        c.filename or "" for c in walk_captures([tmp_path], include=["*.md"])
+    )
+    assert only_md == ["keep.md", "wip.md"]
+
+    no_drafts = sorted(
+        c.filename or "" for c in walk_captures([tmp_path], exclude=["drafts/*"])
+    )
+    assert no_drafts == ["keep.md", "skip.txt"]
+
+    capped = list(walk_captures([tmp_path], limit=1))
+    assert len(capped) == 1
+
+
+# --- run_capture against fakes -----------------------------------------------------
+
+
+class _FakeIngestReport:
+    """A minimal IngestReport-shaped object the run_capture loop reads."""
+
+    def __init__(
+        self, page_paths: list[str], *, deferred: bool = False, message: str = ""
+    ) -> None:
+        self.page_paths = page_paths
+        self.deferred = deferred
+        self.message = message
+
+
+class _RecordingIngestor:
+    """Records every ingest() call (the capture/kind/source assertions, #80)."""
+
+    def __init__(self, *, skip: bool = False) -> None:
+        self.calls: list[tuple[Any, bool, bool]] = []
+        self.reports: list[_FakeIngestReport] = []
+        self._skip = skip
+
+    def ingest(self, capture: Any, *, commit: bool = True, as_is: bool = False) -> Any:
+        self.calls.append((capture, commit, as_is))
+        if self._skip:
+            report = _FakeIngestReport([], message="skipped_unchanged")
+        else:
+            slug = (capture.filename or "x").rsplit(".", 1)[0]
+            report = _FakeIngestReport([f"notes/{slug}.md"])
+        self.reports.append(report)
+        return report
+
+
+class _RecordingGit:
+    """A fake GitSync recording pull/commit (asserts batch cadence, #80)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.pull_calls = 0
+        self.commit_messages: list[str] = []
+
+    def pull(self, **kwargs: Any) -> Any:
+        self.pull_calls += 1
+        return None
+
+    def commit(self, message: str, **kwargs: Any) -> Any:
+        self.commit_messages.append(message)
+
+        class _R:
+            committed = True
+
+        return _R()
+
+
+def _wire_capture_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ingestor: _RecordingIngestor,
+    git: _RecordingGit,
+) -> None:
+    """Inject the fake ingestor graph + fake GitSync into the run_capture handler."""
+    import thoth.alerts as alerts_mod
+    import thoth.budget as budget_mod
+    import thoth.git_sync as git_mod
+
+    monkeypatch.setattr(
+        __main__,
+        "_build_graph",
+        lambda cfg, *, guard=None: __main__._Graph(
+            ingestor=ingestor, query_engine=None, research=None
+        ),
+    )
+    monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: git)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+    monkeypatch.setattr(budget_mod, "make_budget_guard", lambda cfg, **kw: object())
+
+
+def _seed_capture_tree(root: Path, count: int) -> None:
+    """Write ``count`` Markdown files under ``root`` for a capture run."""
+    for i in range(count):
+        (root / f"n{i}.md").write_text(f"# Note {i}\n", encoding="utf-8")
+
+
+def test_run_capture_builds_one_capture_per_file_correct_kind_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One Capture per file: text for md, path for png, source import (#80)."""
+    (tmp_path / "a.md").write_text("alpha", encoding="utf-8")
+    (tmp_path / "b.png").write_bytes(b"png")
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    __main__.run_capture(ns, config)
+
+    assert len(ingestor.calls) == 2
+    by_name = {c.filename: c for c, _, _ in ingestor.calls}
+    assert by_name["a.md"].text == "alpha" and by_name["a.md"].path is None
+    assert by_name["b.png"].path is not None and by_name["b.png"].text is None
+    assert all(c.source == "import" for c, _, _ in ingestor.calls)
+    # All ingested with commits deferred.
+    assert all(commit is False for _, commit, _ in ingestor.calls)
+
+
+def test_run_capture_batches_commits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """>batch-size files: pull once, batched commits + final flush, not per file."""
+    _seed_capture_tree(tmp_path, 5)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(
+        ["capture", str(tmp_path), "--batch-size", "2"]
+    )
+    __main__.run_capture(ns, config)
+
+    assert git.pull_calls == 1
+    # 5 files, batch 2 -> commits after files 2 and 4, plus a final flush of file 5 = 3.
+    assert len(git.commit_messages) == 3
+    assert len(ingestor.calls) == 5
+    # Definitely NOT one commit per file.
+    assert len(git.commit_messages) < len(ingestor.calls)
+
+
+def test_run_capture_dry_run_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run lists planned filings but never ingests, pulls, commits, or even
+    builds the budget guard (the path returns before guard construction, #80)."""
+    _seed_capture_tree(tmp_path, 3)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    # Re-wrap make_budget_guard to record whether it is ever called on the dry-run path.
+    import thoth.budget as budget_mod
+
+    guard_calls: list[Any] = []
+    monkeypatch.setattr(
+        budget_mod,
+        "make_budget_guard",
+        lambda cfg, **kw: guard_calls.append(kw) or object(),
+    )
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--dry-run"])
+    __main__.run_capture(ns, config)
+
+    assert ingestor.calls == []
+    assert git.pull_calls == 0
+    assert git.commit_messages == []
+    # The guard is NOT built on the dry-run path (no LLM spend is even possible).
+    assert guard_calls == []
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert out.count("would file") == 3
+
+
+def test_run_capture_limit_caps_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--limit 2 over a 5-file tree -> exactly 2 ingest calls (#80)."""
+    _seed_capture_tree(tmp_path, 5)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--limit", "2"])
+    __main__.run_capture(ns, config)
+    assert len(ingestor.calls) == 2
+
+
+def test_run_capture_as_is_threads_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--as-is reaches Ingestor.ingest(as_is=True) for every file (#80)."""
+    _seed_capture_tree(tmp_path, 2)
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--as-is"])
+    __main__.run_capture(ns, config)
+    assert all(as_is is True for _, _, as_is in ingestor.calls)
+
+
+def test_run_capture_budget_override_reaches_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--budget N`` reaches make_budget_guard with the supplied limit (#80)."""
+    _seed_capture_tree(tmp_path, 1)
+    recorded: list[Any] = []
+
+    import thoth.alerts as alerts_mod
+    import thoth.budget as budget_mod
+    import thoth.git_sync as git_mod
+
+    def _record_guard(cfg: Config, **kw: Any) -> Any:
+        recorded.append(kw.get("limit", "MISSING"))
+        return object()
+
+    monkeypatch.setattr(budget_mod, "make_budget_guard", _record_guard)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+    monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: _RecordingGit())
+    monkeypatch.setattr(
+        __main__,
+        "_build_graph",
+        lambda cfg, *, guard=None: __main__._Graph(
+            ingestor=_RecordingIngestor(), query_engine=None, research=None
+        ),
+    )
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    for flag, expected in (("7", 7), ("0", 0)):
+        recorded.clear()
+        ns = __main__.build_parser().parse_args(
+            ["capture", str(tmp_path), "--budget", flag]
+        )
+        __main__.run_capture(ns, config)
+        assert recorded == [expected]
+
+    # No flag -> limit None (use the config value).
+    recorded.clear()
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    __main__.run_capture(ns, config)
+    assert recorded == [None]
+
+
+class _ConflictingGit(_RecordingGit):
+    """A fake GitSync whose first batch ``commit`` raises a VaultConflictError (#80)."""
+
+    def commit(self, message: str, **kwargs: Any) -> Any:
+        from thoth.git_sync import VaultConflictError
+
+        self.commit_messages.append(message)
+        raise VaultConflictError(
+            "vault-commit failed (exit 1). stderr: 'VAULT CONFLICT: resolve'"
+        )
+
+
+def test_run_capture_vault_conflict_stops_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A VaultConflictError on a batch commit exits loudly and stops the run (#80).
+
+    Content is filed locally; the batch push is refused. ``run_capture`` must surface a
+    ``SystemExit`` whose message names the conflict (never ``--force`` over it). The
+    conflict is raised on the FIRST batch commit, so the run stops mid-walk.
+    """
+    _seed_capture_tree(tmp_path, 4)
+    ingestor = _RecordingIngestor()
+    git = _ConflictingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    ns = __main__.build_parser().parse_args(
+        ["capture", str(tmp_path), "--batch-size", "2"]
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        __main__.run_capture(ns, config)
+
+    assert "VAULT CONFLICT" in str(excinfo.value)
+    # The run stopped at the first batch commit (after 2 files), not the whole tree.
+    assert len(ingestor.calls) == 2
+    assert len(git.commit_messages) == 1
+
+
+def test_run_capture_idempotent_on_rerun(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A second run over an unchanged tree files no new pages (skip), not duplicates."""
+    _seed_capture_tree(tmp_path, 3)
+    git = _RecordingGit()
+    config = load_config({"PKM_VAULT": str(tmp_path / "vault")})
+
+    # First run files three pages (one Capture per file).
+    first = _RecordingIngestor(skip=False)
+    _wire_capture_fakes(monkeypatch, ingestor=first, git=git)
+    ns = __main__.build_parser().parse_args(["capture", str(tmp_path)])
+    __main__.run_capture(ns, config)
+    assert len(first.calls) == 3
+    assert all(report.page_paths for report in first.reports)
+
+    # Second run: the raw sha256 layer reports skipped_unchanged -> no new page paths,
+    # so re-capturing an unchanged tree duplicates nothing.
+    second = _RecordingIngestor(skip=True)
+    _wire_capture_fakes(monkeypatch, ingestor=second, git=git)
+    __main__.run_capture(ns, config)
+    assert len(second.calls) == 3
+    assert all(report.page_paths == [] for report in second.reports)
+
+
+# --- run_capture against a REAL graph (the budget seam end-to-end) ------------------
+
+
+class _CliScriptedClient:
+    """A fake Anthropic client returning each scripted response in turn (CLI tests).
+
+    Mirrors ``tests/test_ingest._ScriptedClient`` but local to the CLI tests so a real
+    :class:`thoth.llm.LLM` (built by the real ``_build_graph``) gets a deterministic
+    ``messages.create`` without the SDK -- the seam ``thoth.llm.make_client`` returns.
+    """
+
+    class _Messages:
+        def __init__(self, texts: list[str]) -> None:
+            self._texts = list(texts)
+            self.calls: list[dict[str, Any]] = []
+
+        def create(self, **kwargs: Any) -> Any:
+            self.calls.append(kwargs)
+            text = self._texts.pop(0) if len(self._texts) > 1 else self._texts[0]
+            return {"content": [{"type": "text", "text": text}]}
+
+    def __init__(self, *texts: str) -> None:
+        self.messages = _CliScriptedClient._Messages(list(texts))
+
+
+class _CliFakeHindsight:
+    """A fake Hindsight recording retain calls (no real ``hindsight`` CLI spawn).
+
+    The real ``_build_graph`` constructs a Hindsight that would spawn the
+    ``hindsight-embed`` subprocess on retain; substituting this records the retain
+    instead so the as-is happy path can be driven end-to-end at the CLI level.
+    """
+
+    def __init__(self, config: Any, *, guard: Any = None) -> None:
+        self.guard = guard
+        self.retained: list[str] = []
+
+    def retain(self, rel_path: str, facts: str, *, tags: Any = ()) -> None:
+        self.retained.append(rel_path)
+
+    def probe(self, rel_path: str, query: str) -> bool:
+        return True
+
+
+def _classify_json(*, page_type: str = "note", slug: str = "my-note") -> str:
+    """Build a minimal classify-call JSON string for the CLI end-to-end tests."""
+    import json
+
+    return json.dumps(
+        {
+            "type": page_type,
+            "slug": slug,
+            "title": "My Note",
+            "entities": [],
+            "concepts": ["my-note"],
+        }
+    )
+
+
+def _wire_real_graph_with_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    client: _CliScriptedClient,
+    git: _RecordingGit,
+    hindsight_cls: type = _CliFakeHindsight,
+) -> None:
+    """Let the REAL ``_build_graph`` run, faking only the external boundaries.
+
+    The guard injection, the as-is filing, and the budget charge all run for real; only
+    the Anthropic client (``make_client``), the ``hindsight`` CLI (``Hindsight``), and
+    the git remote (``GitSync``) are substituted, so the budget seam wired into the LLM
+    and Hindsight (issue #80) is proven end-to-end rather than over a stubbed graph.
+    """
+    import thoth.alerts as alerts_mod
+    import thoth.git_sync as git_mod
+    import thoth.hindsight as hindsight_mod
+    import thoth.llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "make_client", lambda cfg: client)
+    monkeypatch.setattr(hindsight_mod, "Hindsight", hindsight_cls)
+    monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: git)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+
+
+def _real_graph_config(tmp_path: Path) -> Config:
+    """Build a config over a fresh seeded vault + tmp THOTH_HOME (state DB)."""
+    from thoth.vault import Vault
+
+    vault_dir = tmp_path / "vault"
+    home = tmp_path / "home"
+    config = load_config({"PKM_VAULT": str(vault_dir), "THOTH_HOME": str(home)})
+    Vault(config).seed()
+    return config
+
+
+def test_run_capture_budget_override_wires_guard_into_graph(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The ``--budget`` guard is the SAME object injected into the LLM AND Hindsight.
+
+    The earlier test proves the ``limit`` reaches ``make_budget_guard``; this proves the
+    guard built from it is actually wired into both model chokepoints the real
+    ``_build_graph`` constructs (``llm._guard`` and ``hindsight.guard``), so a transient
+    ``--budget`` override genuinely caps classify/curate/analyse AND the retain pass
+    (issue #80).
+    """
+    captured: dict[str, Any] = {}
+
+    import thoth.budget as budget_mod
+
+    real_make = budget_mod.make_budget_guard
+
+    def _capture_guard(cfg: Config, **kw: Any) -> Any:
+        guard = real_make(cfg, **kw)
+        captured["guard"] = guard
+        return guard
+
+    monkeypatch.setattr(budget_mod, "make_budget_guard", _capture_guard)
+    config = _real_graph_config(tmp_path)
+    guard_holder: dict[str, Any] = {}
+
+    def _fake_hindsight(cfg: Any, *, guard: Any = None) -> Any:
+        h = _CliFakeHindsight(cfg, guard=guard)
+        guard_holder["hindsight"] = h
+        return h
+
+    _wire_real_graph_with_fakes(
+        monkeypatch,
+        client=_CliScriptedClient(_classify_json()),
+        git=_RecordingGit(),
+        hindsight_cls=_fake_hindsight,  # type: ignore[arg-type]
+    )
+    # Wrap the real _build_graph so the built graph (and its real LLM) is captured.
+    real_build = __main__._build_graph
+    monkeypatch.setattr(
+        __main__,
+        "_build_graph",
+        lambda cfg, *, guard=None: guard_holder.setdefault(
+            "graph", real_build(cfg, guard=guard)
+        ),
+    )
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.md").write_text("alpha", encoding="utf-8")
+
+    ns = __main__.build_parser().parse_args(
+        ["capture", str(tmp_path / "src"), "--budget", "7", "--as-is"]
+    )
+    __main__.run_capture(ns, config)
+
+    guard = captured["guard"]
+    assert guard.enabled is True  # --budget 7 -> a positive, enabled cap
+    # The very same guard object is wired into BOTH model chokepoints the real graph
+    # builds: the LLM (classify/curate/analyse) and Hindsight (the retain pass).
+    assert guard_holder["hindsight"].guard is guard
+    assert guard_holder["graph"].ingestor._llm._guard is guard
+
+
+def test_run_capture_budget_override_blocks_over_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--budget 1`` over two files: the first files, the second is DEFERRED (#80).
+
+    Proves the override is not merely recorded but enforced end-to-end. With ``--as-is``
+    each ingest makes exactly one Anthropic call (classify). A budget of 1 admits the
+    first file's classify; the second file's classify trips
+    :class:`~thoth.budget.BudgetExceededError`, which the ingest pipeline turns into a
+    *deferred* hold (never a lost capture). So file 1 is filed and file 2 is deferred.
+    """
+    config = _real_graph_config(tmp_path)
+    client = _CliScriptedClient(_classify_json())
+    git = _RecordingGit()
+    _wire_real_graph_with_fakes(monkeypatch, client=client, git=git)
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.md").write_text("# A\n\nfirst body\n", encoding="utf-8")
+    (src / "b.md").write_text("# B\n\nsecond body\n", encoding="utf-8")
+
+    ns = __main__.build_parser().parse_args(
+        ["capture", str(src), "--as-is", "--budget", "1"]
+    )
+    __main__.run_capture(ns, config)
+
+    from thoth.vault import Vault
+
+    vault = Vault(config)
+    # Exactly one file was filed as a note; the other was held in inbox/ (deferred).
+    notes = sorted((tmp_path / "vault" / "notes").glob("*.md"))
+    holds = sorted((tmp_path / "vault" / "inbox").glob("*.md"))
+    assert len(notes) == 1, [p.name for p in notes]
+    assert len(holds) == 1, [p.name for p in holds]
+    # The single admitted classify call is all the budget allowed.
+    assert len(client.messages.calls) == 1
+    # The filed page is a real curated/as-is page in the vault.
+    assert vault.page_exists(f"notes/{notes[0].name}")
+
+
+def test_run_capture_as_is_files_verbatim_end_to_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--as-is`` over a real graph: classify-only, body filed verbatim (#80).
+
+    Drives the whole walk -> ingest -> file flow through the REAL ``_build_graph`` for a
+    single Markdown file: with ``--as-is`` the curate pass is skipped (exactly one
+    Anthropic call -- classify), the original body is filed verbatim under the
+    classify-chosen folder with ``source: import``, and the page is indexed through the
+    (faked) retain pass.
+    """
+    config = _real_graph_config(tmp_path)
+    client = _CliScriptedClient(_classify_json(slug="my-note"))
+    git = _RecordingGit()
+    retained: list[str] = []
+
+    class _RecordingHindsight(_CliFakeHindsight):
+        def retain(self, rel_path: str, facts: str, *, tags: Any = ()) -> None:
+            retained.append(rel_path)
+
+    _wire_real_graph_with_fakes(
+        monkeypatch, client=client, git=git, hindsight_cls=_RecordingHindsight
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    original = "# My Note\n\nThis is the original verbatim body.\n"
+    (src / "my-note.md").write_text(original, encoding="utf-8")
+
+    ns = __main__.build_parser().parse_args(["capture", str(src), "--as-is"])
+    __main__.run_capture(ns, config)
+
+    # Exactly one LLM call (classify); curate was NOT invoked.
+    assert len(client.messages.calls) == 1
+    page = tmp_path / "vault" / "notes" / "my-note.md"
+    assert page.exists()
+    page_text = page.read_text(encoding="utf-8")
+    # The body is the original, verbatim, and provenance is the import source.
+    body = page_text.split("---", 2)[2]
+    assert body.strip() == original.strip()
+    assert "source: import" in page_text.split("---", 2)[1]
+    # The filed page went through the (faked) retain pass.
+    assert retained == ["notes/my-note.md"]

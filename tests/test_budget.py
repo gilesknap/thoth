@@ -274,6 +274,25 @@ def test_make_budget_guard_disabled_for_zero_budget(tmp_path: Path) -> None:
     assert make_budget_guard(config).enabled is False
 
 
+def test_make_budget_guard_limit_override_takes_precedence(tmp_path: Path) -> None:
+    """A transient ``limit`` override (thoth capture --budget, #80) beats the config."""
+    config = load_config(
+        {
+            "PKM_VAULT": str(tmp_path),
+            "THOTH_HOME": str(tmp_path / "home"),
+            "THOTH_DAILY_LLM_BUDGET": "1",
+        }
+    )
+    # limit=None keeps the config cap of 1 (one charge then block).
+    default_guard = make_budget_guard(config, clock=_Clock(_utc(2026, 6, 1)))
+    default_guard.charge(KIND_ANTHROPIC)
+    with pytest.raises(BudgetExceededError):
+        default_guard.charge(KIND_ANTHROPIC)
+    # A positive override raises the cap for this run; 0 disables the guard entirely.
+    assert make_budget_guard(config, limit=50).enabled is True
+    assert make_budget_guard(config, limit=0).enabled is False
+
+
 # ---- chokepoint integration: LLM.complete -----------------------------------------
 
 
