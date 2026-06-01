@@ -10,8 +10,10 @@ vault has yielded enough pages:
    -- transparently absorbing what the old ``index.md`` catalog pass used to do.
 2. ``[[wikilink]]`` graph navigation from the pages already found
    (:meth:`QueryEngine.follow_wikilinks`).
-3. semantic recall via Hindsight (:meth:`QueryEngine.recall_paths`), used only when
-   the cheaper structural passes did not already answer.
+3. semantic recall via Hindsight (:meth:`QueryEngine.recall_paths`), run as the last
+   pass when the cheaper structural passes returned fewer than ``max_pages`` candidates
+   (thin results), topping up the candidate set; a query whose cheap passes already
+   filled ``max_pages`` never burns a recall call.
 
 The composed prose is optional (an injected :class:`~thoth.llm.LLM` may write it,
 otherwise a deterministic excerpt of the top page is used), but **the citation block is
@@ -70,11 +72,19 @@ removed so none leaks into the Slack answer.
 
 logger = logging.getLogger(__name__)
 
-# Folders searched for lexical/structural retrieval (the reference layer). raw/ and the
-# actionable actions/ folder are intentionally excluded: retrieval composes from
-# reference pages, and raw sources are reached via their owning page's wikilinks.
-SEARCHED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
-"""Top-level vault folders scanned by :meth:`QueryEngine.grep` (reference layer)."""
+# Folders searched for lexical/structural retrieval. Lexical retrieval spans the
+# reference folders PLUS actions/, so a filed action page is reachable from knowledge
+# Q&A (issue #106). raw/ stays excluded: raw sources are reached via their owning page's
+# wikilinks, not scanned directly.
+SEARCHED_DIRS: tuple[str, ...] = ("entities", "notes", "memories", "actions")
+"""Top-level vault folders scanned by :meth:`QueryEngine.grep` (reference + actions)."""
+
+# Page-type scope for the knowledge-Q&A semantic-recall pass (issue #106): the reference
+# types plus ``action``, so a filed action page can also surface as a recall hit on the
+# knowledge-Q&A path. recall_paths' own default stays REFERENCE_TYPES so the actionable
+# dashboard path and any explicit-typed caller keep their existing scope.
+RECALL_QA_TYPES: frozenset[str] = REFERENCE_TYPES | frozenset({"action"})
+"""Page-type scope for the knowledge-Q&A recall pass (reference types + ``action``)."""
 
 # Cap on bytes read per page during grep so a pathological file cannot blow up a scan.
 _MAX_GREP_BYTES: int = 1_000_000
@@ -194,9 +204,10 @@ class QueryEngine:
         The passes run cheapest-first and short-circuit: a grep hit seeds the
         candidate set (grep scans frontmatter too, so a page's ``summary:`` gloss is
         matched there), ``[[wikilink]]`` navigation expands it, and Hindsight recall is
-        consulted only when ``use_recall`` is true *and* the cheap structural passes
-        found nothing (so a query the grep/wikilinks already answered never burns
-        a recall call). The prose is written by the injected LLM if present, else taken
+        consulted when ``use_recall`` is true *and* the cheap structural passes
+        returned fewer than ``max_pages`` candidates (thin results), topping up the set
+        (so a query the grep/wikilinks already filled to ``max_pages`` never burns a
+        recall call). The prose is written by the injected LLM if present, else taken
         as a deterministic excerpt of the top page; either way the citation block is
         harness-built from confined, real paths. With an LLM the result's citations are
         the **used** subset the model named on its ``USED:`` line (issue #34), and
@@ -257,10 +268,17 @@ class QueryEngine:
             add(self.follow_wikilinks(path, limit=max_pages))
 
         # 3) semantic recall -- the expensive pass. Cost-ordered (SPEC section 7): it
-        # runs only when the cheap structural passes found nothing, so a query the
-        # grep/wikilinks already answered never burns a recall call.
-        if use_recall and not ordered:
-            add(self.recall_paths(query, limit=max_pages * 2), from_recall=True)
+        # stays the last, most expensive pass and runs only when the cheap structural
+        # passes returned THIN results (fewer than max_pages candidates), topping up
+        # the set rather than being all-or-nothing (issue #107). A query whose cheap
+        # passes already filled max_pages never burns a recall call. add() dedupes and
+        # preserves discovery order, so grep/wikilink hits keep their leading rank and
+        # recall merely appends to fill up. The Q&A recall scope adds actions (#106).
+        if use_recall and len(ordered) < max_pages:
+            add(
+                self.recall_paths(query, limit=max_pages * 2, types=RECALL_QA_TYPES),
+                from_recall=True,
+            )
 
         if not ordered:
             raise QueryError(f"no vault page found for query: {query!r}")
