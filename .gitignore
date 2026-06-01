@@ -72,3 +72,4 @@ lockfiles/
 
 # api keys
 .env
+.claude/worktrees
