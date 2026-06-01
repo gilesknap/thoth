@@ -367,6 +367,162 @@ def test_grep_skips_unsearched_folders(vault: Vault, engine: QueryEngine) -> Non
     assert engine.grep("unique-action-token") == []
 
 
+# --- grep ranking (issue #96) ------------------------------------------------------
+
+
+def _ranking_engine(config: Config, vault: Vault, **pages: str) -> QueryEngine:
+    """Write ``folder/slug.md`` pages (value = body) into the vault; return an engine.
+
+    Keys are ``folder__slug`` (double underscore = the ``/`` separator) so a test can
+    drop a handful of bodies into ``entities``/``notes``/``memories`` and immediately
+    grep them. Each page is given a plain title equal to its slug so the title carries
+    no extra query tokens unless the test puts them there.
+    """
+    for key, body in pages.items():
+        folder, _, slug = key.partition("__")
+        (vault.root / folder / f"{slug}.md").write_text(
+            _page(title=slug, page_type="note", body=body),
+            encoding="utf-8",
+        )
+    return QueryEngine(config, vault, _FakeHindsight(config))
+
+
+def test_grep_ranks_most_tokens_first_across_folders(
+    config: Config, vault: Vault
+) -> None:
+    """The page matching the MOST tokens leads -- even from memories/ (scanned last).
+
+    Reproduces issue #96: a natural-language query whose best page lives in the
+    last-scanned folder must not be buried below single-token junk from earlier folders.
+    """
+    engine = _ranking_engine(
+        config,
+        vault,
+        entities__a_dog="A dog ran past.",
+        notes__b_bed="The bed was made.",
+        memories__the_dog_bed=(
+            "My black curly dog sleeps on a gingham bed every night."
+        ),
+    )
+    hits = engine.grep("black curly dog gingham bed")
+    # The memories page matches all five tokens; it leads despite the folder order.
+    assert hits[0] == "memories/the_dog_bed.md"
+
+
+def test_grep_more_tokens_outranks_fewer_regardless_of_folder(
+    config: Config, vault: Vault
+) -> None:
+    """A page matching more tokens sorts above one matching fewer, independent of order.
+
+    The richer page is seeded in ``memories`` (scanned LAST) and the weaker ones in
+    ``entities``/``notes`` (scanned first), so folder order alone would invert the
+    desired ranking; the token-count score must win.
+    """
+    engine = _ranking_engine(
+        config,
+        vault,
+        entities__one_token="alpha only here.",
+        notes__one_other="beta only here.",
+        memories__three_tokens="alpha beta gamma all present.",
+    )
+    hits = engine.grep("alpha beta gamma")
+    assert hits[0] == "memories/three_tokens.md"
+    # Both single-token pages still appear, ranked below the three-token page.
+    assert hits.index("memories/three_tokens.md") < hits.index("entities/one_token.md")
+    assert hits.index("memories/three_tokens.md") < hits.index("notes/one_other.md")
+
+
+def test_grep_word_boundary_excludes_substring_noise(
+    config: Config, vault: Vault
+) -> None:
+    """``"bed"`` skips ``embedded``; ``"do"`` skips ``window``/``document`` (#96).
+
+    The old substring scan flooded results with these false hits and suppressed the
+    recall fallback; word-boundary matching drops them.
+    """
+    engine = _ranking_engine(
+        config,
+        vault,
+        notes__embed_noise="This page is all about embedded firmware.",
+        memories__real_bed="The bed in the spare room is comfy.",
+    )
+    # "bed" matches only the real page, never the "embedded" substring page.
+    assert engine.grep("bed") == ["memories/real_bed.md"]
+
+    engine2 = _ranking_engine(
+        config,
+        vault,
+        notes__doc_noise="Open the document in a new window of the browser.",
+        memories__my_dog="Tell me about my dog: a friendly retriever.",
+    )
+    hits = engine2.grep("tell me about my dog")
+    # "do" as a substring of document/window must NOT surface the noise page; only the
+    # genuine "dog"/"tell"/"me"/"about"/"my" matches count.
+    assert "notes/doc_noise.md" not in hits
+    assert hits[0] == "memories/my_dog.md"
+
+
+def test_grep_title_match_outranks_body_only_match(
+    config: Config, vault: Vault
+) -> None:
+    """A page matching a token in its title/frontmatter outranks a body-only match.
+
+    Same single-token count for both pages, so only the placement weight separates them:
+    the page whose title carries the word must lead.
+    """
+    # Title page lives in memories (scanned LAST); body page in entities (first), so
+    # folder order would put the body page first absent the title weighting. Neither
+    # filename carries the query token, so only the title placement separates them.
+    (vault.root / "entities" / "first-page.md").write_text(
+        _page(
+            title="First Page",
+            page_type="note",
+            body="We discussed kangaroo handling at length during the meeting.",
+        ),
+        encoding="utf-8",
+    )
+    (vault.root / "memories" / "second-page.md").write_text(
+        _page(
+            title="Kangaroo Facts",
+            page_type="note",
+            body="Some marsupial trivia lives here.",
+        ),
+        encoding="utf-8",
+    )
+    engine = QueryEngine(config, vault, _FakeHindsight(config))
+    hits = engine.grep("kangaroo")
+    assert hits[0] == "memories/second-page.md"
+    assert "entities/first-page.md" in hits
+
+
+def test_grep_summary_frontmatter_match_outranks_body_only(
+    config: Config, vault: Vault
+) -> None:
+    """A token in the ``summary:`` gloss outweighs a body-only match (#72)."""
+    # Neither filename nor the non-summary frontmatter carries "quokka": the body page
+    # hits it only in prose, the summary page only in its summary: gloss.
+    (vault.root / "entities" / "prose-page.md").write_text(
+        _page(
+            title="Prose Page",
+            page_type="note",
+            body="A passing reference to a quokka in the prose.",
+        ),
+        encoding="utf-8",
+    )
+    (vault.root / "memories" / "gloss-page.md").write_text(
+        _page(
+            title="Gloss Page",
+            page_type="note",
+            body="No marsupial words appear in this body at all.",
+            summary="the definitive quokka reference",
+        ),
+        encoding="utf-8",
+    )
+    engine = QueryEngine(config, vault, _FakeHindsight(config))
+    hits = engine.grep("quokka")
+    assert hits[0] == "memories/gloss-page.md"
+
+
 # --- follow_wikilinks --------------------------------------------------------------
 
 
