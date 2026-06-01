@@ -79,6 +79,35 @@ private deployment notes for host/credentials — never commit those):
 - The daemon runs under systemd (`thoth-slack`, `thoth-hindsight`); restart after
   the checkout.
 
+### Verify a subprocess boundary under the unit's real sandbox
+
+`thoth-slack.service` is hardened (`ProtectSystem=strict`, `ProtectHome=read-only`,
+`PrivateTmp`, a narrow `ReadWritePaths`). Code that shells out (e.g. the `whisper`
+STT subprocess in `extract.py`) can pass a bare `pytest`/manual run yet **fail only
+under that confinement** — a CLI that writes to its cwd dies on the read-only
+`WorkingDirectory=/opt/thoth`, and a tool that downloads to `~/.cache` dies on
+read-only home. CI cannot catch this (it has no runtime deps, no sandbox).
+
+Reproduce the *exact* confinement without touching the live daemon using
+`systemd-run` with the same hardening directives the unit sets:
+
+```
+systemd-run --pipe --wait --collect -q \
+  -p User=pkm -p Group=pkm -p WorkingDirectory=/opt/thoth \
+  -p ProtectSystem=strict -p ProtectHome=read-only -p PrivateTmp=true \
+  -p ReadWritePaths="/opt/pkm-vault /home/pkm/.thoth /home/pkm/.hindsight /home/pkm/.pg0" \
+  -p Environment=HOME=/home/pkm \
+  <the-exact-argv-the-code-runs>
+```
+
+A foot-gun this caught: the `whisper` CLI **catches** its own output-file write
+error, logs `Skipping …`, and still **exits 0** — so a returncode-only check reads
+a sandbox failure as an empty success. Direct such a tool's output to a temp dir
+(writable via `PrivateTmp`) and read the file, rather than scraping stdout. Note
+`PrivateTmp` gives the run its *own* `/tmp`, so stage any input file the test reads
+somewhere the sandbox can see it (a `ReadWritePaths` dir, or `/home/pkm` which is
+readable under `ProtectHome=read-only`), not `/tmp`.
+
 ### Smoke without the live pipeline
 
 Some checks don't need a real Slack message:
