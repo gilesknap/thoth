@@ -84,6 +84,8 @@ where = ["src"]
     "templates/*.md",
     "templates/_bases/*.base",
     "templates/.obsidian/**/*",
+    "templates/.gitattributes",
+    "templates/.gitignore",
 ]
 
 [tool.pyright]

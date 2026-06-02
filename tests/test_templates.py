@@ -23,6 +23,7 @@ import yaml
 from thoth.templates import (
     BASE_NAMES,
     OBSIDIAN_NAMES,
+    ROOT_NAMES,
     SPINE_NAMES,
     TemplateError,
     base_names,
@@ -220,7 +221,7 @@ def test_names_match_shipped_files() -> None:
     root = resources.files("thoth").joinpath("templates")
     top = {p.name for p in root.iterdir() if p.is_file()}
     bases = {p.name for p in root.joinpath("_bases").iterdir() if p.is_file()}
-    assert top == set(SPINE_NAMES)
+    assert top == set(SPINE_NAMES) | set(ROOT_NAMES)
     assert bases == {f"{n}.base" for n in BASE_NAMES}
     # The public accessors echo the constants.
     assert base_names() == BASE_NAMES
@@ -276,10 +277,13 @@ def test_iter_templates_returns_all_templates_non_empty() -> None:
         "_bases/notes.base",
         "_bases/personal.base",
         *OBSIDIAN_NAMES,
+        *ROOT_NAMES,
     ]
     # The discovered .obsidian tail includes the snippet and the seeded config.
     assert ".obsidian/snippets/dashboard-full-width.css" in OBSIDIAN_NAMES
     assert ".obsidian/appearance.json" in OBSIDIAN_NAMES
+    # The vault-root dotfiles seed git's merge + ignore rules.
+    assert ROOT_NAMES == (".gitattributes", ".gitignore")
     for name, text in items:
         assert text.strip(), name
     # Each listed text round-trips through the single-name accessor.
@@ -293,7 +297,7 @@ def test_iter_templates_returns_independent_list() -> None:
     first.clear()
     assert len(iter_templates()) == len(SPINE_NAMES) + len(BASE_NAMES) + len(
         OBSIDIAN_NAMES
-    )
+    ) + len(ROOT_NAMES)
 
 
 # --------------------------------------------------------------------------- #
