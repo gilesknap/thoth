@@ -56,6 +56,7 @@ __all__ = [
     "BASE_NAMES",
     "SPINE_NAMES",
     "OBSIDIAN_NAMES",
+    "ROOT_NAMES",
     "TemplateError",
     "template_text",
     "base_text",
@@ -78,6 +79,14 @@ BASE_NAMES: tuple[str, ...] = (
 
 #: The three vault-spine file names shipped as package data.
 SPINE_NAMES: tuple[str, ...] = ("index.md", "SCHEMA.md", "log.md")
+
+#: Vault-root dotfiles shipped with the spine and seeded into the vault root by
+#: :meth:`thoth.vault.Vault.seed`. ``.gitattributes`` gives committed Markdown a
+#: ``merge=union`` strategy (so concurrent appends from two devices both survive a
+#: merge instead of conflicting); ``.gitignore`` keeps per-device Obsidian state
+#: (``workspace.json``, caches, ``.trash``) and the desktop-only ``obsidian-git``
+#: plugin out of the synced repo (mobile cannot run it).
+ROOT_NAMES: tuple[str, ...] = (".gitattributes", ".gitignore")
 
 #: Owning package whose ``templates`` data subdirectory holds the templates. The
 #: data directory is deliberately NOT a package (no ``__init__.py``), so it is
@@ -193,8 +202,9 @@ def base_text(name: str) -> str:
 def iter_templates() -> list[tuple[str, str]]:
     """Return ``(relative-name, text)`` for every packaged template.
 
-    The result lists the three spine files, the ``_bases/*.base`` dashboards, and
-    the ``.obsidian`` config files, each paired with its UTF-8 text.
+    The result lists the three spine files, the ``_bases/*.base`` dashboards, the
+    ``.obsidian`` config files, and the vault-root dotfiles, each paired with its
+    UTF-8 text.
     """
     items: list[tuple[str, str]] = []
     for spine in SPINE_NAMES:
@@ -204,4 +214,6 @@ def iter_templates() -> list[tuple[str, str]]:
         items.append((rel, template_text(rel)))
     for obsidian in OBSIDIAN_NAMES:
         items.append((obsidian, template_text(obsidian)))
+    for root in ROOT_NAMES:
+        items.append((root, template_text(root)))
     return items

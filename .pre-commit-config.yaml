@@ -3,7 +3,10 @@ repos:
     rev: v5.0.0
     hooks:
       - id: check-added-large-files
-        exclude: ^uv.lock
+        # uv.lock is generated; the bundled Obsidian community plugins (Excalidraw's
+        # main.js is ~8 MB) are vendored verbatim into the vault template and tracked
+        # in the vault repo too, so they are intentionally over the default cap.
+        exclude: ^(uv\.lock|src/thoth/templates/\.obsidian/plugins/)
       - id: check-yaml
       - id: check-merge-conflict
       - id: end-of-file-fixer
