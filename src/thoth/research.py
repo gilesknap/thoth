@@ -41,6 +41,10 @@ from thoth.extract import ExtractedDoc, ExtractError, Extractor, SsrfError, WebH
 from thoth.llm import (
     LLM,
     Message,
+    _block_id,
+    _block_input,
+    _block_name,
+    _tool_use_blocks,
     assistant_blocks_message,
     extract_text,
     tool_result_block,
@@ -662,69 +666,6 @@ class _ToolLoop:
             f"{candidate_block}"
             f"Question: {question}"
         )
-
-
-# ---- response-shape helpers (tolerant of SDK objects and dict-shaped fakes) -------
-
-
-def _tool_use_blocks(response: Any) -> list[Any]:
-    """Return the ``tool_use`` content blocks of a response (objects or dicts).
-
-    :func:`thoth.llm.extract_text` deliberately ignores ``tool_use`` blocks, so the
-    research loop inspects ``response.content`` itself. Tolerant of the real SDK shape
-    (blocks with a ``.type`` attribute) and a dict-shaped fake
-    (``{'content': [{'type': 'tool_use', ...}]}``).
-
-    Args:
-        response: An Anthropic response object or a dict-shaped stand-in.
-
-    Returns:
-        The list of ``tool_use`` blocks, in order (possibly empty).
-    """
-    content = (
-        response.get("content")
-        if isinstance(response, dict)
-        else getattr(response, "content", None)
-    )
-    if content is None:
-        return []
-    blocks: list[Any] = []
-    for block in content:
-        block_type = (
-            block.get("type")
-            if isinstance(block, dict)
-            else getattr(block, "type", None)
-        )
-        if block_type == "tool_use":
-            blocks.append(block)
-    return blocks
-
-
-def _block_name(block: Any) -> str:
-    """Return a ``tool_use`` block's tool ``name`` as a string (``''`` when absent)."""
-    name = (
-        block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
-    )
-    return name if isinstance(name, str) else ""
-
-
-def _block_id(block: Any) -> str:
-    """Return a ``tool_use`` block's ``id`` as a string (``''`` when absent).
-
-    The id keys the matching ``tool_result`` block in the next user turn, so it must be
-    carried through verbatim (the Messages API rejects a ``tool_result`` whose
-    ``tool_use_id`` matches no prior ``tool_use`` block).
-    """
-    value = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
-    return value if isinstance(value, str) else ""
-
-
-def _block_input(block: Any) -> dict[str, Any]:
-    """Return a ``tool_use`` block's ``input`` map (``{}`` when absent/ill-typed)."""
-    value = (
-        block.get("input") if isinstance(block, dict) else getattr(block, "input", None)
-    )
-    return value if isinstance(value, dict) else {}
 
 
 def _slugify(text: str) -> str:

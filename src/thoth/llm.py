@@ -64,6 +64,7 @@ __all__ = [
     "build_create_kwargs",
     "build_system_blocks",
     "extract_text",
+    "extract_tool_use",
     "make_client",
     "parse_json_block",
     "response_content_blocks",
@@ -252,8 +253,7 @@ def file_plan_contract_text() -> str:
     log_actions = ", ".join(sorted(_VALID_LOG_ACTIONS))
     summary_types = ", ".join(sorted(SUMMARY_TYPES))
     return (
-        "Return ONLY a single JSON object (no prose, no commentary) of this exact "
-        "shape:\n"
+        "The file plan you submit MUST be a single object of this exact shape:\n"
         "{\n"
         '  "pages": [ {                         // REQUIRED, at least one page\n'
         '    "action": "create" | "update",\n'
@@ -364,6 +364,7 @@ def build_create_kwargs(
     system_extra: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     tools: list[dict[str, Any]] | None = None,
+    tool_choice: dict[str, Any] | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the keyword arguments for ``messages.create``.
@@ -380,6 +381,8 @@ def build_create_kwargs(
         system_extra: Optional uncached extra system text.
         max_tokens: Maximum tokens to generate.
         tools: Optional tool definitions to pass through.
+        tool_choice: Optional ``tool_choice`` directive (e.g. forcing a specific tool
+            via ``{"type": "tool", "name": ...}``); included only when provided.
         model: Optional model id overriding ``config.anthropic_model``.
 
     Returns:
@@ -393,6 +396,8 @@ def build_create_kwargs(
     }
     if tools is not None:
         kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
     return kwargs
 
 
@@ -468,6 +473,7 @@ class LLM:
         system_extra: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: dict[str, Any] | None = None,
         model: str | None = None,
     ) -> Any:
         """Call ``client.messages.create`` with assembled kwargs; return the response.
@@ -477,6 +483,7 @@ class LLM:
             system_extra: Optional uncached extra system text.
             max_tokens: Maximum tokens to generate.
             tools: Optional tool definitions to pass through.
+            tool_choice: Optional ``tool_choice`` directive forcing/steering tool use.
             model: Optional model id overriding ``config.anthropic_model`` (e.g. a
                 cheaper Haiku for the Slack intent gate).
 
@@ -498,6 +505,7 @@ class LLM:
             system_extra=system_extra,
             max_tokens=max_tokens,
             tools=tools,
+            tool_choice=tool_choice,
             model=model,
         )
         return self.client.messages.create(**kwargs)
@@ -593,6 +601,91 @@ def response_content_blocks(response: Any) -> list[dict[str, Any]]:
     if content is None:
         return []
     return [_block_as_dict(block) for block in content]
+
+
+# ---- tool-use response-shape helpers (tolerant of SDK objects and dict fakes) -----
+
+
+def _tool_use_blocks(response: Any) -> list[Any]:
+    """Return the ``tool_use`` content blocks of a response (objects or dicts).
+
+    :func:`extract_text` deliberately ignores ``tool_use`` blocks, so a tool-use caller
+    inspects ``response.content`` itself. Tolerant of the real SDK shape (blocks with a
+    ``.type`` attribute) and a dict-shaped fake
+    (``{'content': [{'type': 'tool_use', ...}]}``).
+
+    Args:
+        response: An Anthropic response object or a dict-shaped stand-in.
+
+    Returns:
+        The list of ``tool_use`` blocks, in order (possibly empty).
+    """
+    content = (
+        response.get("content")
+        if isinstance(response, dict)
+        else getattr(response, "content", None)
+    )
+    if content is None:
+        return []
+    blocks: list[Any] = []
+    for block in content:
+        block_type = (
+            block.get("type")
+            if isinstance(block, dict)
+            else getattr(block, "type", None)
+        )
+        if block_type == "tool_use":
+            blocks.append(block)
+    return blocks
+
+
+def _block_name(block: Any) -> str:
+    """Return a ``tool_use`` block's tool ``name`` as a string (``''`` when absent)."""
+    name = (
+        block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
+    )
+    return name if isinstance(name, str) else ""
+
+
+def _block_id(block: Any) -> str:
+    """Return a ``tool_use`` block's ``id`` as a string (``''`` when absent).
+
+    The id keys the matching ``tool_result`` block in the next user turn, so it must be
+    carried through verbatim (the Messages API rejects a ``tool_result`` whose
+    ``tool_use_id`` matches no prior ``tool_use`` block).
+    """
+    value = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
+    return value if isinstance(value, str) else ""
+
+
+def _block_input(block: Any) -> dict[str, Any]:
+    """Return a ``tool_use`` block's ``input`` map (``{}`` when absent/ill-typed)."""
+    value = (
+        block.get("input") if isinstance(block, dict) else getattr(block, "input", None)
+    )
+    return value if isinstance(value, dict) else {}
+
+
+def extract_tool_use(response: Any, name: str) -> dict[str, Any] | None:
+    """Return the input dict of the first ``tool_use`` block named ``name``.
+
+    Built on the tolerant block helpers, so it works against both the real SDK response
+    (where ``tool_use.input`` is an already-parsed dict) and a dict-shaped test fake. A
+    forced tool call (``tool_choice={"type": "tool", "name": name}``) makes the model
+    return a structured ``tool_use.input`` dict the SDK/transport escapes for us, so a
+    body with raw newlines / non-breaking spaces can never break JSON parsing.
+
+    Args:
+        response: An Anthropic response object or a dict-shaped stand-in.
+        name: The tool name to match.
+
+    Returns:
+        The matching block's ``input`` dict, or ``None`` when no block matches.
+    """
+    for block in _tool_use_blocks(response):
+        if _block_name(block) == name:
+            return _block_input(block)
+    return None
 
 
 def assistant_blocks_message(response: Any) -> Message:

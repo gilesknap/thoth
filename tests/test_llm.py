@@ -21,6 +21,7 @@ from thoth.llm import (
     build_create_kwargs,
     build_system_blocks,
     extract_text,
+    extract_tool_use,
     file_plan_contract_text,
     make_client,
     parse_json_block,
@@ -158,6 +159,76 @@ def test_build_create_kwargs_honours_overrides(config: Config) -> None:
     assert kwargs["max_tokens"] == 512
     assert kwargs["tools"] == tools
     assert kwargs["system"][-1] == {"type": "text", "text": "EXTRA"}
+    # tool_choice omitted unless provided.
+    assert "tool_choice" not in kwargs
+
+
+def test_build_create_kwargs_passes_tool_choice(config: Config) -> None:
+    """A tool_choice directive is included only when provided."""
+    choice = {"type": "tool", "name": "submit_file_plan"}
+    kwargs = build_create_kwargs(
+        config,
+        [Message("user", "q")],
+        tools=[{"name": "submit_file_plan"}],
+        tool_choice=choice,
+    )
+    assert kwargs["tool_choice"] == choice
+    # ... and absent when None.
+    plain = build_create_kwargs(config, [Message("user", "q")])
+    assert "tool_choice" not in plain
+
+
+def test_complete_passes_tool_choice(config: Config) -> None:
+    """complete() forwards tool_choice into the create kwargs."""
+    client = _FakeClient({"content": []})
+    llm = LLM(config, client=client)
+    choice = {"type": "tool", "name": "submit_file_plan"}
+    llm.complete(
+        [Message("user", "q")],
+        tools=[{"name": "submit_file_plan"}],
+        tool_choice=choice,
+    )
+    assert client.messages.calls[0]["tool_choice"] == choice
+
+
+def test_extract_tool_use_returns_input_dict() -> None:
+    """extract_tool_use returns the input dict of the first matching tool_use block."""
+    response = {
+        "content": [
+            {"type": "text", "text": "thinking"},
+            {
+                "type": "tool_use",
+                "id": "t1",
+                "name": "submit_file_plan",
+                "input": {"pages": [{"slug": "x"}]},
+            },
+        ]
+    }
+    assert extract_tool_use(response, "submit_file_plan") == {"pages": [{"slug": "x"}]}
+
+    class _Block:
+        def __init__(self, type_: str, name: str, input_: dict[str, Any]) -> None:
+            self.type = type_
+            self.name = name
+            self.id = "t2"
+            self.input = input_
+
+    class _Resp:
+        def __init__(self) -> None:
+            self.content = [_Block("tool_use", "submit_file_plan", {"pages": []})]
+
+    assert extract_tool_use(_Resp(), "submit_file_plan") == {"pages": []}
+
+
+def test_extract_tool_use_returns_none_when_no_matching_tool() -> None:
+    """extract_tool_use returns None when no tool_use block has the wanted name."""
+    response = {
+        "content": [
+            {"type": "text", "text": "no tool"},
+            {"type": "tool_use", "id": "t1", "name": "other", "input": {}},
+        ]
+    }
+    assert extract_tool_use(response, "submit_file_plan") is None
 
 
 # --- LLM construction + lazy import seam ------------------------------------

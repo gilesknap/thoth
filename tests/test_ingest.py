@@ -56,6 +56,44 @@ def _text_response(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
 
+def _tool_use_response(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Shape a fake ``stop_reason='tool_use'`` response with one tool_use block.
+
+    The curate pass now FORCES the ``submit_file_plan`` tool, so the model returns the
+    plan as a structured ``input`` dict (already-parsed, like the real SDK) rather than
+    hand-serialised JSON text. :func:`thoth.llm.extract_tool_use` reads it.
+    """
+    return {
+        "stop_reason": "tool_use",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_curate",
+                "name": name,
+                "input": tool_input,
+            }
+        ],
+    }
+
+
+def _curate_response(text: str) -> dict[str, Any]:
+    """Shape one scripted curate response from a ``_file_plan_json`` string.
+
+    The string is the JSON the model would historically have hand-serialised; here it
+    is parsed back to a dict and handed through as the forced-tool ``input`` so the
+    curate pass (which now reads a ``submit_file_plan`` tool_use block) sees it. A
+    string that is not a JSON object with a ``pages`` key (e.g. ``"{}"`` or junk) is
+    returned as plain text -- exercising the "model did not call the tool" path.
+    """
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return _text_response(text)
+    if isinstance(parsed, dict) and "pages" in parsed:
+        return _tool_use_response("submit_file_plan", parsed)
+    return _text_response(text)
+
+
 class _ScriptedMessages:
     """A fake ``client.messages`` returning the next scripted response per call."""
 
@@ -76,8 +114,24 @@ class _ScriptedClient:
     """A fake Anthropic client exposing :class:`_ScriptedMessages`."""
 
     def __init__(self, *texts: str) -> None:
-        """Build a client whose ``messages.create`` returns each ``text`` in turn."""
-        self.messages = _ScriptedMessages([_text_response(t) for t in texts])
+        """Build a client whose ``messages.create`` returns each ``text`` in turn.
+
+        A classify response is plain text; a curate response (a ``_file_plan_json``
+        string with a ``pages`` key) is shaped as a forced ``submit_file_plan`` tool_use
+        response via :func:`_curate_response`, mirroring the real boundary.
+        """
+        self.messages = _ScriptedMessages([_curate_response(t) for t in texts])
+
+    @classmethod
+    def from_responses(cls, *responses: dict[str, Any]) -> _ScriptedClient:
+        """Build a client from pre-shaped raw response dicts (text or tool_use).
+
+        For tests that need exact control over the curate tool_use block (e.g. a body
+        with a non-breaking space) rather than going through the string round-trip.
+        """
+        client = cls.__new__(cls)
+        client.messages = _ScriptedMessages(list(responses))
+        return client
 
 
 class _RaisingClient:
@@ -327,6 +381,17 @@ def _file_plan_json(
     pages: list[dict[str, Any]] = [page, *(extra_pages or [])]
     plan: dict[str, Any] = {"pages": pages}
     return json.dumps(plan)
+
+
+def _file_plan_input(**kwargs: Any) -> dict[str, Any]:
+    """Return the file plan as a DICT (the forced-tool ``input``), not a JSON string.
+
+    Sibling of :func:`_file_plan_json` for tests that drive curate with an explicit
+    ``submit_file_plan`` tool_use response.
+    """
+    parsed = json.loads(_file_plan_json(**kwargs))
+    assert isinstance(parsed, dict)
+    return parsed
 
 
 # --------------------------------------------------------------------------- #
@@ -2064,18 +2129,30 @@ def test_curate_rejects_too_few_wikilinks(harness: IngestHarness) -> None:
     assert not harness.vault.page_exists("notes/transformer-models.md")
 
 
-def test_curate_unparseable_plan(harness: IngestHarness) -> None:
-    """Non-JSON curate output surfaces as IngestError naming the file plan."""
+def test_curate_no_tool_call_raises_and_re_asks(harness: IngestHarness) -> None:
+    """A curate response with NO submit_file_plan tool_use block aborts after re-asking.
+
+    Curate now FORCES the ``submit_file_plan`` tool; a model that answers with plain
+    text instead is treated like a parse failure -- recoverable by the repair loop, then
+    raised on the last attempt. Assert both: the IngestError names the missing tool call
+    AND a second (repair) curate call was made.
+    """
+    client = _ScriptedClient.from_responses(
+        _text_response("sorry, no plan"),
+        _text_response("still no plan"),
+    )
     ingestor = _build_ingestor(
         harness,
-        client=_ScriptedClient("sorry, no plan"),
+        client=client,
         extractor=FakeExtractor(),
         hindsight=FakeHindsight(),
     )
     cls = Classification(page_type="note", slug="x", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
-    with pytest.raises(IngestError, match="file plan"):
+    with pytest.raises(IngestError, match="did not call submit_file_plan tool"):
         ingestor.curate(Capture(text="x"), cls, raw, [])
+    # Two curate attempts: the initial call plus the corrective repair re-ask.
+    assert len(client.messages.calls) == _CURATE_ATTEMPTS
 
 
 def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None:
@@ -2103,6 +2180,59 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         "slack",
     ):
         assert token in prompt, f"curate prompt missing {token!r}"
+
+
+def test_curate_forces_submit_file_plan_tool(harness: IngestHarness) -> None:
+    """The curate call offers submit_file_plan AND forces it via tool_choice."""
+    client = _ScriptedClient.from_responses(
+        _tool_use_response("submit_file_plan", _file_plan_input()),
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    ingestor.curate(Capture(text="x"), cls, raw, [])
+    kwargs = client.messages.calls[0]
+    tool_names = [t["name"] for t in kwargs["tools"]]
+    assert "submit_file_plan" in tool_names
+    assert kwargs["tool_choice"] == {"type": "tool", "name": "submit_file_plan"}
+
+
+def test_curate_files_page_with_nbsp_and_nested_bullets(
+    harness: IngestHarness,
+) -> None:
+    """A body with U+00A0, tab-indented nested bullets and **bold** files intact.
+
+    This is the exact shape that broke the old free-text JSON parse (raw_decode
+    "Unterminated string"): the model's hand-serialised ``body`` string carried raw
+    control chars / a non-breaking space. With tool-use the body arrives as a structured
+    ``tool_use.input`` value the SDK escapes, so it survives verbatim (issue #110).
+    """
+    body = "Steps:\n\t- a b\n\t\t- nested\n**bold**"
+    plan_input = _file_plan_input(slug="argocd-remote-login", body=body)
+    client = _ScriptedClient.from_responses(
+        _tool_use_response("submit_file_plan", plan_input),
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="argocd-remote-login", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    plan = ingestor.curate(Capture(text="x"), cls, raw, [])
+    assert plan["_written"] == ["notes/argocd-remote-login.md"]
+    page_text = (harness.work / "notes/argocd-remote-login.md").read_text(
+        encoding="utf-8"
+    )
+    assert " " in page_text
+    assert "\t- a" in page_text
+    assert "**bold**" in page_text
 
 
 def test_curate_prompt_inlines_extracted_body_for_audio(
@@ -2174,12 +2304,76 @@ def test_curate_retries_then_succeeds_on_corrective_plan(
     assert plan["_written"] == ["notes/transformer-models.md"]
     assert harness.vault.page_exists("notes/transformer-models.md")
     # Two curate attempts were made and the retry fed the validation errors back.
+    # The errors ride in the repair turn's tool_result block (the prior assistant turn
+    # was a tool_use, so a plain-text follow-up would be an API 400 -- issue #110).
     assert len(client.messages.calls) == 2
-    retry_msgs = client.messages.calls[1]["messages"]
-    retry_text = " ".join(
-        m["content"] for m in retry_msgs if isinstance(m["content"], str)
+    repair_turn = client.messages.calls[1]["messages"][-1]
+    tool_result = repair_turn["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert "REJECTED" in tool_result["content"]
+
+
+def test_curate_repair_turn_leads_with_tool_result(harness: IngestHarness) -> None:
+    """After a validation failure on a tool_use plan, the repair user turn must OPEN
+    with a tool_result keyed to the prior tool_use id.
+
+    The Messages API rejects (HTTP 400) any turn where a tool_use block is not answered
+    by a tool_result block immediately after. A fake hides this, so assert the precise
+    API precondition directly: the corrective user turn's content is a list whose first
+    block is a ``tool_result`` whose ``tool_use_id`` matches the originating
+    ``tool_use`` block, carrying the repair text and flagged ``is_error`` (issue #110).
+    """
+    bad_plan = _file_plan_json(folder="actions", page_type="note")  # folder/type clash
+    good_plan = _file_plan_json()
+    client = _ScriptedClient(bad_plan, good_plan)
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
     )
-    assert "REJECTED" in retry_text
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+
+    ingestor.curate(Capture(text="x"), cls, raw, [])
+
+    retry_msgs = client.messages.calls[1]["messages"]
+    repair_turn = retry_msgs[-1]
+    assert repair_turn["role"] == "user"
+    content = repair_turn["content"]
+    assert isinstance(content, list)
+    first = content[0]
+    assert first["type"] == "tool_result"
+    assert first["tool_use_id"] == "toolu_curate"  # the prior tool_use block id
+    assert first["is_error"] is True
+    text = first["content"]
+    if isinstance(text, list):  # normalised content blocks
+        text = " ".join(b.get("text", "") for b in text)
+    assert "REJECTED" in text
+
+
+def test_curate_no_tool_call_repair_turn_is_plain_text(harness: IngestHarness) -> None:
+    """When the model did NOT call the tool, the assistant turn is plain text, so the
+    repair user turn is plain text too (no tool_result is owed -- a tool_result with no
+    matching tool_use would itself be an API 400)."""
+    client = _ScriptedClient.from_responses(
+        _text_response("sorry, no plan"),
+        _text_response("still no plan"),
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    with pytest.raises(IngestError, match="did not call submit_file_plan tool"):
+        ingestor.curate(Capture(text="x"), cls, raw, [])
+    repair_turn = client.messages.calls[1]["messages"][-1]
+    assert repair_turn["role"] == "user"
+    assert isinstance(repair_turn["content"], str)
+    assert "REJECTED" in repair_turn["content"]
 
 
 def test_curate_reraises_after_exhausting_corrective_retry(
