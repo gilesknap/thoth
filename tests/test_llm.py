@@ -724,3 +724,17 @@ def test_file_plan_contract_text_describes_a_pages_envelope() -> None:
     text = file_plan_contract_text()
     assert '"pages"' in text
     assert "source" in text and "file path" in text  # the source-is-not-a-path warning
+
+
+def test_file_plan_contract_text_forbids_empty_scaffold_sections() -> None:
+    """The contract tells the model to skip headings it cannot fill and never to emit
+    'expand later' / HTML-comment placeholders (#77 -- prompt-side, no regex stripper).
+    """
+    text = file_plan_contract_text().lower()
+    # Names the failure modes the model was improvising: empty headings, placeholder
+    # comments, and bare HTML comments standing in for missing content.
+    assert "empty heading" in text
+    assert "placeholder" in text or "expand later" in text
+    assert "html comment" in text or "<!--" in text
+    # Affirms the correct thin-capture behaviour rather than scaffolding.
+    assert "thin" in text
