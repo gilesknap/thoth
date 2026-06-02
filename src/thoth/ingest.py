@@ -73,7 +73,8 @@ from thoth.llm import (
     LLMError,
     Message,
     SchemaValidationError,
-    extract_text,
+    assistant_blocks_message,
+    extract_tool_use,
     file_plan_contract_text,
     parse_json_block,
     validate_file_plan,
@@ -135,6 +136,79 @@ _TYPE_FOLDER: dict[str, str] = {
 # rather than aborting the whole capture; a persistently invalid plan still raises so
 # the validation gate is preserved.
 _CURATE_ATTEMPTS: int = 2
+
+# The forced tool the curate pass uses to return its file plan. Making the model emit
+# the plan as a structured ``tool_use.input`` dict (rather than hand-serialised JSON
+# free text) means the SDK/transport handles all escaping -- a body with raw newlines,
+# tabs, **bold** or U+00A0 non-breaking spaces can never break JSON parsing (issue
+# #110, where ~55 of ~140 holds aborted on "Unterminated string" raw_decode failures).
+# The schema is deliberately PERMISSIVE (only ``pages`` required): tool-use guarantees
+# valid JSON, NOT a valid plan, so :func:`validate_file_plan` stays the real gate and
+# the repair loop still feeds validation problems back. The shape mirrors
+# :func:`thoth.llm.file_plan_contract_text` and ``_check_page``.
+_SUBMIT_FILE_PLAN_TOOL: dict[str, Any] = {
+    "name": "submit_file_plan",
+    "description": "Submit the file plan for the captured item.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "pages": {
+                "type": "array",
+                "description": "One or more pages to create or update.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["create", "update"],
+                        },
+                        "folder": {"type": "string"},
+                        "slug": {
+                            "type": "string",
+                            "description": "lowercase-hyphenated",
+                        },
+                        "frontmatter": {
+                            "type": "object",
+                            "description": (
+                                "title, type, created, updated, source, tags"
+                            ),
+                            "additionalProperties": True,
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "markdown body with >= 2 [[wikilinks]]",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "one-line gloss (reference pages only)",
+                        },
+                        "wikilinks": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 2,
+                        },
+                    },
+                    "required": ["action", "folder", "slug", "frontmatter", "body"],
+                },
+            },
+            "log": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "files": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+        "required": ["pages"],
+    },
+}
+
+# The forced-tool directive so curate ALWAYS returns its plan via the tool.
+_SUBMIT_FILE_PLAN_CHOICE: dict[str, Any] = {
+    "type": "tool",
+    "name": "submit_file_plan",
+}
 
 
 class IngestError(Exception):
@@ -1094,7 +1168,12 @@ class Ingestor:
         problems = ""
         for attempt in range(_CURATE_ATTEMPTS):
             try:
-                response = self._llm.complete(messages, system_extra=self._schema_md)
+                response = self._llm.complete(
+                    messages,
+                    system_extra=self._schema_md,
+                    tools=[_SUBMIT_FILE_PLAN_TOOL],
+                    tool_choice=_SUBMIT_FILE_PLAN_CHOICE,
+                )
             except Exception as exc:  # noqa: BLE001 - any client failure aborts curate
                 # Transport/availability failure -> deferrable (raw is already durable).
                 raise LLMUnavailableError(f"curate LLM call failed: {exc}") from exc
@@ -1109,7 +1188,7 @@ class Ingestor:
                     raise
                 messages = [
                     Message(role="user", content=prompt),
-                    Message(role="assistant", content=extract_text(response)),
+                    assistant_blocks_message(response),
                     Message(role="user", content=_curate_repair_prompt(problems)),
                 ]
                 continue
@@ -1218,14 +1297,22 @@ class Ingestor:
         return self._append_embeds(body, {}, raw)
 
     def _parse_and_validate_plan(self, response: Any) -> dict[str, Any]:
-        """Parse the curate response and validate it against the file-plan contract.
+        """Read the curate tool-use plan and validate it against the file-plan contract.
+
+        The curate pass FORCES the ``submit_file_plan`` tool, so the plan arrives as a
+        structured ``tool_use.input`` dict (escaping handled by the SDK -- no more
+        invalid-JSON aborts, issue #110). A response with no such tool call is treated
+        like a parse failure: recoverable by the repair loop. ``validate_file_plan``
+        stays the authoritative gate (tool-use guarantees valid JSON, not a valid plan).
 
         Raises:
-            IngestError: if the output is unparseable or the plan fails validation; the
-                message names every offending field so :meth:`curate` can feed it back
-                to the model on the corrective retry.
+            IngestError: if the model did not call the tool or the plan fails
+                validation; the message names every offending field so :meth:`curate`
+                can feed it back to the model on the corrective retry.
         """
-        plan = self._parse_block(response, "file plan")
+        plan = extract_tool_use(response, "submit_file_plan")
+        if plan is None:
+            raise IngestError("curate did not call submit_file_plan tool")
         try:
             validate_file_plan(plan)
         except SchemaValidationError as exc:
@@ -2113,11 +2200,12 @@ class Ingestor:
     ) -> str:
         """Build the curate-call prompt (the file-plan contract + classification + raw).
 
-        The exact file-plan contract is embedded verbatim from
-        :func:`thoth.llm.file_plan_contract_text` (rendered from the same constants the
-        validator enforces). Spelling out the JSON shape and enums here is what makes
-        the model return a *valid* plan: with only a vague "return a file plan"
-        instruction the model guessed the envelope and every capture was rejected. A
+        The model returns the plan by CALLING the ``submit_file_plan`` tool (forced via
+        ``tool_choice``), so the plan is a structured ``tool_use.input`` dict the SDK
+        escapes -- it can never break JSON parsing (issue #110). The exact field/enum
+        contract is embedded verbatim from :func:`thoth.llm.file_plan_contract_text`
+        (rendered from the same constants the validator enforces) so the model knows the
+        shape the tool input must satisfy; ``validate_file_plan`` remains the gate. A
         binary capture's analysis (issue #42) is included so the curated body holds the
         asset's real OCR'd/extracted content; ``extracted_body`` does the same for an
         audio transcript / URL article body (which the model cannot read off the raw
@@ -2131,7 +2219,8 @@ class Ingestor:
         )
         return (
             "Given the SCHEMA (in the system prompt) and the captured item below, file "
-            "it into the vault.\n\n"
+            "it into the vault by CALLING the submit_file_plan tool with the file "
+            "plan.\n\n"
             f"{file_plan_contract_text()}\n\n"
             f"Classification: type={cls.page_type} slug={cls.slug} title={cls.title}\n"
             f"Raw source page: {raw_block}\n"
@@ -2302,17 +2391,20 @@ def _cleanup_fetched(fetched: FetchedBinary | None) -> None:
 
 
 def _curate_repair_prompt(problems: str) -> str:
-    """Build the corrective retry prompt that feeds validation errors back to the model.
+    """Build the corrective retry prompt that feeds the problems back to the model.
 
     Sent as the follow-up user turn after a rejected plan (the prior assistant turn
-    carries the model's bad output), so the model sees exactly which fields failed and
-    fixes them rather than the capture aborting.
+    carries the model's ``submit_file_plan`` tool call), so the model sees exactly what
+    failed and fixes it rather than the capture aborting. The problem string may be a
+    :func:`validate_file_plan` message OR "curate did not call submit_file_plan tool"
+    (the model failed to call the tool at all), so the wording stays generic and
+    references the tool either way.
     """
     return (
-        "Your previous file plan was REJECTED by validation:\n"
-        f"{problems}\n\n"
-        "Return a corrected file plan as a single JSON object that fixes EVERY problem "
-        "above and matches the required shape exactly. Output only the JSON."
+        "Your previous submit_file_plan call was REJECTED -- the following problems "
+        f"were found:\n{problems}\n\n"
+        "Call submit_file_plan again with a corrected plan that fixes EVERY problem "
+        "above and matches the required shape exactly."
     )
 
 
