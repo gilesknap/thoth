@@ -271,13 +271,27 @@ class Capture:
     base64 lives only inside one request and is never persisted or treated as the source
     of truth.
 
+    A Slack message that attaches **several images at once** is the natural unit of
+    intent -- the user meant them as *one* thing (three photos of the same whiteboard, a
+    figure plus its caption) -- so it is captured as ONE :class:`Capture`, not N
+    independent ones (issue #84). The first image is the primary ``path`` (it drives the
+    analyse/classify routing); the rest ride on ``extra_paths`` and are saved as extra
+    assets under the *same* slug and embedded in the *same* curated page, so the batch
+    gets one shared summary + one tag set with every image inline. ``extra_paths`` is
+    only populated for an all-image batch (the homogeneous, embed-in-one-page case); a
+    single-file message leaves it empty and is unchanged, and a heterogeneous batch
+    (mixed images/PDFs/text) is still ingested per file by the Slack layer.
+
     Attributes:
         text: Inline text/markdown to capture, if any.
         url: A URL to fetch server-side, if any.
-        path: A server-resolvable local file (image/pdf/audio), if any.
+        path: A server-resolvable local file (image/pdf/audio), if any. For a
+            multi-image batch this is the *primary* image.
         source: The frontmatter ``source`` value (one of
             :data:`thoth.vault.VALID_SOURCES`).
         filename: The original upload name, used for slug and extension hints.
+        extra_paths: Additional server-resolvable image files for a multi-image batch
+            (issue #84), saved as extra assets alongside the primary in upload order.
     """
 
     text: str | None = None
@@ -285,6 +299,7 @@ class Capture:
     path: Path | None = None
     source: str = "slack"
     filename: str | None = None
+    extra_paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1692,7 +1707,43 @@ class Ingestor:
             path = _require(capture.path, "path")
             ext = (capture.filename or path.name).rsplit(".", 1)[-1].lower()
             original = self._save_local_asset_result(cls, path, ext)
+        original = self._append_extra_images(capture, cls, original)
         return self._append_derived_assets(cls, original, derived)
+
+    def _append_extra_images(
+        self,
+        capture: Capture,
+        cls: Classification,
+        original: RawCaptureResult,
+    ) -> RawCaptureResult:
+        """Save a multi-image batch's extra images as assets under the same slug (#84).
+
+        A Slack message that carried several images at once is ONE capture, so every
+        extra image rides on :attr:`Capture.extra_paths` and is saved next to the
+        primary under a numbered slug (``<slug>-2.png``, ``<slug>-3.png``, ...), in
+        upload order, and merged into the returned ``asset_paths`` after the primary so
+        :meth:`_append_embeds` embeds them all in the one curated page. Each goes
+        through :meth:`_store_asset`, so it keeps the same bytes-SHA-256
+        idempotency/drift behaviour as the primary. The primary's own disposition is
+        preserved (the extras are additive). An empty ``extra_paths`` (the single-file
+        case) returns the original unchanged.
+        """
+        if not capture.extra_paths:
+            return original
+        asset_paths = list(original.asset_paths)
+        for index, extra in enumerate(capture.extra_paths, start=2):
+            ext = extra.name.rsplit(".", 1)[-1].lower() if "." in extra.name else "png"
+            result = self._save_local_asset_result_named(
+                f"{cls.slug}-{index}", extra, ext
+            )
+            for rel in result.asset_paths:
+                if rel not in asset_paths:
+                    asset_paths.append(rel)
+        return RawCaptureResult(
+            raw_path=original.raw_path,
+            disposition=original.disposition,
+            asset_paths=asset_paths,
+        )
 
     def _append_derived_assets(
         self,
@@ -1774,7 +1825,20 @@ class Ingestor:
         bytes-SHA-256 idempotency/drift rule as :meth:`_save_fetched_asset` applies, and
         the staged tmp copy is always cleaned up on the skip/error path.
         """
-        asset_name = f"{cls.slug}.{ext}"
+        return self._save_local_asset_result_named(cls.slug, path, ext)
+
+    def _save_local_asset_result_named(
+        self, asset_slug: str, path: Path, ext: str
+    ) -> RawCaptureResult:
+        """Stage a local file into ``raw/assets`` under an explicit asset slug.
+
+        The slug-bearing variant of :meth:`_save_local_asset_result`, so a multi-image
+        batch (issue #84) can save each extra image under its own ``<slug>-N`` name
+        while the primary keeps the bare ``<slug>``. The same copy-then-store discipline
+        (the caller's tmp download is never consumed, the staged copy never leaked)
+        applies.
+        """
+        asset_name = f"{asset_slug}.{ext}"
         with tempfile.NamedTemporaryFile(delete=False) as handle:
             handle.write(path.read_bytes())
             staged = Path(handle.name)

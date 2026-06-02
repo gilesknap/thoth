@@ -1310,6 +1310,64 @@ def test_image_capture_from_local_path(harness: IngestHarness, tmp_path: Path) -
     assert src.is_file()
 
 
+def test_multi_image_batch_is_one_page_with_all_images(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A multi-image batch (issue #84) files ONE page embedding every image.
+
+    The primary image is the bare ``<slug>`` asset; each extra rides on
+    ``Capture.extra_paths`` and is saved under a numbered ``<slug>-N`` asset, and all of
+    them are embedded in the single curated page (one summary, one tag set), instead of
+    fanning out into one page per image.
+    """
+    primary = tmp_path / "shot1.png"
+    primary.write_bytes(b"\x89PNG" + b"-one")
+    extra1 = tmp_path / "shot2.png"
+    extra1.write_bytes(b"\x89PNG" + b"-two")
+    extra2 = tmp_path / "shot3.jpg"
+    extra2.write_bytes(b"\xff\xd8\xff" + b"-three")
+    classify = _classify_json(page_type="memory", slug="whiteboard", title="Whiteboard")
+    plan = _file_plan_json(
+        folder="memories",
+        slug="whiteboard",
+        page_type="memory",
+        title="Whiteboard",
+        body="Photos of the whiteboard.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(
+        Capture(
+            path=primary,
+            filename="shot1.png",
+            extra_paths=(extra1, extra2),
+            source="slack",
+        )
+    )
+
+    # Exactly one curated page was written.
+    assert report.page_paths == ["memories/whiteboard.md"]
+    # Every image was saved as an asset: primary bare, extras numbered, in order.
+    assert report.asset_paths == [
+        "raw/assets/whiteboard.png",
+        "raw/assets/whiteboard-2.png",
+        "raw/assets/whiteboard-3.jpg",
+    ]
+    for rel in report.asset_paths:
+        assert (harness.work / rel).is_file()
+    # All three images are embedded in the one page.
+    page_text = (harness.work / "memories/whiteboard.md").read_text(encoding="utf-8")
+    assert "![[whiteboard.png]]" in page_text
+    assert "![[whiteboard-2.png]]" in page_text
+    assert "![[whiteboard-3.jpg]]" in page_text
+    assert "base64" not in page_text.lower()
+
+
 def _large_jpeg_bytes(width: int = 4000, height: int = 2000) -> bytes:
     """A real, multi-megabyte JPEG (noise so it does not over-compress)."""
     import io
