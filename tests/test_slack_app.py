@@ -1141,14 +1141,15 @@ def test_file_upload_in_capture_channel_ingests(config: Config) -> None:
     ing.captures[0].path.unlink()
 
 
-def test_captioned_upload_ingests_the_file_and_ignores_caption(config: Config) -> None:
-    """A captioned image upload ingests the FILE once; the caption is ignored.
+def test_captioned_upload_ingests_the_file_with_caption_as_text(config: Config) -> None:
+    """A captioned upload ingests the FILE once with the caption as its text (#130).
 
     A channel file upload arrives as a ``message`` with subtype ``file_share`` carrying
     the full ``files`` objects. handle_message downloads + ingests each file by path
-    (never base64) and never runs the caption as a query/ingest -- even a caption that
-    looks like a bare URL (which guards the cross-handler double-processing the SPEC
-    closed-surface review flagged; the bare ``file_shared`` event is now a no-op).
+    (never base64). The caption rides on ``Capture.text`` (issue #130) but does NOT
+    change routing: it is never run as a separate query/ingest even when it looks like a
+    bare URL -- a file_share is always a file capture, so the URL-looking caption stays
+    verbatim in ``text`` rather than becoming a URL capture or a query.
     """
     handlers, ing, qry = _handlers(config)
     say = Recorder()
@@ -1173,7 +1174,9 @@ def test_captioned_upload_ingests_the_file_and_ignores_caption(config: Config) -
     assert client.downloaded == ["https://files.slack.com/pic.png"]
     assert len(ing.captures) == 1  # the file, exactly once
     assert ing.captures[0].path is not None
-    assert ing.captures[0].url is None
+    assert ing.captures[0].url is None  # the caption did NOT become a URL capture
+    # The caption rides on the file capture's text verbatim (routing unchanged).
+    assert ing.captures[0].text == "https://example.com/looks-like-a-url-caption"
     assert qry.queries == []  # the bare-URL caption did NOT become a query
     ing.captures[0].path.unlink()
 
@@ -1488,6 +1491,80 @@ def test_file_upload_image_batch_is_one_capture(config: Config) -> None:
     capture.path.unlink()
     for extra in capture.extra_paths:
         extra.unlink()
+
+
+def test_file_upload_threads_typed_caption_onto_capture(config: Config) -> None:
+    """A caption typed with a single-file upload reaches the Capture (issue #130).
+
+    Previously an upload's ``text`` was dropped on the floor; the caption now rides on
+    ``Capture.text`` so it reaches the model *alongside* the file's own analysis.
+    """
+    client = FakeSlackClient(payload=b"PNGDATA")
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {
+                "name": "diagram.png",
+                "url_private_download": "https://files.slack.com/diagram.png",
+            },
+            text="  whiteboard from the planning meeting  ",
+        ),
+        say,
+        client,
+    )
+    assert len(ing.captures) == 1
+    capture = ing.captures[0]
+    assert capture.path is not None
+    assert capture.text == "whiteboard from the planning meeting"
+    capture.path.unlink()
+
+
+def test_file_upload_image_batch_shares_one_caption(config: Config) -> None:
+    """A multi-image upload's caption is threaded onto the one batch Capture (#130).
+
+    Per issue #84 a batch is one unit of intent, so the single typed caption is the
+    one capture's ``text`` -- it is not duplicated per image.
+    """
+    client = FakeSlackClient(payload=b"IMG")
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {"name": "a.png", "url_private_download": "https://files.slack.com/a.png"},
+            {"name": "b.jpg", "url_private_download": "https://files.slack.com/b.jpg"},
+            text="screenshots of the bug",
+        ),
+        say,
+        client,
+    )
+    assert len(ing.captures) == 1
+    capture = ing.captures[0]
+    assert capture.text == "screenshots of the bug"
+    assert len(capture.extra_paths) == 1
+    capture.path.unlink()  # type: ignore[union-attr]
+    for extra in capture.extra_paths:
+        extra.unlink()
+
+
+def test_file_upload_without_caption_leaves_text_none(config: Config) -> None:
+    """An upload with no typed caption still yields a caption-less Capture (#130)."""
+    client = FakeSlackClient(payload=b"PNGDATA")
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {
+                "name": "x.png",
+                "url_private_download": "https://files.slack.com/x.png",
+            }
+        ),
+        say,
+        client,
+    )
+    assert len(ing.captures) == 1
+    assert ing.captures[0].text is None
+    ing.captures[0].path.unlink()  # type: ignore[union-attr]
 
 
 def test_file_upload_image_batch_by_mimetype_is_one_capture(config: Config) -> None:

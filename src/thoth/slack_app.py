@@ -751,20 +751,28 @@ class Handlers:
         batch one shared summary + one tag set. A single-file message is unchanged, and
         a heterogeneous batch (mixed images with PDFs/text) is still ingested per file
         -- the per-page-type classification of mixed kinds is deferred (issue #84 open
-        questions). An upload's text caption is intentionally ignored -- the file is the
-        capture.
+        questions).
+
+        A text caption typed alongside the upload (issue #130) is threaded onto the
+        :class:`~thoth.ingest.Capture` as its ``text`` so it reaches the model
+        *alongside* the file's own OCR/analysis -- the caption augments, it does not
+        replace, the image content. A batch shares the one caption (one unit of
+        intent, per #84). A capture-prefix (``note:``/``save:``) in the caption does
+        not change routing for an upload: a file_share is always a capture, so the
+        prefix is left verbatim in the caption text.
         """
         files = event.get("files")
         if not isinstance(files, list) or not files:
             responder.say(":warning: That upload carried no files I could read.")
             return
         source = self._source_label()
+        caption = str(event.get("text", "")).strip() or None
         infos = [f for f in files if isinstance(f, dict)]
         if len(infos) > 1 and all(self._is_image_file(f) for f in infos):
-            self._ingest_image_batch(infos, client, source, responder)
+            self._ingest_image_batch(infos, client, source, responder, caption)
             return
         for file_info in infos:
-            self._ingest_one_file(file_info, client, source, responder)
+            self._ingest_one_file(file_info, client, source, responder, caption)
 
     def _ingest_image_batch(
         self,
@@ -772,6 +780,7 @@ class Handlers:
         client: SlackClientLike | None,
         source: str,
         responder: Responder,
+        caption: str | None = None,
     ) -> None:
         """Capture a multi-image Slack message as ONE capture/page (issue #84).
 
@@ -796,6 +805,7 @@ class Handlers:
             source=source,
             filename=primary_name,
             extra_paths=tuple(path for path, _ in downloaded[1:]),
+            text=caption,
         )
         self._do_ingest(capture, responder)
 
@@ -805,13 +815,14 @@ class Handlers:
         client: SlackClientLike | None,
         source: str,
         responder: Responder,
+        caption: str | None = None,
     ) -> None:
         """Download one Slack file object to a temp path and ingest it (fail-loud)."""
         staged = self._download_to_tmp(file_info, client, responder)
         if staged is None:
             return
         tmp_path, filename = staged
-        capture = Capture(path=tmp_path, source=source, filename=filename)
+        capture = Capture(path=tmp_path, source=source, filename=filename, text=caption)
         self._do_ingest(capture, responder)
 
     def _download_to_tmp(
