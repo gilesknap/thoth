@@ -1151,6 +1151,11 @@ class Ingestor:
         technical one, instead of being decided from the link + title alone (issue
         #123). classify stays on Sonnet here (the Haiku move is issue #79).
 
+        For an **audio** capture the transcript is folded in even when a (noise) Slack
+        voice-memo caption sits in ``capture.text`` -- otherwise classify would title and
+        route the note blind off the "Listen to voice note" placeholder (issue #129); see
+        :meth:`_capture_summary`'s ``is_transcript`` bypass, mirrored from curate.
+
         Args:
             capture: The inbound item to classify.
             analysis: Optional content analysis of a binary capture (image/PDF).
@@ -2503,10 +2508,16 @@ class Ingestor:
         classifier automatically and the two cannot diverge. A binary capture's analysis
         (issue #42) is folded in so the model classifies by the asset's real content;
         ``extracted_body`` folds in the same bounded URL/transcript excerpt that feeds
-        curate so routing is content-aware (issue #123).
+        curate so routing is content-aware (issue #123); for an audio capture the
+        transcript is folded in even past a Slack voice-memo caption (``is_transcript``
+        bypass), so a voice note is titled/routed by the spoken content (issue #129),
+        symmetric with curate.
         """
         what = self._capture_summary(
-            capture, analysis=analysis, extracted_body=extracted_body
+            capture,
+            analysis=analysis,
+            extracted_body=extracted_body,
+            is_transcript=self._capture_kind(capture) is CaptureKind.AUDIO,
         )
         type_list = ", ".join(TYPE_ENUMERATION)
         return (
@@ -2546,7 +2557,10 @@ class Ingestor:
         raw_block = raw.raw_path or "(no raw page)"
         asset_block = ", ".join(raw.asset_paths) or "(none)"
         summary = self._capture_summary(
-            capture, analysis=analysis, extracted_body=extracted_body
+            capture,
+            analysis=analysis,
+            extracted_body=extracted_body,
+            is_transcript=self._capture_kind(capture) is CaptureKind.AUDIO,
         )
         return (
             "Given the SCHEMA (in the system prompt) and the captured item below, file "
@@ -2566,6 +2580,7 @@ class Ingestor:
         *,
         analysis: Analysis | None = None,
         extracted_body: str | None = None,
+        is_transcript: bool = False,
     ) -> str:
         """Render a compact textual summary of the capture for a prompt.
 
@@ -2573,9 +2588,17 @@ class Ingestor:
         asset's OCR'd/extracted content, description, and routing hints -- the load-
         bearing fix: previously a binary reached the model as a bare ``File: name`` line
         and was filed blind. ``extracted_body`` (an audio transcript / URL article body
-        extracted before curate) is appended for the same reason, but only when the
-        capture has no inline ``text`` -- which is already shown verbatim -- so a plain
-        text capture is never duplicated.
+        extracted before curate) is appended for the same reason.
+
+        For a text-bearing capture the body excerpt is appended only when the capture
+        has no inline ``text`` -- which is already shown verbatim -- so a plain text
+        capture is never duplicated. The exception is ``is_transcript`` (an audio
+        capture, issue #129): a voice memo's spoken content is the *canonical* content,
+        but Slack stamps the message with generic fallback text ("Listen to voice note")
+        that lands in ``capture.text`` and would otherwise suppress the transcript --
+        leaving classify to title/route the note blind off the placeholder. So an audio
+        transcript is always folded in, regardless of the (noise) caption, so the note
+        is titled and routed by what was actually said.
         """
         parts: list[str] = []
         if capture.url is not None:
@@ -2587,7 +2610,11 @@ class Ingestor:
         summary = "\n".join(parts) or "(empty capture)"
         if analysis is not None and not analysis.is_empty():
             summary += "\n\n" + _analysis_summary(analysis)
-        if capture.text is None and extracted_body and extracted_body.strip():
+        if (
+            (capture.text is None or is_transcript)
+            and extracted_body
+            and extracted_body.strip()
+        ):
             label = "Extracted text (transcript / article body)"
             # Head-truncate to a bounded lead excerpt so a large article cannot blow up
             # the curate prompt's token cost (issue #75). The full text stays canonical

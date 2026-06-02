@@ -2928,6 +2928,72 @@ def test_curate_prompt_does_not_duplicate_inline_text(harness: IngestHarness) ->
     assert prompt.count("hello") == 1
 
 
+def test_classify_prompt_folds_in_transcript_despite_slack_caption(
+    harness: IngestHarness,
+) -> None:
+    """An audio transcript reaches classify even when a generic caption is set (#129).
+
+    A Slack voice memo arrives with fallback text ("Listen to voice note") in
+    ``capture.text``. That noise would otherwise suppress the transcript (the
+    text-already-shown gate), leaving classify to title/route the note off the
+    placeholder. For an audio capture the transcript is the canonical content, so it is
+    folded into the classify prompt regardless of the caption.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    capture = Capture(
+        path=Path("/tmp/clip.m4a"),
+        filename="clip.m4a",
+        text="Listen to voice note",
+    )
+
+    prompt = ingestor._classify_prompt(
+        capture,
+        extracted_body="SPOKEN-MARKER reschedule the dentist to next Tuesday",
+        is_transcript=True,
+    )
+
+    assert "SPOKEN-MARKER reschedule the dentist" in prompt
+    assert "Extracted text" in prompt
+
+
+def test_classify_call_receives_audio_transcript_end_to_end(
+    harness: IngestHarness,
+) -> None:
+    """The classify LLM call sees the spoken transcript, not the Slack caption (#129).
+
+    Drives a full ingest pass for an audio capture whose generic caption differs from
+    the spoken content, and inspects the FIRST model call (classify). Before the fix
+    classify saw only ``File: clip.m4a`` + the generic caption and produced a generic
+    title/slug; now the transcript reaches it so the note is routed by the speech.
+    """
+    client = _ScriptedClient(_classify_json(), _file_plan_json())
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(
+            transcript="SPOKEN-MARKER reschedule the dentist to next Tuesday"
+        ),
+        hindsight=FakeHindsight(),
+    )
+
+    ingestor.ingest(
+        Capture(
+            path=Path("/tmp/clip.m4a"),
+            filename="clip.m4a",
+            text="Listen to voice note",
+        )
+    )
+
+    classify_call = client.messages.calls[0]
+    classify_prompt = classify_call["messages"][0]["content"]
+    assert "SPOKEN-MARKER reschedule the dentist" in classify_prompt
+
+
 def test_curate_prompt_head_truncates_long_extracted_body(
     harness: IngestHarness,
 ) -> None:
