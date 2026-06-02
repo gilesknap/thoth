@@ -1583,6 +1583,36 @@ def test_analyse_image_cap_skips_extras_beyond_max_but_still_saves_them(
         assert f"![[{embed}]]" in page_text
 
 
+def test_capture_summary_augments_caption_with_image_analysis() -> None:
+    """An upload's caption AND the image analysis both reach the model (issue #130).
+
+    A typed caption rides on ``Capture.text``; the file's OCR/description rides on the
+    ``Analysis``. ``_capture_summary`` must surface BOTH -- the caption augments the
+    image content, it does not suppress it -- so the model sees the user's intent next
+    to what the image actually shows.
+    """
+    from thoth.analyse import Analysis
+
+    capture = Capture(
+        path=Path("/tmp/board.png"),
+        filename="board.png",
+        text="whiteboard from the planning meeting",
+        source="slack",
+    )
+    analysis = Analysis(
+        text="Q3 ROADMAP\n- ship ingest\n- fix recall",
+        description="A photo of a whiteboard covered in marker notes.",
+    )
+
+    summary = Ingestor._capture_summary(capture, analysis=analysis)
+
+    # The typed caption is present verbatim ...
+    assert "whiteboard from the planning meeting" in summary
+    # ... AND the image's analysis content is present alongside it (not suppressed).
+    assert "Q3 ROADMAP" in summary
+    assert "A photo of a whiteboard" in summary
+
+
 def _large_jpeg_bytes(width: int = 4000, height: int = 2000) -> bytes:
     """A real, multi-megabyte JPEG (noise so it does not over-compress)."""
     import io
