@@ -275,6 +275,48 @@ def test_run_reindex_runs_with_flag(
     assert _FakeReindexer.instances[0].runs == [full]
 
 
+def test_run_reindex_budget_override_reaches_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``reindex --budget N`` reaches make_budget_guard with the limit (issue #95).
+
+    Acceptance: the transient ``--budget`` override is forwarded to
+    :func:`thoth.budget.make_budget_guard` (``7`` caps this run, ``0`` disables the
+    cap), and an absent flag forwards ``None`` (use ``THOTH_DAILY_LLM_BUDGET``).
+    """
+    _FakeReindexer.instances.clear()
+    recorded: list[Any] = []
+
+    import thoth.alerts as alerts_mod
+    import thoth.budget as budget_mod
+    import thoth.hindsight as hindsight_mod
+    import thoth.reindex_from_vault as reindex_mod
+
+    def _record_guard(cfg: Config, **kw: Any) -> Any:
+        recorded.append(kw.get("limit", "MISSING"))
+        return object()
+
+    monkeypatch.setattr(budget_mod, "make_budget_guard", _record_guard)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+    monkeypatch.setattr(hindsight_mod, "Hindsight", lambda *a, **k: object())
+    monkeypatch.setattr(reindex_mod, "Reindexer", _FakeReindexer)
+    config = load_config(
+        {"PKM_VAULT": str(tmp_path), "THOTH_HOME": str(tmp_path / "home")}
+    )
+
+    for flag, expected in (("7", 7), ("0", 0)):
+        recorded.clear()
+        ns = __main__.build_parser().parse_args(["reindex", "--budget", flag])
+        __main__.run_reindex(ns, config)
+        assert recorded == [expected]
+
+    # No flag -> limit None (use the config value).
+    recorded.clear()
+    ns = __main__.build_parser().parse_args(["reindex"])
+    __main__.run_reindex(ns, config)
+    assert recorded == [None]
+
+
 class _CrashingReindexer:
     """A Reindexer whose run() raises, to exercise the cron errors-to-Slack path."""
 
@@ -1193,6 +1235,40 @@ def test_run_capture_no_path_drains_inbox(
     assert not (root / "inbox" / "hold-bbb.md").exists()
 
 
+def test_run_capture_drain_honours_stamped_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The drain re-files each hold with its STAMPED mode, not a run-wide flag (#95 E).
+
+    Acceptance: a hold stamped ``mode: as-is`` re-files low-touch (``as_is=True``); a
+    hold stamped ``mode: curate`` re-curates (``as_is=False``) -- in the SAME bare
+    ``thoth capture`` run, with no ``--as-is`` flag.
+    """
+    root = tmp_path / "vault"
+    for folder in ("entities", "notes", "memories", "actions", "inbox"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "inbox" / "hold-asis.md").write_text(
+        "---\ntitle: Held capture\ntype: inbox\nsource: import\nmode: as-is\n"
+        "tags: [inbox]\n---\n\nraw dump\n",
+        encoding="utf-8",
+    )
+    (root / "inbox" / "hold-cur.md").write_text(
+        "---\ntitle: Held capture\ntype: inbox\nsource: slack\nmode: curate\n"
+        "tags: [inbox]\n---\n\ncurate me\n",
+        encoding="utf-8",
+    )
+    config = load_config({"PKM_VAULT": str(root)})
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+
+    ns = __main__.build_parser().parse_args(["capture"])
+    __main__.run_capture(ns, config)
+
+    by_text = {c.text: as_is for c, _, as_is in ingestor.calls}
+    assert by_text == {"raw dump": True, "curate me": False}
+
+
 def test_run_capture_drain_leaves_unfiled_holds(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1213,7 +1289,7 @@ def test_run_capture_drain_leaves_unfiled_holds(
 def test_run_capture_no_path_dry_run_writes_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`capture --dry-run` with no path prints would-re-curate, no ingest/remove."""
+    """`capture --dry-run` with no path prints would-re-file, no ingest/remove."""
     config = _seed_drain_vault(tmp_path, {"hold-aaa.md": "x", "hold-bbb.md": "y"})
     ingestor = _RecordingIngestor()
     git = _RecordingGit()
@@ -1227,7 +1303,7 @@ def test_run_capture_no_path_dry_run_writes_nothing(
     # Holds untouched.
     assert (config.vault_path / "inbox" / "hold-aaa.md").exists()
     out = capsys.readouterr().out
-    assert out.count("would re-curate") == 2
+    assert out.count("would re-file") == 2
 
 
 def test_run_capture_drain_honours_budget_zero(

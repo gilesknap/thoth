@@ -46,7 +46,8 @@ def build_parser() -> ArgumentParser:
     Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
     ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
     stdio MCP server), ``reindex`` (nightly incremental, ``--full-rebuild`` for
-    recovery), ``summary`` (``daily`` / ``weekly`` Slack digest), ``lint`` (the
+    recovery, ``--budget`` for a transient cap override, issue #95), ``summary``
+    (``daily`` / ``weekly`` Slack digest), ``lint`` (the
     13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
     ``capture`` (backfill files/folders through the ingest pipeline -- ``--as-is`` for
     a low-touch import, ``--budget`` for a transient cap override, plus
@@ -82,6 +83,13 @@ def build_parser() -> ArgumentParser:
         "--full-rebuild",
         action="store_true",
         help="wipe the bank and re-retain every live page (recovery)",
+    )
+    reindex.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="override THOTH_DAILY_LLM_BUDGET for THIS run only (transient); "
+        "0 = unlimited for this reindex (issue #95)",
     )
 
     summary = sub.add_parser("summary", help="compose + post a Slack digest")
@@ -272,11 +280,15 @@ def run_mcp(namespace: Namespace, config: Config) -> None:
 
 
 def run_reindex(namespace: Namespace, config: Config) -> None:
-    """Reindex Hindsight from the vault (``thoth reindex [--full-rebuild]``).
+    """Reindex Hindsight from the vault (``reindex [--full-rebuild] [--budget N]``).
 
     Constructs a :class:`~thoth.reindex_from_vault.Reindexer` over a real
     :class:`~thoth.vault.Vault` and :class:`~thoth.hindsight.Hindsight` and runs one
-    pass, forwarding ``--full-rebuild``. A successful run records the ``reindex``
+    pass, forwarding ``--full-rebuild``. The budget guard is built with the
+    ``--budget`` transient override (issue #95): ``None`` uses
+    ``THOTH_DAILY_LLM_BUDGET``, a positive value caps THIS run, and ``0`` disables the
+    cap so a deliberate full rebuild can run to completion. A successful run records
+    the ``reindex``
     liveness marker for the daily heartbeat, and a crash is reported to the
     errors-to-Slack target before being re-raised so the cron log still shows the
     failure (issue #15). The resulting counts are printed for the cron log.
@@ -293,8 +305,12 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
         # The daily cost guard (issue #16) caps the reindex retain burst; an
         # accidental --full-rebuild of a large vault stops at the cap (deferring the
         # rest to the next day) instead of spending unbounded Gemini extraction. It
-        # alerts once per day.
-        guard = make_budget_guard(config, alerter=make_alerter(config))
+        # alerts once per day. ``--budget N`` is a transient per-run override (issue
+        # #95): None uses THOTH_DAILY_LLM_BUDGET, a positive value caps THIS run, and 0
+        # disables the cap so a deliberate full rebuild can run to completion.
+        guard = make_budget_guard(
+            config, alerter=make_alerter(config), limit=namespace.budget
+        )
         hindsight = Hindsight(config, guard=guard)
         reindexer = Reindexer(
             config, vault, hindsight, markers=MarkerStore(config.state_db_path)
@@ -432,17 +448,19 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     from .ingest import Capture, IngestError
     from .vault import Vault
 
-    # With NO path argument, drain the inbox holds (issue #105): re-curate each
-    # inbox/hold-* from its stored body through the SAME ingest pipeline, then remove
-    # the superseded hold once it is filed. With paths, walk the file/folder tree (#80).
+    # With NO path argument, drain the inbox holds (issue #105): re-file each
+    # inbox/hold-* from its stored body through the SAME ingest pipeline -- honouring
+    # the hold's stamped intent (curate vs --as-is, issue #95 task E) -- then remove the
+    # superseded hold once it is filed. With paths, walk the file/folder tree (#80).
     drain_mode = not namespace.paths
 
     if namespace.dry_run:
         planned = 0
         if drain_mode:
-            for hold_rel, _capture in drain_captures(Vault(config)):
+            for hold in drain_captures(Vault(config)):
                 planned += 1
-                print(f"capture (dry-run): would re-curate {hold_rel}")
+                mode = "as-is" if (namespace.as_is or hold.as_is) else "curate"
+                print(f"capture (dry-run): would re-file {hold.rel} ({mode})")
         else:
             for capture in walk_captures(
                 namespace.paths,
@@ -471,16 +489,20 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     total = 0
     limit = namespace.limit
 
-    # Build the (target, capture, hold_rel) stream shared by both branches: a drain hold
-    # carries its own path so a filed hold can be removed; a walked file has no hold.
+    # Build the (target, capture, hold_rel, as_is) stream shared by both branches: a
+    # drain hold carries its own path so a filed hold can be removed AND its stamped
+    # intent (issue #95, task E) so the sweep re-files curate-vs-as-is as originally
+    # requested; a walked file has no hold and uses the run-wide --as-is flag. The
+    # explicit --as-is flag forces low-touch for every item even on a drain.
     vault = Vault(config)
     if drain_mode:
-        stream: Iterator[tuple[str, Capture, str | None]] = (
-            (hold_rel, capture, hold_rel) for hold_rel, capture in drain_captures(vault)
+        stream: Iterator[tuple[str, Capture, str | None, bool]] = (
+            (hold.rel, hold.capture, hold.rel, namespace.as_is or hold.as_is)
+            for hold in drain_captures(vault)
         )
     else:
         stream = (
-            (capture.filename or "(capture)", capture, None)
+            (capture.filename or "(capture)", capture, None, namespace.as_is)
             for capture in walk_captures(
                 namespace.paths,
                 include=namespace.include,
@@ -489,7 +511,7 @@ def run_capture(namespace: Namespace, config: Config) -> None:
             )
         )
 
-    for target, capture, hold_rel in stream:
+    for target, capture, hold_rel, as_is in stream:
         if limit is not None and total >= limit:
             break
         total += 1
@@ -499,7 +521,7 @@ def run_capture(namespace: Namespace, config: Config) -> None:
             capture,
             target=target,
             hold_rel=hold_rel,
-            as_is=namespace.as_is,
+            as_is=as_is,
             index=total,
             counts=counts,
             ingest_error=IngestError,

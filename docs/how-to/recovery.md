@@ -36,6 +36,18 @@ snapshot.
    PKM_VAULT=/opt/pkm-vault thoth reindex --full-rebuild
    ```
 
+   A full rebuild of a large vault is a real spend burst against the daily LLM budget. To
+   let the rebuild run to completion in one pass, override the cap for that run with
+   `--budget` (a transient override, never written back to the config):
+
+   ```bash
+   PKM_VAULT=/opt/pkm-vault thoth reindex --full-rebuild --budget 0   # uncapped
+   PKM_VAULT=/opt/pkm-vault thoth reindex --full-rebuild --budget 500 # cap this run
+   ```
+
+   Without `--budget`, a rebuild that hits the cap stops cleanly mid-walk (the pages
+   retained so far are recorded) and resumes on the next day's run.
+
 6. Re-enable the systemd unit (`thoth-slack.service`) and the system cron, then work
    through the [first-light smoke checklist](first-light.md).
 
