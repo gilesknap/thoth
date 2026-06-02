@@ -2182,6 +2182,31 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         assert token in prompt, f"curate prompt missing {token!r}"
 
 
+def test_curate_prompt_forbids_empty_scaffold_sections(
+    harness: IngestHarness,
+) -> None:
+    """The assembled curate prompt instructs the model to omit headings it cannot fill
+    and never to emit 'expand later' / HTML-comment placeholders (#77).
+
+    Fix is prompt-side (no regex stripper) per the prefer-prompt-over-string-processing
+    convention: the model was improvising a "## Key Points" + ``<!-- expand ... -->``
+    scaffold under thin captures.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    prompt = ingestor._curate_prompt(Capture(text="hello"), cls, raw, []).lower()
+    assert "empty heading" in prompt
+    assert "expand later" in prompt
+    assert "<!--" in prompt
+    assert "thin" in prompt
+
+
 def test_curate_forces_submit_file_plan_tool(harness: IngestHarness) -> None:
     """The curate call offers submit_file_plan AND forces it via tool_choice."""
     client = _ScriptedClient.from_responses(
