@@ -1581,6 +1581,29 @@ def test_render_citation_falls_back_to_path_label() -> None:
     )
 
 
+def test_render_vault_ref_falls_back_to_path_for_blank_title() -> None:
+    """An empty/whitespace title yields the path as label, never <uri|> (#67)."""
+    from thoth.render import render_vault_ref
+
+    for blank in ("", "   "):
+        rendered = render_vault_ref(
+            obsidian_uri="obsidian://open?vault=v&file=a%2Fb.md",
+            title=blank,
+            path="a/b.md",
+        )
+        assert rendered == "<obsidian://open?vault=v&file=a%2Fb.md|a/b.md>"
+        assert "|>" not in rendered  # never an invisible label
+
+
+def test_render_vault_ref_falls_back_to_uri_when_title_and_path_blank() -> None:
+    """With both title and path blank, the uri itself is the visible label (#67)."""
+    from thoth.render import render_vault_ref
+
+    rendered = render_vault_ref(obsidian_uri="https://example.com", title="", path="")
+    assert rendered == "<https://example.com|https://example.com>"
+    assert "|>" not in rendered
+
+
 def test_render_query_result_lists_every_citation() -> None:
     """render_query_result shows the answer then one concise line per citation."""
     result = _result(
