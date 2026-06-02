@@ -2304,12 +2304,76 @@ def test_curate_retries_then_succeeds_on_corrective_plan(
     assert plan["_written"] == ["notes/transformer-models.md"]
     assert harness.vault.page_exists("notes/transformer-models.md")
     # Two curate attempts were made and the retry fed the validation errors back.
+    # The errors ride in the repair turn's tool_result block (the prior assistant turn
+    # was a tool_use, so a plain-text follow-up would be an API 400 -- issue #110).
     assert len(client.messages.calls) == 2
-    retry_msgs = client.messages.calls[1]["messages"]
-    retry_text = " ".join(
-        m["content"] for m in retry_msgs if isinstance(m["content"], str)
+    repair_turn = client.messages.calls[1]["messages"][-1]
+    tool_result = repair_turn["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert "REJECTED" in tool_result["content"]
+
+
+def test_curate_repair_turn_leads_with_tool_result(harness: IngestHarness) -> None:
+    """After a validation failure on a tool_use plan, the repair user turn must OPEN
+    with a tool_result keyed to the prior tool_use id.
+
+    The Messages API rejects (HTTP 400) any turn where a tool_use block is not answered
+    by a tool_result block immediately after. A fake hides this, so assert the precise
+    API precondition directly: the corrective user turn's content is a list whose first
+    block is a ``tool_result`` whose ``tool_use_id`` matches the originating
+    ``tool_use`` block, carrying the repair text and flagged ``is_error`` (issue #110).
+    """
+    bad_plan = _file_plan_json(folder="actions", page_type="note")  # folder/type clash
+    good_plan = _file_plan_json()
+    client = _ScriptedClient(bad_plan, good_plan)
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
     )
-    assert "REJECTED" in retry_text
+    cls = Classification(page_type="note", slug="transformer-models", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+
+    ingestor.curate(Capture(text="x"), cls, raw, [])
+
+    retry_msgs = client.messages.calls[1]["messages"]
+    repair_turn = retry_msgs[-1]
+    assert repair_turn["role"] == "user"
+    content = repair_turn["content"]
+    assert isinstance(content, list)
+    first = content[0]
+    assert first["type"] == "tool_result"
+    assert first["tool_use_id"] == "toolu_curate"  # the prior tool_use block id
+    assert first["is_error"] is True
+    text = first["content"]
+    if isinstance(text, list):  # normalised content blocks
+        text = " ".join(b.get("text", "") for b in text)
+    assert "REJECTED" in text
+
+
+def test_curate_no_tool_call_repair_turn_is_plain_text(harness: IngestHarness) -> None:
+    """When the model did NOT call the tool, the assistant turn is plain text, so the
+    repair user turn is plain text too (no tool_result is owed -- a tool_result with no
+    matching tool_use would itself be an API 400)."""
+    client = _ScriptedClient.from_responses(
+        _text_response("sorry, no plan"),
+        _text_response("still no plan"),
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    with pytest.raises(IngestError, match="did not call submit_file_plan tool"):
+        ingestor.curate(Capture(text="x"), cls, raw, [])
+    repair_turn = client.messages.calls[1]["messages"][-1]
+    assert repair_turn["role"] == "user"
+    assert isinstance(repair_turn["content"], str)
+    assert "REJECTED" in repair_turn["content"]
 
 
 def test_curate_reraises_after_exhausting_corrective_retry(

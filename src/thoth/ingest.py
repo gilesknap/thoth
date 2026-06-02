@@ -73,10 +73,14 @@ from thoth.llm import (
     LLMError,
     Message,
     SchemaValidationError,
+    _block_id,
+    _block_name,
+    _tool_use_blocks,
     assistant_blocks_message,
     extract_tool_use,
     file_plan_contract_text,
     parse_json_block,
+    tool_result_block,
     validate_file_plan,
 )
 from thoth.state import MARKER_CAPTURE, MARKER_PUSH, MarkerStore
@@ -1189,7 +1193,7 @@ class Ingestor:
                 messages = [
                     Message(role="user", content=prompt),
                     assistant_blocks_message(response),
-                    Message(role="user", content=_curate_repair_prompt(problems)),
+                    _curate_repair_turn(response, problems),
                 ]
                 continue
 
@@ -2406,6 +2410,39 @@ def _curate_repair_prompt(problems: str) -> str:
         "Call submit_file_plan again with a corrected plan that fixes EVERY problem "
         "above and matches the required shape exactly."
     )
+
+
+def _curate_repair_turn(response: Any, problems: str) -> Message:
+    """Build the user turn that feeds curate problems back for the corrective retry.
+
+    The shape depends on how the prior assistant turn ended (issue #110 reviewer fix):
+
+    * If the assistant CALLED ``submit_file_plan`` (the normal forced-tool path, where
+      the plan merely failed :func:`validate_file_plan`), the Messages API requires the
+      next user turn to OPEN with a ``tool_result`` block keyed to that ``tool_use``
+      block's id -- a plain-text turn after a ``tool_use`` block is a 400
+      ("tool_use ids were found without tool_result blocks immediately after"). So the
+      turn leads with ``tool_result(tool_use_id, repair_text, is_error=True)``.
+    * If the assistant did NOT call the tool (the "did not call submit_file_plan" case),
+      its turn is plain text, so a plain-text user follow-up is valid and no
+      ``tool_result`` is owed.
+
+    Args:
+        response: The rejected curate response (its assistant turn was just echoed).
+        problems: The validation/parse problems to feed back.
+
+    Returns:
+        A user :class:`Message` whose content is API-valid for the echoed assistant
+        turn.
+    """
+    text = _curate_repair_prompt(problems)
+    for block in _tool_use_blocks(response):
+        if _block_name(block) == "submit_file_plan":
+            return Message(
+                role="user",
+                content=[tool_result_block(_block_id(block), text, is_error=True)],
+            )
+    return Message(role="user", content=text)
 
 
 def _replace_report(
