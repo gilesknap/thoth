@@ -36,6 +36,7 @@ import base64
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -188,12 +189,13 @@ class Analyser:
         self._diagram_model = diagram_model
 
     def analyse_image(self, image_bytes: bytes, *, ext: str) -> Analysis:
-        """Analyse an image: OCR text + description + routing hints (vision block).
+        """Analyse one image: OCR text + description + routing hints (vision block).
 
-        The bytes are base64-encoded **transiently** into a vision ``image`` content
-        block (ADR 0006); the asset itself is still stored as a real binary by the
-        caller. The call goes through :meth:`thoth.llm.LLM.complete`, so it is charged
-        against the daily budget guard.
+        A single-image convenience wrapper over :meth:`analyse_images`. The bytes are
+        base64-encoded **transiently** into a vision ``image`` content block (ADR 0006);
+        the asset itself is still stored as a real binary by the caller. The call goes
+        through :meth:`thoth.llm.LLM.complete`, so it is charged against the daily
+        budget guard.
 
         Args:
             image_bytes: The raw image bytes of the staged asset.
@@ -207,15 +209,50 @@ class Analyser:
             thoth.budget.BudgetExceededError: when the daily cap is reached (propagated
                 so the ingest pass defers).
         """
-        block = {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": image_media_type(ext),
-                "data": base64.standard_b64encode(image_bytes).decode("ascii"),
-            },
-        }
-        return self._run([block, {"type": "text", "text": _IMAGE_PROMPT}])
+        return self.analyse_images([(image_bytes, ext)])
+
+    def analyse_images(self, images: Sequence[tuple[bytes, str]]) -> Analysis:
+        """Analyse one OR MORE images in a SINGLE vision call (issue #84 / #124).
+
+        A multi-image Slack batch is one unit of intent curated as one page, so every
+        image is sent as its own ``image`` block in **one** call producing one shared
+        summary/tags -- never N calls then a merge. Because it is one
+        :meth:`thoth.llm.LLM.complete` call, it counts as exactly ONE charge against the
+        daily budget guard (the same as a single-image analyse). The caller
+        (:meth:`thoth.ingest.Ingestor.analyse`) is responsible for capping the count via
+        ``THOTH_MAX_ANALYSE_IMAGES`` before calling here.
+
+        Each image's bytes are base64-encoded **transiently** (ADR 0006); the assets
+        themselves are still stored as real binaries by the caller.
+
+        Args:
+            images: One or more ``(image_bytes, ext)`` pairs in upload order; each
+                ``ext`` is the bare image extension (selects the media type).
+
+        Returns:
+            The parsed :class:`Analysis` (one shared summary/description/tags covering
+            all the supplied images).
+
+        Raises:
+            AnalyseError: if the model output cannot be parsed into the expected shape.
+            ValueError: if ``images`` is empty.
+            thoth.budget.BudgetExceededError: when the daily cap is reached (propagated
+                so the ingest pass defers).
+        """
+        if not images:
+            raise ValueError("analyse_images requires at least one image")
+        blocks: list[dict[str, Any]] = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image_media_type(ext),
+                    "data": base64.standard_b64encode(image_bytes).decode("ascii"),
+                },
+            }
+            for image_bytes, ext in images
+        ]
+        return self._run([*blocks, {"type": "text", "text": _IMAGE_PROMPT}])
 
     def analyse_pdf(self, pdf_bytes: bytes) -> Analysis:
         """Analyse a PDF: extracted text + summary + routing hints (document block).

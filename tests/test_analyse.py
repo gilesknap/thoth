@@ -125,6 +125,43 @@ def test_analyse_image_sends_base64_vision_block_and_parses() -> None:
     assert content[1]["type"] == "text"
 
 
+def test_analyse_images_sends_one_block_per_image_in_a_single_call() -> None:
+    """analyse_images sends N image blocks + one prompt in ONE call (issue #124).
+
+    A multi-image batch is one shared-summary call: each image gets its own base64
+    ``image`` block (in order), the instruction text follows last, and there is exactly
+    ONE model call -- one charge against the budget guard.
+    """
+    client = _CapturingClient(_analysis_json())
+    analyser = Analyser(LLM(_config(), client=client))
+    img_a = b"\x89PNG-A"
+    img_b = b"\xff\xd8\xff-B"
+
+    analyser.analyse_images([(img_a, "png"), (img_b, "jpg")])
+
+    assert len(client.messages.calls) == 1  # ONE call, not two
+    content = client.messages.calls[-1]["messages"][0]["content"]
+    # Two image blocks (in order) then the trailing text instruction.
+    assert content[0]["type"] == "image"
+    assert content[0]["source"]["media_type"] == "image/png"
+    assert content[0]["source"]["data"] == base64.standard_b64encode(img_a).decode(
+        "ascii"
+    )
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["media_type"] == "image/jpeg"
+    assert content[1]["source"]["data"] == base64.standard_b64encode(img_b).decode(
+        "ascii"
+    )
+    assert content[2]["type"] == "text"
+
+
+def test_analyse_images_rejects_empty() -> None:
+    """analyse_images with no images is a programming error (ValueError)."""
+    analyser = Analyser(LLM(_config(), client=_CapturingClient(_analysis_json())))
+    with pytest.raises(ValueError, match="at least one image"):
+        analyser.analyse_images([])
+
+
 def test_analyse_pdf_sends_base64_document_block_and_parses() -> None:
     """analyse_pdf sends a base64 document block + prompt and parses the result."""
     client = _CapturingClient(_analysis_json())

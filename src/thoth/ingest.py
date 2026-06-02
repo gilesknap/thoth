@@ -577,9 +577,7 @@ class Ingestor:
                 capture,
                 analysis=analysis,
                 extracted_body=(
-                    holding.prefetched.body
-                    if holding.prefetched is not None
-                    else None
+                    holding.prefetched.body if holding.prefetched is not None else None
                 ),
             )
             raw = self.capture_raw(
@@ -854,8 +852,18 @@ class Ingestor:
         routed to ``notes/`` by its content, not the ``memories/`` default) and
         :meth:`curate` (so the page body holds the real meaning). The asset is still
         saved as a real binary and embedded with ``![[...]]`` -- analysis only enriches
-        and routes (ADR 0006). Non-binary kinds (text/URL/audio already carry extracted
-        text) return ``None`` and their paths are unchanged.
+        and routes (ADR 0006).
+
+        A **multi-image batch** (issue #84) is one unit of intent curated as one page,
+        so EVERY image -- the primary plus the extras on :attr:`Capture.extra_paths` --
+        is sent as a block in a **single** vision call producing one shared summary/tags
+        (issue #124), not just the first image. Because it is one call it counts as
+        exactly ONE charge against the daily budget guard; a safety cap
+        (``THOTH_MAX_ANALYSE_IMAGES``) bounds the payload (extras beyond the cap are
+        logged-and-skipped from the analyse call but still saved + embedded). A PDF
+        is always single-file and stays on its own document/extraction path -- it is
+        never bundled with image blocks. Non-binary kinds (text/URL/audio already carry
+        extracted text) return ``None`` and their paths are unchanged.
 
         The call goes through the injected :class:`~thoth.llm.LLM`, so it is charged
         against the **same daily budget guard** as classify/curate (issue #16). Reusing
@@ -886,13 +894,25 @@ class Ingestor:
             return _Analysed(analysis=None)
         try:
             image_bytes, ext, fetched = self._analyse_bytes(capture, kind)
+            # A multi-image batch (issue #84) is one unit of intent curated as one page,
+            # so EVERY image must reach the vision model -- not just the primary -- in
+            # ONE call producing one shared summary/tags (issue #124). Read the extras
+            # (already-downloaded local paths; a batch is never a URL fetch), capped,
+            # reusing the primary bytes already in hand. A PDF never carries extras.
+            extra_images = (
+                self._extra_analyse_images(capture) if kind is CaptureKind.IMAGE else []
+            )
         except (ExtractError, OSError) as exc:
             raise IngestError(f"analyse failed reading binary: {exc}") from exc
         try:
             if kind is CaptureKind.PDF:
                 analysis: Analysis | None = self._analyser.analyse_pdf(image_bytes)
             else:
-                analysis = self._analyser.analyse_image(image_bytes, ext=ext)
+                # One vision call with N image blocks (primary first, then the capped
+                # extras) -> one Analysis, one charge against the daily budget guard.
+                analysis = self._analyser.analyse_images(
+                    [(image_bytes, ext), *extra_images]
+                )
         except AnalyseError:
             # An unparseable analysis must not lose the capture: file the binary blind
             # (the prior behaviour) rather than abort. The fetched binary is still
@@ -991,6 +1011,48 @@ class Ingestor:
         )
         return data, fetched.suggested_ext, fetched
 
+    def _extra_analyse_images(self, capture: Capture) -> list[tuple[bytes, str]]:
+        """Read the extra images of a multi-image batch for one analyse call (#84/#124).
+
+        A multi-image Slack batch carries its non-primary images on
+        :attr:`Capture.extra_paths` (all local, already-downloaded paths -- a batch is
+        never a URL fetch). Every image must reach the vision model so the one shared
+        summary/tags genuinely cover the WHOLE batch, not just the primary (issue #84,
+        criterion 3). They are sent as extra blocks in the SAME analyse call as the
+        primary, so the batch still costs exactly ONE budget-guarded call.
+
+        A safety cap (``THOTH_MAX_ANALYSE_IMAGES``, default 6) bounds the payload: the
+        primary already consumes one slot, so at most ``cap - 1`` extras are read;
+        any beyond that are logged-and-skipped from the analyse call (they are still
+        saved and embedded by :meth:`_append_extra_images`). A non-positive cap disables
+        the limit (analyse every image). Each extra is downscaled in place exactly like
+        the primary (issue #108), so the bytes analysed match the bytes later stored.
+        """
+        if not capture.extra_paths:
+            return []
+        cap = self._config.max_analyse_images
+        extras = list(capture.extra_paths)
+        if cap > 0:
+            # The primary already occupies one slot of the per-call budget.
+            allowed = max(cap - 1, 0)
+            if len(extras) > allowed:
+                logger.debug(
+                    "analyse cap: %d image(s) skipped from the vision call "
+                    "(cap=%d, batch=%d incl. primary); still saved + embedded",
+                    len(extras) - allowed,
+                    cap,
+                    len(extras) + 1,
+                )
+                extras = extras[:allowed]
+        blocks: list[tuple[bytes, str]] = []
+        for path in extras:
+            ext = path.name.rsplit(".", 1)[-1].lower() if "." in path.name else "png"
+            data = self._maybe_downscale(
+                path, path.read_bytes(), ext, CaptureKind.IMAGE
+            )
+            blocks.append((data, ext))
+        return blocks
+
     def _maybe_downscale(
         self, staged: Path, data: bytes, ext: str, kind: CaptureKind
     ) -> bytes:
@@ -1042,10 +1104,10 @@ class Ingestor:
         ``extracted_body`` does the same for a *text-bearing* capture whose body was
         extracted before classify (a URL article's markdown / an audio transcript): the
         same bounded lead excerpt that already feeds curate (head-truncated to
-        :data:`_URL_EXCERPT_CHARS`) is folded into the classify prompt too, so routing is
-        **content-aware** -- a clearly-personal URL routes differently from a technical
-        one, instead of being decided from the link + title alone (issue #123). classify
-        stays on Sonnet here (the Haiku move is issue #79).
+        :data:`_URL_EXCERPT_CHARS`) is folded into the classify prompt too, so routing
+        is **content-aware** -- a clearly-personal URL routes differently from a
+        technical one, instead of being decided from the link + title alone (issue
+        #123). classify stays on Sonnet here (the Haiku move is issue #79).
 
         Args:
             capture: The inbound item to classify.
