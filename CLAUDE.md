@@ -34,3 +34,8 @@ SSH access does **not** survive across sandboxed sessions — any VPS key from a
 session is gone. So when live access is needed, generate a **fresh** keypair that session
 and ask the owner to install the public key (for both `pkm@` and `root@`); do not assume an
 existing key is still present.
+
+After a `git checkout` on the appliance, confirm the deploy with `git -C /opt/thoth log -1`,
+**not** the startup version string: the `.pth` editable install runs the code at HEAD
+regardless, and plain `uv sync --extra runtime` often leaves that version string stale
+(use `--reinstall-package thoth` only if you want it to match — purely cosmetic).
