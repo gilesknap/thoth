@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -986,18 +987,28 @@ class _RecordingIngestor:
 
 
 class _RecordingGit:
-    """A fake GitSync recording pull/commit (asserts batch cadence, #80)."""
+    """A fake GitSync recording pull/commit/stage (asserts batch cadence, #80/#85)."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.pull_calls = 0
         self.commit_messages: list[str] = []
+        self.commit_paths: list[Any] = []
+        self.staged: list[Any] = []
+        # The real Ingestor holds this around the small commit/log critical section
+        # (the working-tree serialisation guard, issue #85), so the fake exposes a
+        # usable re-entrant context manager too.
+        self.capture_lock = threading.RLock()
 
     def pull(self, **kwargs: Any) -> Any:
         self.pull_calls += 1
         return None
 
-    def commit(self, message: str, **kwargs: Any) -> Any:
+    def stage(self, paths: Any, **kwargs: Any) -> None:
+        self.staged.append(paths)
+
+    def commit(self, message: str, *, paths: Any = None, **kwargs: Any) -> Any:
         self.commit_messages.append(message)
+        self.commit_paths.append(paths)
 
         class _R:
             committed = True

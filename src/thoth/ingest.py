@@ -566,8 +566,13 @@ class Ingestor:
         started = time.monotonic()
         # commit=False means a batch caller (thoth capture) pulled once up front, so
         # skip the per-call orient and let the staged changes accumulate for its commit.
+        # The orient pull rewrites the whole working tree (``pull --rebase
+        # --autostash``), so it runs under the narrow working-tree lock (issue #85) --
+        # but only the pull, NOT the slow LLM passes that follow, so concurrent captures
+        # still overlap on the expensive work and only serialise on the git steps.
         if commit:
-            self._orient()
+            with self._git.capture_lock:
+                self._orient()
         holding = self.persist_inbound(capture, as_is=as_is)
         analysed = _Analysed(analysis=None)
         try:
@@ -659,11 +664,28 @@ class Ingestor:
             self._vault.remove_page(holding.result.raw_path)
 
         page_paths = self._written_page_paths(plan)
-        self._apply_navigation(plan, page_paths)
+        # Retain (Hindsight) reads the already-durable pages off disk and never touches
+        # the working tree, so it runs OUTSIDE the working-tree lock -- keeping the
+        # locked section down to the sub-second log-append -> stage -> commit -> push.
         self._retain_pages(page_paths, classification)
 
         report = self._build_report(capture, classification, raw, page_paths, plan)
-        committed = self._commit(report, classification, do_commit=commit)
+        # The exact paths this capture touched -- curated page(s) (incl. any OTHER
+        # existing page the file-plan updated), the raw sidecar, every saved asset, the
+        # superseded inbox/ hold (a deletion), and the shared log.md -- so the commit
+        # stages only its own work and never sweeps a concurrent capture's asset (#85).
+        commit_paths = self._capture_commit_paths(
+            report, holding_raw=holding.result.raw_path
+        )
+        # The narrow tree-mutating critical section (issue #85): append the shared
+        # log.md, stage exactly this capture's paths, commit, rebase, push -- all under
+        # the working-tree lock so two concurrent captures never collide on log.md, the
+        # index lock, or the rebase. The LLM passes above ran unlocked.
+        with self._git.capture_lock:
+            self._apply_navigation(plan, page_paths)
+            committed = self._commit(
+                report, classification, do_commit=commit, paths=commit_paths
+            )
         # Record the capture liveness marker only on a clean (non-conflict) ingest, so a
         # wedged sync leaves BOTH the capture and push markers stale -- silence is then
         # the heartbeat's diagnostic (issue #15). The push marker is recorded inside
@@ -732,8 +754,9 @@ class Ingestor:
         marker is recorded on a clean (non-conflict) run since the pipeline ran
         healthily.
         """
-        if holding.result.raw_path is not None:
-            self._vault.remove_page(holding.result.raw_path)
+        hold_rel = holding.result.raw_path
+        if hold_rel is not None:
+            self._vault.remove_page(hold_rel)
         report = IngestReport(
             page_paths=[],
             raw_paths=[],
@@ -745,13 +768,20 @@ class Ingestor:
             unchanged=True,
             message=f"Unchanged; already curated at {curated_path} (skipped).",
         )
-        committed = self._commit_unchanged(report, cls, do_commit=do_commit)
+        committed = self._commit_unchanged(
+            report, cls, do_commit=do_commit, hold_rel=hold_rel
+        )
         if not committed.conflict:
             self._record_marker(MARKER_CAPTURE)
         return committed
 
     def _commit_unchanged(
-        self, report: IngestReport, cls: Classification, *, do_commit: bool
+        self,
+        report: IngestReport,
+        cls: Classification,
+        *,
+        do_commit: bool,
+        hold_rel: str | None,
     ) -> IngestReport:
         """Commit the holding-removal for a skip-on-unchanged run (issue #95, task D).
 
@@ -759,24 +789,39 @@ class Ingestor:
         report's message instead of synthesising a "Filed N page(s)" line: a conflict is
         surfaced on the report (the removal is local; never a ``--force``), a benign
         "nothing to commit" leaves ``committed=False``, and a real push records the push
-        marker. ``do_commit=False`` defers the commit to the batch caller.
+        marker. ``do_commit=False`` defers the commit to the batch caller. The ONLY path
+        this run touched is the superseded inbox/ hold deletion, so exactly that is
+        staged (issue #85) -- never an ``add -A`` that could sweep a concurrent capture.
         """
+        # The only working-tree change is the hold deletion; stage exactly that.
+        commit_paths = [hold_rel] if hold_rel is not None else []
         if not do_commit:
+            # Batch path: stage the deletion now for the caller's batched commit.
+            with self._git.capture_lock:
+                if commit_paths:
+                    try:
+                        self._git.stage(commit_paths)
+                    except GitSyncError:
+                        pass
             return report
-        try:
-            result = self._git.commit(cls.title or "unchanged capture")
-        except VaultConflictError as conflict:
-            return _replace_report(
-                report,
-                committed=False,
-                conflict=True,
-                message=(
-                    f"{report.message} (holding removal not pushed -- vault conflict; "
-                    f"resolve in Obsidian: {conflict})"
-                ),
-            )
-        except GitSyncError as exc:
-            raise IngestError(f"commit failed: {exc}") from exc
+        # Take the working-tree lock around the commit/rebase/push (issue #85).
+        with self._git.capture_lock:
+            try:
+                result = self._git.commit(
+                    cls.title or "unchanged capture", paths=commit_paths
+                )
+            except VaultConflictError as conflict:
+                return _replace_report(
+                    report,
+                    committed=False,
+                    conflict=True,
+                    message=(
+                        f"{report.message} (holding removal not pushed -- vault "
+                        f"conflict; resolve in Obsidian: {conflict})"
+                    ),
+                )
+            except GitSyncError as exc:
+                raise IngestError(f"commit failed: {exc}") from exc
         if result.committed:
             self._record_marker(MARKER_PUSH)
         return _replace_report(
@@ -2297,16 +2342,69 @@ class Ingestor:
 
     # ---- pass 7: commit ----------------------------------------------------------
 
-    def _commit(
-        self, report: IngestReport, cls: Classification, *, do_commit: bool = True
-    ) -> IngestReport:
-        """Commit the batch; surface a rebase conflict as a fail-loud report.
+    @staticmethod
+    def _capture_commit_paths(
+        report: IngestReport, *, holding_raw: str | None
+    ) -> list[str]:
+        """Enumerate EVERY vault path this capture touched, for explicit staging (#85).
 
-        ``do_commit=False`` (the ``thoth capture`` batch path, issue #80) defers the git
-        work to the caller: the navigation log was already appended, the pages are
-        staged in the working tree, and the caller commits+pushes the whole batch via
-        :meth:`thoth.git_sync.GitSync.commit`. This method then returns the report
-        unchanged (``committed=False``) without touching git.
+        Staging only the capture's own paths (rather than ``git add -A``) is the orphan
+        fix, so this list must be exhaustive or it trades one orphan for another. The
+        set is dynamic per capture:
+
+        * ``report.page_paths`` -- the curated page(s) the file-plan wrote, which can be
+          a *create* or an *update* of an existing page, including OTHER pages the plan
+          touched (a capture may rewrite an entity page while filing a note); these are
+          the plan's ``_written`` paths.
+        * ``report.raw_paths`` -- the immutable raw sidecar (``raw/articles/<slug>.md``
+          / ``raw/papers/<slug>.md``) when one was written.
+        * ``report.asset_paths`` -- ALL N saved assets (a multi-image batch and any
+          derived ``.excalidraw.md`` artifact, issues #84/#124/#68), not just the first.
+        * ``holding_raw`` -- the superseded ``inbox/<sha>.md`` hold removed on success;
+          a *deletion* that must be staged or the orphaned hold lingers untracked.
+        * ``log.md`` -- the shared activity log every capture appends to (vault root).
+
+        Returned de-duplicated and order-preserving (an asset already listed elsewhere
+        is not staged twice).
+        """
+        ordered: list[str] = [
+            *report.page_paths,
+            *report.raw_paths,
+            *report.asset_paths,
+        ]
+        if holding_raw is not None:
+            ordered.append(holding_raw)
+        ordered.append("log.md")
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for path in ordered:
+            if path and path not in seen:
+                seen.add(path)
+                deduped.append(path)
+        return deduped
+
+    def _commit(
+        self,
+        report: IngestReport,
+        cls: Classification,
+        *,
+        do_commit: bool = True,
+        paths: list[str] | None = None,
+    ) -> IngestReport:
+        """Commit this capture's explicit ``paths``; surface a conflict on the report.
+
+        ``paths`` is the exact set of vault-relative paths this capture touched (curated
+        page(s), raw sidecar, assets, the superseded inbox/ hold, and ``log.md``). It is
+        staged and committed atomically (``git add -- <paths>`` in ``vault-commit``), so
+        the commit can never sweep a different, concurrent capture's untracked asset and
+        orphan its embedded ``![[asset]]`` (issue #85).
+
+        ``do_commit=False`` (the ``thoth capture`` batch path, issue #80) defers the
+        commit to the caller: it stages exactly ``paths`` here (so the batched commit
+        later picks them up without an ``add -A`` that could sweep an unrelated
+        capture's file), appends nothing more, and returns the report unchanged
+        (``committed=False``). The caller commits+pushes the whole batch via
+        :meth:`thoth.git_sync.GitSync.commit` (no ``paths`` -> commit the staged index).
 
         Returns:
             The report with ``committed``/``conflict``/``message`` populated.
@@ -2315,6 +2413,14 @@ class Ingestor:
             IngestError: on a non-conflict git failure.
         """
         if not do_commit:
+            # Stage this capture's own paths now so the later batch commit includes them
+            # without re-scanning the whole tree (issue #85). The git work (rebase/push)
+            # is still the batch caller's.
+            if paths:
+                try:
+                    self._git.stage(paths)
+                except GitSyncError as exc:
+                    raise IngestError(f"stage failed: {exc}") from exc
             return _replace_report(
                 report,
                 committed=False,
@@ -2325,7 +2431,7 @@ class Ingestor:
             )
         subject = cls.title or "capture"
         try:
-            result = self._git.commit(subject)
+            result = self._git.commit(subject, paths=paths)
         except VaultConflictError as exc:
             return _replace_report(
                 report,
@@ -2378,15 +2484,11 @@ class Ingestor:
         """
         rel = holding.result.raw_path
         raw_paths = [rel] if rel is not None else []
-        try:
-            self._vault.append_log("ingest", "deferred capture", raw_paths)
-        except VaultError:
-            # Navigation is best-effort here; the durable hold is what matters.
-            pass
+        asset_paths = list(holding.result.asset_paths)
         report = IngestReport(
             page_paths=[],
             raw_paths=raw_paths,
-            asset_paths=list(holding.result.asset_paths),
+            asset_paths=asset_paths,
             obsidian_links=[],
             wikilinks=[],
             committed=False,
@@ -2398,24 +2500,41 @@ class Ingestor:
                 "to curate it once capacity is available."
             ),
         )
-        if not do_commit:
-            # The batch caller (thoth capture) commits the run; the hold is staged.
-            return report
-        try:
-            result = self._git.commit("deferred capture")
-        except VaultConflictError as conflict:
-            return _replace_report(
-                report,
-                committed=False,
-                conflict=True,
-                message=(
-                    "Saved raw locally, curation deferred (LLM unavailable), but the "
-                    f"push was refused; resolve in Obsidian. ({conflict})"
-                ),
-            )
-        except GitSyncError:
-            # The hold is durable locally even if the push failed; do not raise.
-            return report
+        # The hold page, its assets, and log.md are the only paths this deferred capture
+        # touched; stage exactly those (issue #85). De-duplicated, log.md last.
+        commit_paths = [*raw_paths, *asset_paths, "log.md"]
+        # The log append + stage/commit is the narrow tree-mutating section: take the
+        # working-tree lock so the shared log.md append and the commit/rebase never race
+        # a concurrent capture (issue #85).
+        with self._git.capture_lock:
+            try:
+                self._vault.append_log("ingest", "deferred capture", raw_paths)
+            except VaultError:
+                # Navigation is best-effort here; the durable hold is what matters.
+                pass
+            if not do_commit:
+                # The batch caller (thoth capture) commits the run; stage the hold now
+                # so the batched commit includes it without an add -A.
+                try:
+                    self._git.stage(commit_paths)
+                except GitSyncError:
+                    pass
+                return report
+            try:
+                result = self._git.commit("deferred capture", paths=commit_paths)
+            except VaultConflictError as conflict:
+                return _replace_report(
+                    report,
+                    committed=False,
+                    conflict=True,
+                    message=(
+                        "Saved raw locally, curation deferred (LLM unavailable), but "
+                        f"the push was refused; resolve in Obsidian. ({conflict})"
+                    ),
+                )
+            except GitSyncError:
+                # The hold is durable locally even if the push failed; do not raise.
+                return report
         if result.committed:
             self._record_marker(MARKER_PUSH)
         return _replace_report(

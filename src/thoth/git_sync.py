@@ -3,9 +3,18 @@
 This module is the appliance's *only* path to git, and git is **never an LLM
 tool** (SPEC section 3): :class:`GitSync` shells out to two shipped bash scripts
 — ``bin/vault-pull`` (pull --rebase --autostash before any write) and
-``bin/vault-commit`` (add -A, commit, rebase, push after an ingest batch) — and
+``bin/vault-commit`` (stage explicit paths, commit, rebase, push) — and
 classifies their exit codes into typed results. It never pushes ``--force`` and
 fails loudly, surfacing the conflicting path, on a rebase conflict.
+
+The Slack daemon dispatches each capture on a worker thread, all sharing one git
+working tree, so :class:`GitSync` carries a re-entrant :attr:`GitSync.capture_lock`
+that :class:`thoth.ingest.Ingestor` holds **only** around the small tree-mutating
+critical sections (the orient pull, and the log-append → stage → commit → rebase →
+push sequence) — never across the slow LLM passes. :meth:`commit` stages the
+*explicit* paths a single capture wrote (``git add -- <paths>``), not the whole
+tree, so a commit can never sweep a different, concurrent capture's untracked asset
+into the wrong commit and orphan an embedded ``![[asset]]`` (issue #85).
 
 The two scripts carry the SPEC's git wrappers (``GIT_CONFIG_GLOBAL=/dev/null`` +
 ``gh``'s credential helper, ``pull --rebase``, never ``--force``). They push back to
@@ -29,7 +38,9 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import subprocess
+import threading
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -178,6 +189,36 @@ class GitSync:
         child_env["PKM_VAULT"] = str(config.vault_path)
         self._child_env = child_env
         self._bin_path = bin_dir() if bin_path is None else bin_path
+        # Serialises the small tree-mutating critical sections of a capture (the orient
+        # pull and the log-append -> stage -> commit -> rebase -> push) against any
+        # other capture sharing this single git working tree (issue #85). The Slack
+        # daemon dispatches events on a worker-thread pool, so two commits or two
+        # rebases could otherwise collide on ``.git/index.lock`` or lose a ``log.md``
+        # append (the shared append target), and a ``pull --rebase`` rewrites the whole
+        # tree. The lock is NOT held across the slow classify/analyse/curate LLM passes,
+        # so captures stay concurrent there; the orphaned-asset fix proper is
+        # explicit-path staging in :meth:`commit`, and this lock only closes the
+        # residual shared-state races. It is re-entrant so a held critical section that
+        # nests :meth:`commit`/:meth:`pull` never self-deadlocks. One ``GitSync`` per
+        # vault per process, so the instance lock is the per-working-tree mutex.
+        self._capture_lock = threading.RLock()
+
+    @property
+    def capture_lock(self) -> AbstractContextManager[bool]:
+        """Re-entrant mutex for the tree-mutating critical sections of a capture (#85).
+
+        :class:`thoth.ingest.Ingestor` acquires it ONLY around the orient pull and the
+        log-append → stage → commit → rebase → push sequence — the sub-second sections
+        that touch the single shared git working tree, ``.git/index.lock``, or the
+        shared ``log.md`` — and **never** across the slow analyse/classify/curate LLM
+        passes, so concurrent captures (the Slack daemon runs each on a worker thread)
+        overlap on the expensive work and only serialise on the commit. Re-entrant (an
+        :class:`RLock`), so a held section that nests :meth:`commit`/:meth:`pull` does
+        not self-deadlock. One ``GitSync`` per vault per process, so this instance lock
+        is the per-working-tree mutex. Returned as a context manager
+        (``with git.capture_lock:``).
+        """
+        return self._capture_lock
 
     @property
     def vault_root(self) -> Path:
@@ -210,8 +251,90 @@ class GitSync:
             )
         return result
 
-    def commit(self, message: str, *, timeout: float = 120.0) -> GitResult:
-        """Run ``vault-commit <message>``: add -A, commit, rebase, push.
+    def stage(self, paths: Sequence[str], *, timeout: float = 30.0) -> None:
+        """Stage exactly ``paths`` in the working tree (``git add -- <paths>``).
+
+        Used by the batch import path (``thoth capture``), where each capture stages its
+        own page/raw/asset/``log.md`` paths up front and a single later :meth:`commit`
+        (with no ``paths``) commits the accumulated index. Staging only this capture's
+        own paths — never ``add -A`` — means a later batch commit cannot sweep an
+        unrelated capture's untracked file (issue #85). A path may name a deletion (a
+        superseded ``inbox/`` hold), which ``git add`` stages when the file is tracked.
+        A never-tracked, now-deleted hold (created AND removed within one uncommitted
+        run) exists in neither the working tree nor the index, so it is dropped —
+        passing it to ``git add`` would fail the whole call on an unmatched pathspec.
+        Empty ``paths`` is a no-op.
+
+        Runs ``git`` directly (deterministic, like :meth:`divergence`), not a sync
+        script. Held under :attr:`capture_lock` by the caller so it never races another
+        capture's stage/commit on the shared index.
+
+        Args:
+            paths: Vault-relative paths to stage.
+            timeout: Seconds to allow the ``git add`` before it is killed.
+
+        Raises:
+            GitSyncError: if ``git add`` exits non-zero.
+        """
+        stageable = self._stageable(paths, timeout=timeout)
+        if not stageable:
+            return
+        completed = subprocess.run(
+            ["git", "add", "--", *stageable],
+            cwd=str(self._vault_root),
+            env=self._child_env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise GitSyncError(
+                f"git add failed (exit {completed.returncode}). "
+                f"stderr: {completed.stderr.strip()!r}"
+            )
+
+    def _stageable(self, paths: Sequence[str], *, timeout: float) -> list[str]:
+        """Keep only paths that exist in the working tree or are already tracked.
+
+        A path that is neither (a never-committed hold removed within the same run)
+        would make ``git add -- <path>`` abort on an unmatched pathspec, so it is
+        dropped — it carries no git change anyway. Order-preserving.
+        """
+        kept: list[str] = []
+        for path in paths:
+            if (self._vault_root / path).exists():
+                kept.append(path)
+                continue
+            tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", "--", path],
+                cwd=str(self._vault_root),
+                env=self._child_env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if tracked.returncode == 0:
+                kept.append(path)
+        return kept
+
+    def commit(
+        self,
+        message: str,
+        *,
+        paths: Sequence[str] | None = None,
+        timeout: float = 120.0,
+    ) -> GitResult:
+        """Run ``vault-commit <message> [-- <paths>]``: stage, commit, rebase, push.
+
+        When ``paths`` is given they are the EXACT set staged for this commit
+        (``git add -- <paths>`` in the script) — a single capture's own page(s), raw
+        sidecar, assets, and ``log.md``, never the whole tree — so the commit cannot
+        sweep a concurrent capture's untracked asset and orphan an embedded
+        ``![[asset]]`` (issue #85). When ``paths`` is ``None`` the script commits
+        whatever is already staged in the index (the batch path stages incrementally via
+        :meth:`stage`). A path may name a deletion (a superseded ``inbox/`` hold).
 
         The script prefixes the commit subject with ``agent:`` and never pushes
         ``--force``. A clean run with no staged changes returns ``committed=False``
@@ -219,6 +342,8 @@ class GitSync:
 
         Args:
             message: The commit subject (passed as the script's first argument).
+            paths: The exact vault-relative paths to stage, or ``None`` to commit the
+                already-staged index.
             timeout: Seconds to allow the script before
                 :class:`subprocess.TimeoutExpired` is raised.
 
@@ -232,7 +357,8 @@ class GitSync:
                 is unchanged).
             GitSyncError: on any other non-zero exit.
         """
-        result = self._run(VAULT_COMMIT_SCRIPT, (message,), timeout=timeout)
+        script_args = (message, "--", *paths) if paths is not None else (message,)
+        result = self._run(VAULT_COMMIT_SCRIPT, script_args, timeout=timeout)
         if result.returncode != 0:
             if _CONFLICT_SENTINEL in result.stderr:
                 raise VaultConflictError(

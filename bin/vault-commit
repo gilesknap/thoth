@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-# thoth/bin/vault-commit — commit + rebase + push after an ingest batch.
+# thoth/bin/vault-commit — stage explicit paths, then commit + rebase + push.
+#
+# Usage: vault-commit <message> [-- <path>...]
+#
+# When one or more vault-relative paths follow a literal ``--`` they are the EXACT
+# set staged for this commit (``git add -- <path>...``); with no paths the script
+# commits whatever is already staged in the index (the batch path stages each
+# capture incrementally up front). It never uses ``git add -A`` (issue #85): a
+# blanket stage of the whole working tree let one capture's commit sweep a
+# *different*, concurrent capture's just-written but-untracked asset into the wrong
+# commit (the Slack daemon runs each capture on a worker thread sharing one working
+# tree), so a page could be committed without its embedded ``![[asset]]``. Staging
+# only this capture's own paths makes each commit atomic over its own page(s) + raw
+# + assets + log.md and never touches another in-flight capture's untracked files. A
+# path that names a deleted file (e.g. a superseded inbox/ hold) stages the deletion,
+# exactly as ``git add -- <path>`` does.
 #
 # Carried forward from the SPEC (Appendix -> Git wrappers & .gitignore).
 # Commit FIRST so the working tree is clean, THEN rebase onto any Obsidian pushes
@@ -22,6 +37,12 @@
 set -euo pipefail
 VAULT="${PKM_VAULT:-/opt/pkm-vault}"
 MSG="${1:-ingest $(date -u +%Y-%m-%dT%H:%MZ)}"
+shift || true
+# Everything after the message (the caller passes a literal ``--`` then the explicit
+# vault-relative paths) is the exact set to stage. With no paths we commit the index
+# as-is (the batch path stages incrementally). Drop the leading ``--`` if present.
+if [ "${1:-}" = "--" ]; then shift; fi
+PATHS=("$@")
 REMOTE="${THOTH_GIT_REMOTE:-origin}"
 BRANCH="${THOTH_GIT_BRANCH:-main}"
 # Default the push target to the vault's own remote (origin), not a hardcoded owner.
@@ -46,7 +67,23 @@ then
 unset; refusing to push (set a remote or THOTH_PUSH_REMOTE)." >&2
     exit 1
 fi
-git add -A
+# Stage only this capture's own paths (never ``add -A`` — see the header). A path may
+# name a created/updated file OR a deletion (a superseded inbox/ hold). Keep only paths
+# that exist in the working tree (a create/update) or are already tracked (so a deletion
+# stages): a never-tracked, now-deleted hold (created AND removed within one uncommitted
+# run) is in neither and is dropped, since ``git add -- <missing>`` would otherwise fail
+# the whole commit on an unmatched pathspec. With no paths, commit the staged index.
+if [ "${#PATHS[@]}" -gt 0 ]; then
+    STAGE=()
+    for p in "${PATHS[@]}"; do
+        if [ -e "$p" ] || git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+            STAGE+=("$p")
+        fi
+    done
+    if [ "${#STAGE[@]}" -gt 0 ]; then
+        git add -- "${STAGE[@]}"
+    fi
+fi
 git diff --cached --quiet && { echo "nothing to commit"; exit 0; }
 git commit -m "agent: $MSG"
 if ! GIT_CONFIG_GLOBAL=/dev/null git -c credential.helper="$CRED_HELPER" \
