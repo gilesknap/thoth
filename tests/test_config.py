@@ -11,6 +11,7 @@ import pytest
 from thoth.config import (
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_DAILY_LLM_BUDGET,
+    DEFAULT_IMAGE_RESIZE_THRESHOLD_BYTES,
     DEFAULT_LOG_LEVEL,
     DEFAULT_OBSIDIAN_VAULT_NAME,
     Config,
@@ -82,6 +83,7 @@ def test_all_fields_populated() -> None:
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
         "THOTH_DAILY_LLM_BUDGET": "50",
+        "THOTH_IMAGE_RESIZE_THRESHOLD_BYTES": "3145728",
         "THOTH_LOG_LEVEL": "DEBUG",
     }
     cfg = load_config(env)
@@ -103,7 +105,28 @@ def test_all_fields_populated() -> None:
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
     assert cfg.daily_llm_budget == 50
+    assert cfg.image_resize_threshold_bytes == 3_145_728
     assert cfg.log_level == "DEBUG"
+
+
+def test_image_resize_threshold_defaults_and_override() -> None:
+    """The resize threshold defaults to 2 MB and an explicit value wins (issue #108)."""
+    default = load_config({"PKM_VAULT": "/x"})
+    assert (
+        default.image_resize_threshold_bytes
+        == DEFAULT_IMAGE_RESIZE_THRESHOLD_BYTES
+        == 2 * 1024 * 1024
+    )
+    override = load_config(
+        {"PKM_VAULT": "/x", "THOTH_IMAGE_RESIZE_THRESHOLD_BYTES": "1000000"}
+    )
+    assert override.image_resize_threshold_bytes == 1_000_000
+
+
+def test_image_resize_threshold_rejects_non_integer() -> None:
+    """A non-integer threshold is a clear ConfigError, not a silent default."""
+    with pytest.raises(ConfigError, match="THOTH_IMAGE_RESIZE_THRESHOLD_BYTES"):
+        load_config({"PKM_VAULT": "/x", "THOTH_IMAGE_RESIZE_THRESHOLD_BYTES": "loads"})
 
 
 def test_daily_llm_budget_rejects_non_integer() -> None:
