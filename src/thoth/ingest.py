@@ -155,11 +155,13 @@ _TYPE_FOLDER: dict[str, str] = {
 _CURATE_ATTEMPTS: int = 2
 
 # Head-truncation cap (chars, ~750 tokens) for the extracted URL/transcript body folded
-# into the *curate* prompt via ``_capture_summary``. The vault is canonical and the full
-# text already lives at ``raw/articles/<slug>.md``; the curated page is a distilled
-# view, so a lead excerpt carries the gist while capping token cost on large
-# articles (issue #75). Classify is kept blind/cheap on purpose -- it never
-# receives the body.
+# into the classify AND curate prompts via ``_capture_summary``. The vault is canonical
+# and the full text already lives at ``raw/articles/<slug>.md``; the curated page is a
+# distilled view, so a lead excerpt carries the gist while capping token cost on large
+# articles (issue #75). The SAME bounded excerpt feeds classify so routing is
+# content-aware -- a personal URL routes differently from a technical one rather than
+# being decided from the link + title alone (issue #123); classify stays on Sonnet (the
+# Haiku move is issue #79).
 _URL_EXCERPT_CHARS: int = 3000
 
 # The forced tool the curate pass uses to return its file plan. Making the model emit
@@ -571,7 +573,13 @@ class Ingestor:
         try:
             analysed = self.analyse(capture)
             analysis = analysed.analysis
-            classification = self.classify(capture, analysis=analysis)
+            classification = self.classify(
+                capture,
+                analysis=analysis,
+                extracted_body=(
+                    holding.prefetched.body if holding.prefetched is not None else None
+                ),
+            )
             raw = self.capture_raw(
                 capture,
                 classification,
@@ -588,8 +596,19 @@ class Ingestor:
             # change. Skip curate (and navigation/retain) entirely so a re-run to finish
             # an interrupted import costs nothing for the parts already done. Applies to
             # both the curate and as-is paths (each files to the same folder/slug).
+            logger.debug(
+                "capture_raw: disposition=%s raw_path=%s assets=%d",
+                raw.disposition,
+                raw.raw_path,
+                len(raw.asset_paths),
+            )
             curated = self._unchanged_curated(raw, classification)
             if curated is not None:
+                logger.debug(
+                    "dedup short-circuit: unchanged, already curated at %s "
+                    "(skipping curate/navigation/retain)",
+                    curated,
+                )
                 return self._skip_unchanged(holding, classification, curated, commit)
             if as_is:
                 # Low-touch import (ADR 0010): SKIP curate; file the original body
@@ -844,8 +863,18 @@ class Ingestor:
         routed to ``notes/`` by its content, not the ``memories/`` default) and
         :meth:`curate` (so the page body holds the real meaning). The asset is still
         saved as a real binary and embedded with ``![[...]]`` -- analysis only enriches
-        and routes (ADR 0006). Non-binary kinds (text/URL/audio already carry extracted
-        text) return ``None`` and their paths are unchanged.
+        and routes (ADR 0006).
+
+        A **multi-image batch** (issue #84) is one unit of intent curated as one page,
+        so EVERY image -- the primary plus the extras on :attr:`Capture.extra_paths` --
+        is sent as a block in a **single** vision call producing one shared summary/tags
+        (issue #124), not just the first image. Because it is one call it counts as
+        exactly ONE charge against the daily budget guard; a safety cap
+        (``THOTH_MAX_ANALYSE_IMAGES``) bounds the payload (extras beyond the cap are
+        logged-and-skipped from the analyse call but still saved + embedded). A PDF
+        is always single-file and stays on its own document/extraction path -- it is
+        never bundled with image blocks. Non-binary kinds (text/URL/audio already carry
+        extracted text) return ``None`` and their paths are unchanged.
 
         The call goes through the injected :class:`~thoth.llm.LLM`, so it is charged
         against the **same daily budget guard** as classify/curate (issue #16). Reusing
@@ -876,24 +905,43 @@ class Ingestor:
             return _Analysed(analysis=None)
         try:
             image_bytes, ext, fetched = self._analyse_bytes(capture, kind)
+            # A multi-image batch (issue #84) is one unit of intent curated as one page,
+            # so EVERY image must reach the vision model -- not just the primary -- in
+            # ONE call producing one shared summary/tags (issue #124). Read the extras
+            # (already-downloaded local paths; a batch is never a URL fetch), capped,
+            # reusing the primary bytes already in hand. A PDF never carries extras.
+            extra_images = (
+                self._extra_analyse_images(capture) if kind is CaptureKind.IMAGE else []
+            )
         except (ExtractError, OSError) as exc:
             raise IngestError(f"analyse failed reading binary: {exc}") from exc
         try:
             if kind is CaptureKind.PDF:
                 analysis: Analysis | None = self._analyser.analyse_pdf(image_bytes)
             else:
-                analysis = self._analyser.analyse_image(image_bytes, ext=ext)
+                # One vision call with N image blocks (primary first, then the capped
+                # extras) -> one Analysis, one charge against the daily budget guard.
+                analysis = self._analyser.analyse_images(
+                    [(image_bytes, ext), *extra_images]
+                )
         except AnalyseError:
             # An unparseable analysis must not lose the capture: file the binary blind
             # (the prior behaviour) rather than abort. The fetched binary is still
             # threaded forward so capture_raw reuses (and cleans up) it.
+            logger.debug("analyse: unparseable result; filing binary blind")
             analysis = None
         except BudgetExceededError as exc:
             # The capture defers, so capture_raw will not consume the fetched binary --
             # clean it up here rather than leak it.
             _cleanup_fetched(fetched)
+            logger.debug("analyse defer: budget cap reached (transient): %s", exc)
             raise LLMUnavailableError(f"analyse deferred (budget cap): {exc}") from exc
         except Exception as exc:  # noqa: BLE001 - classify a client failure (raw durable)
+            logger.debug(
+                "analyse failure: status=%s permanent=%s",
+                getattr(exc, "status_code", None),
+                _is_permanent_vision_rejection(exc),
+            )
             if _is_permanent_vision_rejection(exc):
                 # A PERMANENT vision/document 400 (too-large / unsupported payload) is
                 # NOT a deferrable outage (issue #70): the bytes never change between
@@ -909,6 +957,17 @@ class Ingestor:
                 # A transient transport/availability failure DOES defer (raw durable).
                 _cleanup_fetched(fetched)
                 raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
+        image_count = 1 if kind is CaptureKind.PDF else 1 + len(extra_images)
+        logger.debug(
+            "analyse done: kind=%s images=%d bytes_sent=%d text_len=%d "
+            "suggested_type=%s model=%s",
+            kind.value,
+            image_count,
+            len(image_bytes),
+            len(analysis.text) if analysis is not None else 0,
+            analysis.suggested_type if analysis is not None else None,
+            self._config.analyse_model or self._config.anthropic_model,
+        )
         # The PRIMARY analysis succeeded (or filed blind) -- the capture is already
         # safe. Now derive the best-effort enhancement artifacts (issue #68) from the
         # reported image kind, reusing the SAME bytes already in hand (no second
@@ -981,6 +1040,48 @@ class Ingestor:
         )
         return data, fetched.suggested_ext, fetched
 
+    def _extra_analyse_images(self, capture: Capture) -> list[tuple[bytes, str]]:
+        """Read the extra images of a multi-image batch for one analyse call (#84/#124).
+
+        A multi-image Slack batch carries its non-primary images on
+        :attr:`Capture.extra_paths` (all local, already-downloaded paths -- a batch is
+        never a URL fetch). Every image must reach the vision model so the one shared
+        summary/tags genuinely cover the WHOLE batch, not just the primary (issue #84,
+        criterion 3). They are sent as extra blocks in the SAME analyse call as the
+        primary, so the batch still costs exactly ONE budget-guarded call.
+
+        A safety cap (``THOTH_MAX_ANALYSE_IMAGES``, default 6) bounds the payload: the
+        primary already consumes one slot, so at most ``cap - 1`` extras are read;
+        any beyond that are logged-and-skipped from the analyse call (they are still
+        saved and embedded by :meth:`_append_extra_images`). A non-positive cap disables
+        the limit (analyse every image). Each extra is downscaled in place exactly like
+        the primary (issue #108), so the bytes analysed match the bytes later stored.
+        """
+        if not capture.extra_paths:
+            return []
+        cap = self._config.max_analyse_images
+        extras = list(capture.extra_paths)
+        if cap > 0:
+            # The primary already occupies one slot of the per-call budget.
+            allowed = max(cap - 1, 0)
+            if len(extras) > allowed:
+                logger.debug(
+                    "analyse cap: %d image(s) skipped from the vision call "
+                    "(cap=%d, batch=%d incl. primary); still saved + embedded",
+                    len(extras) - allowed,
+                    cap,
+                    len(extras) + 1,
+                )
+                extras = extras[:allowed]
+        blocks: list[tuple[bytes, str]] = []
+        for path in extras:
+            ext = path.name.rsplit(".", 1)[-1].lower() if "." in path.name else "png"
+            data = self._maybe_downscale(
+                path, path.read_bytes(), ext, CaptureKind.IMAGE
+            )
+            blocks.append((data, ext))
+        return blocks
+
     def _maybe_downscale(
         self, staged: Path, data: bytes, ext: str, kind: CaptureKind
     ) -> bytes:
@@ -1005,12 +1106,29 @@ class Ingestor:
         )
         if reduced is not data and len(reduced) != len(data):
             staged.write_bytes(reduced)
+            logger.debug(
+                "downscale fired (%s): %d -> %d bytes",
+                ext or "?",
+                len(data),
+                len(reduced),
+            )
+        else:
+            logger.debug(
+                "downscale: no resize for %s (%d bytes, threshold=%d)",
+                ext or "?",
+                len(data),
+                self._config.image_resize_threshold_bytes,
+            )
         return reduced
 
     # ---- pass 1: classify --------------------------------------------------------
 
     def classify(
-        self, capture: Capture, *, analysis: Analysis | None = None
+        self,
+        capture: Capture,
+        *,
+        analysis: Analysis | None = None,
+        extracted_body: str | None = None,
     ) -> Classification:
         """Run the cheap classify call and validate its routing output.
 
@@ -1025,9 +1143,19 @@ class Ingestor:
         routed *by its content* -- a whiteboard photo lands in ``notes/``, not the
         ``memories/`` default -- and the candidate fetch sees the analysed terms.
 
+        ``extracted_body`` does the same for a *text-bearing* capture whose body was
+        extracted before classify (a URL article's markdown / an audio transcript): the
+        same bounded lead excerpt that already feeds curate (head-truncated to
+        :data:`_URL_EXCERPT_CHARS`) is folded into the classify prompt too, so routing
+        is **content-aware** -- a clearly-personal URL routes differently from a
+        technical one, instead of being decided from the link + title alone (issue
+        #123). classify stays on Sonnet here (the Haiku move is issue #79).
+
         Args:
             capture: The inbound item to classify.
             analysis: Optional content analysis of a binary capture (image/PDF).
+            extracted_body: Optional pre-extracted text body (URL article markdown /
+                audio transcript) folded in -- bounded -- so routing is content-aware.
 
         Returns:
             The validated :class:`Classification`.
@@ -1036,7 +1164,9 @@ class Ingestor:
             IngestError: if the model output is unparseable or names an
                 out-of-vocabulary type or an invalid slug.
         """
-        prompt = self._classify_prompt(capture, analysis=analysis)
+        prompt = self._classify_prompt(
+            capture, analysis=analysis, extracted_body=extracted_body
+        )
         try:
             response = self._llm.complete([Message(role="user", content=prompt)])
         except Exception as exc:  # noqa: BLE001 - any client failure aborts classify
@@ -1070,6 +1200,16 @@ class Ingestor:
         if analysis is not None:
             entities = _merge_terms(entities, analysis.entities)
             concepts = _merge_terms(concepts, analysis.concepts)
+        logger.debug(
+            "classify chose: type=%s slug=%s title=%r (analysis_folded=%s, "
+            "%d entities, %d concepts)",
+            page_type,
+            slug,
+            title,
+            analysis is not None,
+            len(entities),
+            len(concepts),
+        )
         return Classification(
             page_type=page_type,
             slug=slug,
@@ -1966,6 +2106,18 @@ class Ingestor:
         body = page["body"]
         body = self._append_embeds(body, page, raw)
         body = self._ensure_analysis_text(body, raw, analysis)
+        # Page reuse vs create (issue #125): a plan ``action`` of "update", or a slug
+        # already on disk, means this capture merges into an existing page rather than
+        # creating a new one -- the signal that explains a screenshot folding into an
+        # existing note.
+        existed = self._vault.page_exists(f"{folder}/{slug}.md")
+        logger.debug(
+            "write page: %s/%s action=%s (%s by slug)",
+            folder,
+            slug,
+            page.get("action", "?"),
+            "updating existing" if existed else "creating new",
+        )
         try:
             return self._vault.write_page(folder, slug, frontmatter, body)
         except (SchemaError, SlugError, VaultError) as exc:
@@ -2337,7 +2489,11 @@ class Ingestor:
     # ---- prompt builders ---------------------------------------------------------
 
     def _classify_prompt(
-        self, capture: Capture, *, analysis: Analysis | None = None
+        self,
+        capture: Capture,
+        *,
+        analysis: Analysis | None = None,
+        extracted_body: str | None = None,
     ) -> str:
         """Build the cheap classify-call prompt from the capture.
 
@@ -2345,9 +2501,13 @@ class Ingestor:
         :data:`thoth.vault.TYPE_ENUMERATION` (the canonical vocabulary, issue #19),
         not restated here, so a type added to the vault contract is offered to the
         classifier automatically and the two cannot diverge. A binary capture's analysis
-        (issue #42) is folded in so the model classifies by the asset's real content.
+        (issue #42) is folded in so the model classifies by the asset's real content;
+        ``extracted_body`` folds in the same bounded URL/transcript excerpt that feeds
+        curate so routing is content-aware (issue #123).
         """
-        what = self._capture_summary(capture, analysis=analysis)
+        what = self._capture_summary(
+            capture, analysis=analysis, extracted_body=extracted_body
+        )
         type_list = ", ".join(TYPE_ENUMERATION)
         return (
             "Classify this captured item for a personal knowledge vault. Return ONLY a "

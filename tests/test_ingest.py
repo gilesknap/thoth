@@ -297,10 +297,25 @@ class FakeAnalyser:
         self.image_calls: list[tuple[bytes, str]] = []
         self.pdf_calls: list[bytes] = []
         self.excalidraw_calls: list[tuple[bytes, str]] = []
+        # One entry per analyse_images call: the (bytes, ext) blocks sent in that single
+        # vision call (issue #124 -- every image of a batch reaches ONE call).
+        self.images_calls: list[list[tuple[bytes, str]]] = []
 
     def analyse_image(self, image_bytes: bytes, *, ext: str) -> Analysis:
-        """Record the call and return the canned analysis (or raise the error)."""
-        self.image_calls.append((image_bytes, ext))
+        """Single-image convenience: delegate to :meth:`analyse_images` (one block)."""
+        return self.analyse_images([(image_bytes, ext)])
+
+    def analyse_images(self, images: Sequence[tuple[bytes, str]]) -> Analysis:
+        """Record the single multi-image vision call and return the canned analysis.
+
+        ``image_calls`` keeps the per-block log (the FIRST block is the primary, so the
+        existing single-image assertions reading ``image_calls[0]`` are unchanged);
+        ``images_calls`` records each call's whole block list so a test can prove EVERY
+        image of a batch reached the one call (issue #124).
+        """
+        blocks = list(images)
+        self.images_calls.append(blocks)
+        self.image_calls.extend(blocks)
         if self._error is not None:
             raise self._error
         return self._analysis
@@ -646,6 +661,69 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
     assert report.committed is True
     assert report.conflict is False
     assert "notes/transformer-models.md" in harness.origin_files()
+
+
+def test_default_info_output_gains_no_debug_lines(
+    harness: IngestHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """At the default INFO level the ingest pipeline emits NO new DEBUG lines (#125).
+
+    The DEBUG instrumentation must keep the appliance quiet by default: nothing is
+    promoted to INFO, so capturing ``thoth.ingest`` at INFO yields only the existing
+    ``ingest filed:`` summary line and zero records at DEBUG.
+    """
+    doc = ExtractedDoc(
+        source_url="https://e.com/a", title="T", markdown="some article body"
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="thoth.ingest"):
+        ingestor.ingest(Capture(url="https://e.com/a"))
+
+    ingest_records = [r for r in caplog.records if r.name == "thoth.ingest"]
+    # No record fell below INFO (no DEBUG leaked into the default output).
+    assert all(r.levelno >= logging.INFO for r in ingest_records)
+    # The one existing INFO summary line is still there.
+    assert any("ingest filed:" in r.getMessage() for r in ingest_records)
+
+
+def test_debug_level_reveals_classify_decision(
+    harness: IngestHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """At DEBUG, the pipeline reveals its decision points (#125).
+
+    A single capture's DEBUG trail includes the classify decision line (chosen type /
+    slug / title) -- so a tester can set ``THOTH_LOG_LEVEL=DEBUG`` and read what fired
+    instead of probing the vault by hand.
+    """
+    doc = ExtractedDoc(
+        source_url="https://e.com/a", title="T", markdown="some article body"
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="thoth.ingest"):
+        ingestor.ingest(Capture(url="https://e.com/a"))
+
+    debug_messages = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
+    ]
+    assert any("classify chose:" in m for m in debug_messages)
+    # And the write-page reuse-vs-create decision is visible too.
+    assert any("write page:" in m for m in debug_messages)
 
 
 def test_ingest_does_not_touch_static_index_and_appends_log(
@@ -1368,6 +1446,143 @@ def test_multi_image_batch_is_one_page_with_all_images(
     assert "base64" not in page_text.lower()
 
 
+def _harness_with_max_analyse_images(harness: IngestHarness, cap: int) -> IngestHarness:
+    """Rebuild the harness config with a custom analyse-image cap (issue #124)."""
+    import dataclasses
+
+    config = dataclasses.replace(harness.config, max_analyse_images=cap)
+    return dataclasses.replace(harness, config=config, vault=Vault(config))
+
+
+def test_multi_image_batch_sends_every_image_to_one_analyse_call(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """All images of a batch reach ONE analyse call as N blocks (issue #124).
+
+    Structural proof (a fake-LLM cannot prove the summary's *content*): every image's
+    bytes -- primary first, then each extra in upload order -- are sent as blocks in a
+    SINGLE ``analyse_images`` call (one charge against the budget guard), not just the
+    first image and not N separate calls.
+    """
+    primary = tmp_path / "shot1.png"
+    primary.write_bytes(b"\x89PNG" + b"-PRIMARY")
+    extra1 = tmp_path / "shot2.png"
+    extra1.write_bytes(b"\x89PNG" + b"-EXTRA-ONE")
+    extra2 = tmp_path / "shot3.jpg"
+    extra2.write_bytes(b"\xff\xd8\xff" + b"-EXTRA-TWO")
+    classify = _classify_json(page_type="memory", slug="whiteboard", title="Whiteboard")
+    plan = _file_plan_json(
+        folder="memories", slug="whiteboard", page_type="memory", title="Whiteboard"
+    )
+    analyser = FakeAnalyser(analysis=Analysis(description="three shots"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    ingestor.ingest(
+        Capture(
+            path=primary,
+            filename="shot1.png",
+            extra_paths=(extra1, extra2),
+            source="slack",
+        )
+    )
+
+    # Exactly ONE analyse call (one budget charge), carrying ALL three image blocks.
+    assert len(analyser.images_calls) == 1
+    blocks = analyser.images_calls[0]
+    assert len(blocks) == 3
+    sent_bytes = [data for data, _ext in blocks]
+    assert primary.read_bytes() in sent_bytes
+    assert extra1.read_bytes() in sent_bytes
+    assert extra2.read_bytes() in sent_bytes
+    # Primary is first; extras follow in upload order.
+    assert blocks[0][0] == primary.read_bytes()
+    assert [ext for _data, ext in blocks] == ["png", "png", "jpg"]
+
+
+def test_single_image_capture_still_makes_one_block_call(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """No regression: a single-file image capture is one block in one call (#124)."""
+    src = tmp_path / "solo.png"
+    src.write_bytes(b"\x89PNG" + b"-SOLO")
+    classify = _classify_json(page_type="memory", slug="solo", title="Solo")
+    plan = _file_plan_json(
+        folder="memories", slug="solo", page_type="memory", title="Solo"
+    )
+    analyser = FakeAnalyser(analysis=Analysis(description="one shot"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    ingestor.ingest(Capture(path=src, filename="solo.png"))
+
+    assert len(analyser.images_calls) == 1
+    assert analyser.images_calls[0] == [(src.read_bytes(), "png")]
+
+
+def test_analyse_image_cap_skips_extras_beyond_max_but_still_saves_them(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """THOTH_MAX_ANALYSE_IMAGES caps the per-call payload; extras still file (#124).
+
+    With a cap of 2, a 4-image batch sends only the primary + 1 extra to the single
+    analyse call, but ALL four images are still saved as assets and embedded -- the cap
+    bounds the vision payload, never the stored/embedded set.
+    """
+    harness = _harness_with_max_analyse_images(harness, 2)
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"img{i}.png"
+        p.write_bytes(b"\x89PNG" + f"-N{i}".encode())
+        paths.append(p)
+    classify = _classify_json(page_type="memory", slug="batch", title="Batch")
+    plan = _file_plan_json(
+        folder="memories", slug="batch", page_type="memory", title="Batch"
+    )
+    analyser = FakeAnalyser(analysis=Analysis(description="a batch"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(
+        Capture(
+            path=paths[0],
+            filename="img0.png",
+            extra_paths=tuple(paths[1:]),
+            source="slack",
+        )
+    )
+
+    # Only cap=2 blocks reached the single analyse call (primary + 1 extra).
+    assert len(analyser.images_calls) == 1
+    assert len(analyser.images_calls[0]) == 2
+    assert analyser.images_calls[0][0][0] == paths[0].read_bytes()
+    # But all four images were saved + embedded (the cap never drops storage).
+    assert report.asset_paths == [
+        "raw/assets/batch.png",
+        "raw/assets/batch-2.png",
+        "raw/assets/batch-3.png",
+        "raw/assets/batch-4.png",
+    ]
+    page_text = (harness.work / "memories/batch.md").read_text(encoding="utf-8")
+    for embed in ("batch.png", "batch-2.png", "batch-3.png", "batch-4.png"):
+        assert f"![[{embed}]]" in page_text
+
+
 def _large_jpeg_bytes(width: int = 4000, height: int = 2000) -> bytes:
     """A real, multi-megabyte JPEG (noise so it does not over-compress)."""
     import io
@@ -1698,6 +1913,94 @@ def test_classify_prompt_enumerates_exactly_the_vault_types(
     for page_type in TYPE_ENUMERATION:
         assert page_type in prompt
     assert "wibble" not in prompt
+
+
+def test_classify_prompt_folds_in_bounded_extracted_body(
+    harness: IngestHarness,
+) -> None:
+    """The classify prompt carries the bounded URL/transcript excerpt (issue #123).
+
+    Routing is content-aware: the same head-truncated excerpt that already feeds curate
+    is folded into the classify prompt so a URL is routed by its content, not the link +
+    title alone. The excerpt is bounded to ``_URL_EXCERPT_CHARS`` chars exactly as the
+    curate path bounds it (the full text stays canonical in ``raw/``).
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    body = "PERSONAL-DIARY-MARKER " + ("x" * (_URL_EXCERPT_CHARS * 2))
+    prompt = ingestor._classify_prompt(
+        Capture(url="https://example.com/diary"), extracted_body=body
+    )
+    # The lead excerpt (with its content marker) reaches classify...
+    assert "PERSONAL-DIARY-MARKER" in prompt
+    assert "Extracted text" in prompt
+    # ...head-truncated to the same bound curate uses (the tail never reaches classify).
+    excerpt = body.strip()[:_URL_EXCERPT_CHARS]
+    assert excerpt in prompt
+    assert body not in prompt  # the full body is NOT inlined
+
+
+def test_classify_call_receives_url_excerpt_end_to_end(
+    harness: IngestHarness,
+) -> None:
+    """The classify LLM call (not just curate) sees the URL body excerpt (issue #123).
+
+    Drives the full ingest pass for a URL capture and inspects the FIRST model call (the
+    classify call) to prove the extracted article body reaches it -- the content-aware
+    routing fix -- rather than only the second (curate) call.
+    """
+    doc = ExtractedDoc(
+        source_url="https://example.com/transformers",
+        title="Transformer Models",
+        markdown="UNIQUE-ARTICLE-BODY transformers use attention to weigh tokens.",
+    )
+    client = _ScriptedClient(_classify_json(), _file_plan_json())
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    ingestor.ingest(Capture(url="https://example.com/transformers"))
+
+    classify_call = client.messages.calls[0]
+    classify_prompt = classify_call["messages"][0]["content"]
+    assert "UNIQUE-ARTICLE-BODY" in classify_prompt
+
+
+def test_classify_text_image_pdf_captures_have_no_excerpt_regression(
+    harness: IngestHarness,
+) -> None:
+    """No regression: text/image/PDF classify prompts gain no spurious excerpt (#123).
+
+    A plain-text capture's inline text already rides in the prompt verbatim (it is never
+    re-inlined as an "Extracted text" excerpt), and an image/PDF capture -- with no
+    pre-extracted text body -- carries no excerpt block at all.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    # Plain text capture: the inline text shows once, not duplicated as an excerpt.
+    text_prompt = ingestor._classify_prompt(Capture(text="a plain note"))
+    assert "a plain note" in text_prompt
+    assert "Extracted text" not in text_prompt
+    # Image / PDF captures with no extracted_body carry no excerpt block.
+    img_prompt = ingestor._classify_prompt(
+        Capture(path=Path("/tmp/x.png"), filename="x.png")
+    )
+    assert "Extracted text" not in img_prompt
+    pdf_prompt = ingestor._classify_prompt(
+        Capture(path=Path("/tmp/x.pdf"), filename="x.pdf")
+    )
+    assert "Extracted text" not in pdf_prompt
 
 
 def test_classify_rejects_bad_slug(harness: IngestHarness) -> None:

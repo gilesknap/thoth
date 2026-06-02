@@ -13,6 +13,7 @@ from thoth.config import (
     DEFAULT_DAILY_LLM_BUDGET,
     DEFAULT_IMAGE_RESIZE_THRESHOLD_BYTES,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_MAX_ANALYSE_IMAGES,
     DEFAULT_OBSIDIAN_VAULT_NAME,
     Config,
     ConfigError,
@@ -121,6 +122,20 @@ def test_image_resize_threshold_defaults_and_override() -> None:
         {"PKM_VAULT": "/x", "THOTH_IMAGE_RESIZE_THRESHOLD_BYTES": "1000000"}
     )
     assert override.image_resize_threshold_bytes == 1_000_000
+
+
+def test_max_analyse_images_defaults_and_override() -> None:
+    """The analyse-image cap defaults to 6 and an explicit value wins (issue #124)."""
+    default = load_config({"PKM_VAULT": "/x"})
+    assert default.max_analyse_images == DEFAULT_MAX_ANALYSE_IMAGES == 6
+    override = load_config({"PKM_VAULT": "/x", "THOTH_MAX_ANALYSE_IMAGES": "3"})
+    assert override.max_analyse_images == 3
+
+
+def test_max_analyse_images_rejects_non_integer() -> None:
+    """A non-integer THOTH_MAX_ANALYSE_IMAGES is a clear ConfigError, not a default."""
+    with pytest.raises(ConfigError, match="THOTH_MAX_ANALYSE_IMAGES"):
+        load_config({"PKM_VAULT": "/x", "THOTH_MAX_ANALYSE_IMAGES": "many"})
 
 
 def test_image_resize_threshold_rejects_non_integer() -> None:

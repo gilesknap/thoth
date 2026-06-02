@@ -70,10 +70,18 @@ def downscale_if_oversized(
         The (possibly smaller) image bytes; the original object when no resize applied.
     """
     if threshold_bytes <= 0 or len(image_bytes) <= threshold_bytes:
+        _log.debug(
+            "downscale: under threshold (%d <= %d bytes) or disabled; kept original",
+            len(image_bytes),
+            threshold_bytes,
+        )
         return image_bytes
     try:
         from PIL import Image
     except ImportError:
+        _log.debug(
+            "downscale: Pillow unavailable; kept original %d bytes", len(image_bytes)
+        )
         return image_bytes
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:

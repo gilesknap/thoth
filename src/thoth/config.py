@@ -92,6 +92,17 @@ binary is both what the vault commits and what the LLM sees (issue #108).
 resizing. See :mod:`thoth.images`.
 """
 
+DEFAULT_MAX_ANALYSE_IMAGES: int = 6
+"""Default cap on how many images a multi-image batch sends to ONE analyse call (#124).
+
+An all-image Slack batch is curated as one page with one shared summary/tag set, so
+every image is sent as a block in a SINGLE vision call (one charge against the daily
+budget guard). This caps the images-per-call so a pathological batch cannot blow up the
+vision payload: the first ``THOTH_MAX_ANALYSE_IMAGES`` images are analysed and any
+extras are logged-and-skipped from that call (they are still saved + embedded). A
+non-positive value disables the cap (analyse every image).
+"""
+
 REQUIRED_VARS: tuple[str, ...] = ("PKM_VAULT",)
 """Environment variables that must be present; only the vault path in Phase 0."""
 
@@ -124,6 +135,7 @@ class Config:
     gemini_api_key: str | None
     daily_llm_budget: int
     image_resize_threshold_bytes: int
+    max_analyse_images: int
 
     @property
     def state_db_path(self) -> Path:
@@ -339,6 +351,11 @@ def load_config(
             lookup("THOTH_IMAGE_RESIZE_THRESHOLD_BYTES"),
             default=DEFAULT_IMAGE_RESIZE_THRESHOLD_BYTES,
             name="THOTH_IMAGE_RESIZE_THRESHOLD_BYTES",
+        ),
+        max_analyse_images=_int_opt(
+            lookup("THOTH_MAX_ANALYSE_IMAGES"),
+            default=DEFAULT_MAX_ANALYSE_IMAGES,
+            name="THOTH_MAX_ANALYSE_IMAGES",
         ),
     )
 

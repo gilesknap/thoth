@@ -310,13 +310,28 @@ class BudgetGuard:
         if self._limit <= 0:
             return
         day = self.today()
-        if self._store.total(day) >= self._limit:
+        spent = self._store.total(day)
+        if spent >= self._limit:
+            _LOG.debug(
+                "budget guard BLOCKED %s: spend=%d/%d for %s",
+                kind,
+                spent,
+                self._limit,
+                day,
+            )
             self._maybe_alert(day)
             raise BudgetExceededError(
                 f"daily LLM budget of {self._limit} call(s) reached for {day} "
                 f"(Europe/London); work is deferred until the next day"
             )
         self._store.increment(day, kind)
+        _LOG.debug(
+            "budget guard allowed %s: spend=%d/%d for %s",
+            kind,
+            spent + 1,
+            self._limit,
+            day,
+        )
 
     def _maybe_alert(self, day: str) -> None:
         """Post the cap-tripped alert at most once per day (best-effort).
