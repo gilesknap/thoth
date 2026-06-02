@@ -102,7 +102,7 @@ re-tier without code changes.
 
 | Call | Default model | Env override | Why this tier |
 |---|---|---|---|
-| **Intent gate** (`intent.py`) | Claude Haiku (`claude-haiku-4-5`) | `ANTHROPIC_MODEL` is unrelated; the gate model is set in code | A one-shot routing guess (capture / query / ask) — fast and cheap is the whole point |
+| **Intent gate** (`intent.py`) | Claude Haiku (`claude-haiku-4-5`) | `THOTH_INTENT_MODEL` (unset = the default Haiku, not `ANTHROPIC_MODEL`) | A one-shot routing guess (capture / query / ask) — fast and cheap is the whole point |
 | **Classify · curate** (`ingest.py` → `llm.py`) | Claude Sonnet (`claude-sonnet-4-6`) | `ANTHROPIC_MODEL` | The pipeline workhorse: schema-validated classification and the curate file-plan |
 | **Analyse / transcribe** (`analyse.py`) | Sonnet (the default — Sonnet is multimodal) | `THOTH_ANALYSE_MODEL` | One vision call for OCR text, routing hint, kind, and document transcription; can drop to Haiku for cheaper A/B work |
 | **Excalidraw reconstruction** (`analyse.py`) | **Opus** (`claude-opus-4-8`) | `THOTH_DIAGRAM_MODEL` | Rebuilding a hand-drawn diagram into valid Excalidraw JSON needs spatial reasoning — worth a stronger model than the default |
@@ -110,7 +110,9 @@ re-tier without code changes.
 
 `ANTHROPIC_MODEL` sets the default for every call that does not pin its own model;
 `THOTH_ANALYSE_MODEL` and `THOTH_DIAGRAM_MODEL` are per-call overrides that fall
-back to `ANTHROPIC_MODEL` when unset. The default deployment ships
+back to `ANTHROPIC_MODEL` when unset; `THOTH_INTENT_MODEL` overrides the intent gate
+and, when unset, falls back to its own cheap Haiku default rather than `ANTHROPIC_MODEL`.
+The default deployment ships
 `THOTH_DIAGRAM_MODEL=claude-opus-4-8` and leaves the rest on Sonnet. Bare aliases
 that 404 fall back to a proven dated id (`llm.py`); a daily call-count budget
 (`budget.py`) guards every model chokepoint against redelivery storms.

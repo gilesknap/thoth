@@ -28,14 +28,20 @@ def render_vault_ref(*, obsidian_uri: str, title: str, path: str) -> str:
     URL as ``obsidian_uri`` and the page title as ``title``). The ``obsidian_uri`` is
     taken verbatim from the caller; this function never fabricates a link.
 
+    The visible label falls back to ``path`` and then ``obsidian_uri`` when ``title`` is
+    empty or blank, so the link can never render as ``<uri|>`` -- an invisible,
+    unclickable label in Slack (issue #67).
+
     Args:
         obsidian_uri: The link target for the clickable label (an ``obsidian://`` deep
             link for a vault page, or a plain URL for a web citation).
         title: The human-readable label for the link.
-        path: Accepted for call-site compatibility but no longer rendered (issue #63
-            dropped the trailing path); kept so existing callers need not change.
+        path: The vault-relative path, no longer rendered as a trailing suffix (issue
+            #63), but used as the visible label when ``title`` is blank (issue #67).
 
     Returns:
-        A single ``mrkdwn`` link of the form ``<obsidian_uri|title>``.
+        A single ``mrkdwn`` link of the form ``<obsidian_uri|label>``, where ``label``
+        is ``title`` if present, else ``path``, else ``obsidian_uri``.
     """
-    return f"<{obsidian_uri}|{title}>"
+    label = title.strip() or path.strip() or obsidian_uri
+    return f"<{obsidian_uri}|{label}>"

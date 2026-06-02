@@ -37,6 +37,7 @@ runtime = [
     "exa-py",
     "firecrawl-py",
     "mcp",
+    "pillow",
     "slack-bolt",
 ]
 
@@ -44,6 +45,7 @@ runtime = [
 dev = [
     "copier",
     "myst-parser",
+    "pillow",
     "pre-commit",
     "pydata-sphinx-theme>=0.12",
     "pyright",

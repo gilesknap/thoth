@@ -282,7 +282,13 @@ def file_plan_contract_text() -> str:
         '"source" is the capture CHANNEL (one of the list above) -- NEVER a file path '
         "or the raw page path.\n"
         "Use today's date for created/updated. Do not invent folders, types, sources, "
-        "or log actions outside the lists above."
+        "or log actions outside the lists above.\n"
+        "Emit a section heading ONLY when you have real content to put under it: never "
+        "an empty heading, never a placeholder or 'expand later' comment, and never an "
+        "HTML comment (<!-- ... -->) standing in for missing content. If the captured "
+        "material is thin, a short body with just a one-paragraph summary (plus the "
+        "[[wikilinks]]) is correct and complete -- do not scaffold sections you cannot "
+        "fill."
     )
 
 
