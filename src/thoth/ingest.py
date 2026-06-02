@@ -1151,10 +1151,11 @@ class Ingestor:
         technical one, instead of being decided from the link + title alone (issue
         #123). classify stays on Sonnet here (the Haiku move is issue #79).
 
-        For an **audio** capture the transcript is folded in even when a (noise) Slack
-        voice-memo caption sits in ``capture.text`` -- otherwise classify would title and
-        route the note blind off the "Listen to voice note" placeholder (issue #129); see
-        :meth:`_capture_summary`'s ``is_transcript`` bypass, mirrored from curate.
+        For an **audio** capture the transcript is folded in even when a (noise)
+        Slack voice-memo caption sits in ``capture.text`` -- otherwise classify would
+        title and route the note blind off the "Listen to voice note" placeholder
+        (issue #129); see :meth:`_capture_summary`'s ``is_transcript`` bypass, mirrored
+        from curate.
 
         Args:
             capture: The inbound item to classify.

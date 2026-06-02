@@ -2954,7 +2954,6 @@ def test_classify_prompt_folds_in_transcript_despite_slack_caption(
     prompt = ingestor._classify_prompt(
         capture,
         extracted_body="SPOKEN-MARKER reschedule the dentist to next Tuesday",
-        is_transcript=True,
     )
 
     assert "SPOKEN-MARKER reschedule the dentist" in prompt
