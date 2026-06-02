@@ -10,6 +10,18 @@ So **do not** write backward-compatibility shims, migration guides, or "if you p
 set this up differently, do X to migrate" prose in docs or code. When something changes,
 document only the new way and assume a clean slate.
 
+## Public repo — never commit personal infra (leak-scan first)
+
+This repository is **public**. Nothing committed — code, docs, tests, or the project
+skills under `.claude/skills/` — may contain personal infrastructure: the VPS host/IP,
+SSH key paths, API tokens or keys, vault paths under `/home/...`, or Slack member/channel
+IDs. Those belong only in the owner's private notes / local config, never in a tracked
+file. Use a host-agnostic `<owner>`/placeholder in committed text and reference "the
+owner's private notes" instead.
+
+**Leak-scan before every commit** — especially when promoting a lesson into a skill or
+writing docs, since those are where real values tend to creep in from a working session.
+
 ## Verifying on the live appliance (VPS)
 
 The strongest verification for boundary/SDK changes is running the branch against the real
