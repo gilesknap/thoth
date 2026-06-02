@@ -571,11 +571,13 @@ def _ingest_one(
 
     Shared by the file-walk (#80) and inbox-drain (#105) branches. Per-item failures are
     isolated: an :class:`~thoth.ingest.IngestError` is logged, counted, and skipped
-    (the item stays durable in ``inbox/``). On a genuinely filed drain hold
-    (``page_paths`` non-empty AND a ``hold_rel`` is supplied) the now-superseded hold is
-    removed with the commit staged into the next batch; a deferred/unchanged hold stays
-    (recoverable, idempotent) so a budget re-trip never silently deletes un-filed
-    content. Returns the disposition string.
+    (the item stays durable in ``inbox/``). A drain hold is retired (with the deletion
+    staged into the next batch) once its content is durably curated -- on a genuine file
+    (``page_paths`` non-empty) AND on an ``unchanged`` skip, since ``unchanged`` is only
+    reported when the curated page provably already exists (#113); such a hold is a
+    duplicate of already-filed content. A deferred/skipped hold stays (recoverable,
+    idempotent) so a budget re-trip never silently deletes un-filed content. Returns the
+    disposition string.
     """
     try:
         report = graph.ingestor.ingest(capture, commit=False, as_is=as_is)
@@ -596,10 +598,15 @@ def _ingest_one(
     else:
         counts.skipped += 1
         disposition = "skipped"
-    # Drop a drained hold ONLY once it is genuinely filed; never on deferred/unchanged
-    # (data-loss guard). remove_page is idempotent + path-confined; the removal stages
-    # into the same batch as the new page.
-    if disposition == "filed" and hold_rel is not None:
+    # Retire a drained hold once its content is durably curated -- both on a genuine
+    # file AND on an `unchanged` skip (#113). `unchanged` is only reported when the
+    # classify-routed curated page provably already exists on disk (see
+    # Ingestor._unchanged_curated), so the hold is a duplicate of already-filed content
+    # and would otherwise linger in inbox/ forever, re-spending a classify call each
+    # run. Never drop a `deferred`/`skipped`/`failed` hold (data-loss guard).
+    # remove_page is idempotent + path-confined; the removal stages into the same batch
+    # as the new page.
+    if disposition in ("filed", "unchanged") and hold_rel is not None:
         vault.remove_page(hold_rel)
     print(
         f"capture [{index}]: {target} -> "

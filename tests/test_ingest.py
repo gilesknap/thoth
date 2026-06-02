@@ -31,6 +31,7 @@ from thoth.hindsight import HindsightError, RecallHit
 from thoth.ingest import (
     _CURATE_ATTEMPTS,
     _TEXT_EXTS,
+    _URL_EXCERPT_CHARS,
     Capture,
     CaptureKind,
     Classification,
@@ -1309,6 +1310,257 @@ def test_image_capture_from_local_path(harness: IngestHarness, tmp_path: Path) -
     assert src.is_file()
 
 
+def test_multi_image_batch_is_one_page_with_all_images(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A multi-image batch (issue #84) files ONE page embedding every image.
+
+    The primary image is the bare ``<slug>`` asset; each extra rides on
+    ``Capture.extra_paths`` and is saved under a numbered ``<slug>-N`` asset, and all of
+    them are embedded in the single curated page (one summary, one tag set), instead of
+    fanning out into one page per image.
+    """
+    primary = tmp_path / "shot1.png"
+    primary.write_bytes(b"\x89PNG" + b"-one")
+    extra1 = tmp_path / "shot2.png"
+    extra1.write_bytes(b"\x89PNG" + b"-two")
+    extra2 = tmp_path / "shot3.jpg"
+    extra2.write_bytes(b"\xff\xd8\xff" + b"-three")
+    classify = _classify_json(page_type="memory", slug="whiteboard", title="Whiteboard")
+    plan = _file_plan_json(
+        folder="memories",
+        slug="whiteboard",
+        page_type="memory",
+        title="Whiteboard",
+        body="Photos of the whiteboard.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(
+        Capture(
+            path=primary,
+            filename="shot1.png",
+            extra_paths=(extra1, extra2),
+            source="slack",
+        )
+    )
+
+    # Exactly one curated page was written.
+    assert report.page_paths == ["memories/whiteboard.md"]
+    # Every image was saved as an asset: primary bare, extras numbered, in order.
+    assert report.asset_paths == [
+        "raw/assets/whiteboard.png",
+        "raw/assets/whiteboard-2.png",
+        "raw/assets/whiteboard-3.jpg",
+    ]
+    for rel in report.asset_paths:
+        assert (harness.work / rel).is_file()
+    # All three images are embedded in the one page.
+    page_text = (harness.work / "memories/whiteboard.md").read_text(encoding="utf-8")
+    assert "![[whiteboard.png]]" in page_text
+    assert "![[whiteboard-2.png]]" in page_text
+    assert "![[whiteboard-3.jpg]]" in page_text
+    assert "base64" not in page_text.lower()
+
+
+def _large_jpeg_bytes(width: int = 4000, height: int = 2000) -> bytes:
+    """A real, multi-megabyte JPEG (noise so it does not over-compress)."""
+    import io
+    import os
+
+    pytest.importorskip("PIL")  # resize needs the real library
+    from PIL import Image
+
+    image = Image.frombytes("RGB", (width, height), os.urandom(width * height * 3))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=100)
+    return buffer.getvalue()
+
+
+def _harness_with_resize_threshold(
+    harness: IngestHarness, threshold: int
+) -> IngestHarness:
+    """Rebuild the harness config with a custom image-resize threshold (issue #108)."""
+    import dataclasses
+
+    config = dataclasses.replace(harness.config, image_resize_threshold_bytes=threshold)
+    return dataclasses.replace(harness, config=config, vault=Vault(config))
+
+
+def test_oversized_image_is_downscaled_before_analysis_and_storage(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An over-threshold image is resized before the vision call AND storage (#108).
+
+    The same reduced bytes must (a) reach ``analyse_image`` and (b) be what lands in
+    ``raw/assets/`` -- a single resize covers both, and the full-res original never
+    reaches the LLM nor the vault.
+    """
+    big = _large_jpeg_bytes()
+    threshold = len(big) // 2  # force a downscale
+    harness = _harness_with_resize_threshold(harness, threshold)
+
+    src = tmp_path / "photo.jpg"
+    src.write_bytes(big)
+    classify = _classify_json(page_type="memory", slug="photo", title="Photo")
+    plan = _file_plan_json(
+        folder="memories", slug="photo", page_type="memory", title="Photo"
+    )
+    analyser = FakeAnalyser(analysis=Analysis(description="a photo"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="photo.jpg"))
+
+    # The bytes handed to the vision call were the REDUCED ones, not the full original.
+    assert len(analyser.image_calls) == 1
+    sent_bytes, _ext = analyser.image_calls[0]
+    assert len(sent_bytes) < len(big)
+
+    # The asset committed to the vault is the SAME reduced payload (byte-identical).
+    assert report.asset_paths == ["raw/assets/photo.jpg"]
+    stored = (harness.work / "raw/assets/photo.jpg").read_bytes()
+    assert stored == sent_bytes
+    assert len(stored) < len(big)
+
+
+def test_under_threshold_image_is_not_recompressed(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """An at/under-threshold image is stored + analysed byte-identically (no resize)."""
+    big = _large_jpeg_bytes(width=400, height=300)
+    harness = _harness_with_resize_threshold(harness, len(big) + 1_000_000)
+
+    src = tmp_path / "small.jpg"
+    src.write_bytes(big)
+    classify = _classify_json(page_type="memory", slug="small", title="Small")
+    plan = _file_plan_json(
+        folder="memories", slug="small", page_type="memory", title="Small"
+    )
+    analyser = FakeAnalyser(analysis=Analysis(description="x"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    ingestor.ingest(Capture(path=src, filename="small.jpg"))
+
+    sent_bytes, _ = analyser.image_calls[0]
+    assert sent_bytes == big  # untouched
+    assert (harness.work / "raw/assets/small.jpg").read_bytes() == big
+
+
+class _Vision400Error(Exception):
+    """A fake Anthropic permanent-400 (duck-typed ``status_code``)."""
+
+    status_code = 400
+
+
+def test_permanent_vision_400_files_blind_not_deferred(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A PERMANENT vision 400 files the binary blind, never deferring forever (#70).
+
+    The capture must NOT be held in ``inbox/`` (which would re-send the identical
+    rejected payload every sweep) -- it lands as a normal (un-enriched) page.
+    """
+    src = tmp_path / "huge.jpg"
+    src.write_bytes(b"\xff\xd8\xff" + b"jpeg")
+    classify = _classify_json(page_type="memory", slug="huge", title="Huge")
+    plan = _file_plan_json(
+        folder="memories", slug="huge", page_type="memory", title="Huge"
+    )
+    analyser = FakeAnalyser(error=_Vision400Error("image too large"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="huge.jpg"))
+
+    assert report.deferred is False
+    assert report.page_paths == ["memories/huge.md"]
+    assert report.asset_paths == ["raw/assets/huge.jpg"]
+
+
+class _Vision413Error(Exception):
+    """A fake Anthropic permanent-413 ``RequestTooLargeError`` (duck-typed)."""
+
+    status_code = 413
+
+
+def test_permanent_vision_413_files_blind_not_deferred(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A 413 ``RequestTooLargeError`` is PERMANENT too -- it must not defer forever.
+
+    An over-limit PDF/image surfaces as HTTP 413 (request body too large), not 400/422;
+    the identical payload is rejected on every retry, so it must file blind like a 400
+    rather than be held in ``inbox/`` and re-sent each sweep (the #70 trap, #108).
+    """
+    src = tmp_path / "huge.jpg"
+    src.write_bytes(b"\xff\xd8\xff" + b"jpeg")
+    classify = _classify_json(page_type="memory", slug="huge", title="Huge")
+    plan = _file_plan_json(
+        folder="memories", slug="huge", page_type="memory", title="Huge"
+    )
+    analyser = FakeAnalyser(error=_Vision413Error("request too large"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="huge.jpg"))
+
+    assert report.deferred is False
+    assert report.page_paths == ["memories/huge.md"]
+    assert report.asset_paths == ["raw/assets/huge.jpg"]
+
+
+def test_transient_vision_failure_still_defers(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A transient (non-400) vision failure still defers -- the raw is held to sweep."""
+    src = tmp_path / "later.jpg"
+    src.write_bytes(b"\xff\xd8\xff" + b"jpeg")
+    classify = _classify_json(page_type="memory", slug="later", title="Later")
+    plan = _file_plan_json(
+        folder="memories", slug="later", page_type="memory", title="Later"
+    )
+    # A bare transport error (no status_code) is transient -> defer.
+    analyser = FakeAnalyser(error=RuntimeError("vision API down"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="later.jpg"))
+
+    assert report.deferred is True
+
+
 def test_ext_kind_routes_text_extensions_before_image_default() -> None:
     """A known text extension is TEXT, never the IMAGE default (issue #57).
 
@@ -2218,6 +2470,31 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         assert token in prompt, f"curate prompt missing {token!r}"
 
 
+def test_curate_prompt_forbids_empty_scaffold_sections(
+    harness: IngestHarness,
+) -> None:
+    """The assembled curate prompt instructs the model to omit headings it cannot fill
+    and never to emit 'expand later' / HTML-comment placeholders (#77).
+
+    Fix is prompt-side (no regex stripper) per the prefer-prompt-over-string-processing
+    convention: the model was improvising a "## Key Points" + ``<!-- expand ... -->``
+    scaffold under thin captures.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    prompt = ingestor._curate_prompt(Capture(text="hello"), cls, raw, []).lower()
+    assert "empty heading" in prompt
+    assert "expand later" in prompt
+    assert "<!--" in prompt
+    assert "thin" in prompt
+
+
 def test_curate_forces_submit_file_plan_tool(harness: IngestHarness) -> None:
     """The curate call offers submit_file_plan AND forces it via tool_choice."""
     client = _ScriptedClient.from_responses(
@@ -2316,6 +2593,38 @@ def test_curate_prompt_does_not_duplicate_inline_text(harness: IngestHarness) ->
 
     assert "Extracted text" not in prompt
     assert prompt.count("hello") == 1
+
+
+def test_curate_prompt_head_truncates_long_extracted_body(
+    harness: IngestHarness,
+) -> None:
+    """A long article body is head-truncated to ``_URL_EXCERPT_CHARS`` for curate.
+
+    The full text stays canonical in ``raw/articles/<slug>.md``; only a bounded lead
+    excerpt reaches the prompt so a large article cannot blow up token cost (issue #75).
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="article", title="Article")
+    raw = RawCaptureResult(raw_path="raw/articles/article.md", disposition="created")
+    capture = Capture(url="https://example.com/article")
+
+    head = "A" * _URL_EXCERPT_CHARS
+    tail = "Z" * 500
+    body = head + tail
+
+    prompt = ingestor._curate_prompt(capture, cls, raw, [], extracted_body=body)
+
+    label = "Extracted text (transcript / article body)"
+    excerpt = prompt.split(f"{label}:\n", 1)[1]
+    # The inlined excerpt is head-truncated to exactly the cap; the tail is dropped.
+    assert excerpt == head
+    assert len(excerpt) == _URL_EXCERPT_CHARS
+    assert "Z" not in prompt
 
 
 def test_curate_retries_then_succeeds_on_corrective_plan(

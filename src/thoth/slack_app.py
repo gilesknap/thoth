@@ -58,7 +58,6 @@ module is always import-safe under pytest collection.
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 import time
 import urllib.request
@@ -94,6 +93,12 @@ PENDING_SAVE_TTL_SECONDS: float = 1800.0
 # A free-text message whose body, once stripped, begins with one of these prefixes is
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
 _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
+
+# Image file extensions (no dot) that mark a Slack upload as an image, so a multi-file
+# message of only images is captured as ONE page (issue #84). Mirrors the ingest
+# pipeline's image kinds; a mimetype check is tried first in
+# :meth:`Handlers._is_image_file`.
+_IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 
 # Affirmative replies that confirm a pending "save this answer to the vault?" offer.
 _CONFIRM_WORDS: frozenset[str] = frozenset(
@@ -730,25 +735,69 @@ class Handlers:
         client: SlackClientLike | None,
         responder: Responder,
     ) -> None:
-        """Download and ingest every file on a ``file_share`` message (SPEC section 6).
+        """Download and ingest the files on a ``file_share`` message (SPEC section 6).
 
         The ``message``/``file_share`` event carries the full ``files`` objects -- each
         with a private download URL and ``name`` -- and a usable ``channel`` to reply
-        in.
-        Each file is downloaded server-side to a temporary path and handed to the
-        ingestor as a :class:`~thoth.ingest.Capture` with a ``path`` (never base64); the
-        ingestor moves binaries into the vault via ``save_asset``. A missing URL or a
-        download failure is surfaced fail-loud **per file** so the rest still ingest. An
-        upload's text caption is intentionally ignored -- the file is the capture.
+        in. Each file is downloaded server-side to a temporary path (never base64) and
+        the ingestor moves binaries into the vault via ``save_asset``. A missing URL or
+        a download failure is surfaced fail-loud **per file** so the rest still ingest.
+
+        A single Slack message that attaches **several images at once** is the natural
+        unit of intent (issue #84): the user meant them as one thing, so an all-image
+        batch is captured as ONE :class:`~thoth.ingest.Capture` -- the first image is
+        the primary ``path``, the rest ride on ``extra_paths`` and are saved as extra
+        assets under the same slug and embedded in the same curated page, giving the
+        batch one shared summary + one tag set. A single-file message is unchanged, and
+        a heterogeneous batch (mixed images with PDFs/text) is still ingested per file
+        -- the per-page-type classification of mixed kinds is deferred (issue #84 open
+        questions). An upload's text caption is intentionally ignored -- the file is the
+        capture.
         """
         files = event.get("files")
         if not isinstance(files, list) or not files:
             responder.say(":warning: That upload carried no files I could read.")
             return
         source = self._source_label()
-        for file_info in files:
-            if isinstance(file_info, dict):
-                self._ingest_one_file(file_info, client, source, responder)
+        infos = [f for f in files if isinstance(f, dict)]
+        if len(infos) > 1 and all(self._is_image_file(f) for f in infos):
+            self._ingest_image_batch(infos, client, source, responder)
+            return
+        for file_info in infos:
+            self._ingest_one_file(file_info, client, source, responder)
+
+    def _ingest_image_batch(
+        self,
+        infos: list[dict[str, Any]],
+        client: SlackClientLike | None,
+        source: str,
+        responder: Responder,
+    ) -> None:
+        """Capture a multi-image Slack message as ONE capture/page (issue #84).
+
+        Downloads every image server-side (fail-loud per file, so one bad download does
+        not sink the batch), then hands the ingestor a single
+        :class:`~thoth.ingest.Capture` whose primary ``path`` is the first image and
+        whose ``extra_paths`` carry the rest in upload order. The batch is curated once
+        -- one summary, one tag set, every image embedded in the one page. A batch that
+        survives with only a single downloadable file falls back to the normal
+        single-file ingest.
+        """
+        downloaded: list[tuple[Path, str | None]] = []
+        for file_info in infos:
+            staged = self._download_to_tmp(file_info, client, responder)
+            if staged is not None:
+                downloaded.append(staged)
+        if not downloaded:
+            return
+        primary_path, primary_name = downloaded[0]
+        capture = Capture(
+            path=primary_path,
+            source=source,
+            filename=primary_name,
+            extra_paths=tuple(path for path, _ in downloaded[1:]),
+        )
+        self._do_ingest(capture, responder)
 
     def _ingest_one_file(
         self,
@@ -758,28 +807,41 @@ class Handlers:
         responder: Responder,
     ) -> None:
         """Download one Slack file object to a temp path and ingest it (fail-loud)."""
+        staged = self._download_to_tmp(file_info, client, responder)
+        if staged is None:
+            return
+        tmp_path, filename = staged
+        capture = Capture(path=tmp_path, source=source, filename=filename)
+        self._do_ingest(capture, responder)
+
+    def _download_to_tmp(
+        self,
+        file_info: dict[str, Any],
+        client: SlackClientLike | None,
+        responder: Responder,
+    ) -> tuple[Path, str | None] | None:
+        """Download one Slack file object to a temp path (fail-loud), or ``None``.
+
+        Returns the staged ``(path, filename)`` on success; warns and returns ``None``
+        for a missing download URL or a failed download so a batch keeps the rest.
+        """
         url = self._download_url(file_info)
         if not url:
             responder.say(":warning: Could not find a downloadable URL for that file.")
-            return
+            return None
         filename = file_info.get("name")
         suffix = Path(filename).suffix if isinstance(filename, str) and filename else ""
         try:
             data = self._download_bytes(client, url)
         except SlackError as exc:
             responder.say(f":x: Could not download that file: {exc}")
-            return
+            return None
         with tempfile.NamedTemporaryFile(
             prefix="thoth-upload-", suffix=suffix, delete=False
         ) as handle:
             handle.write(data)
             tmp_path = Path(handle.name)
-        capture = Capture(
-            path=tmp_path,
-            source=source,
-            filename=filename if isinstance(filename, str) else None,
-        )
-        self._do_ingest(capture, responder)
+        return tmp_path, filename if isinstance(filename, str) else None
 
     # ---- internals ---------------------------------------------------------------
 
@@ -1114,6 +1176,23 @@ class Handlers:
         return text
 
     @staticmethod
+    def _is_image_file(file_info: dict[str, Any]) -> bool:
+        """Report whether a Slack file object is an image (issue #84 batch gate).
+
+        Used to decide whether a multi-file upload is a homogeneous image batch
+        (captured as one page). Prefers Slack's own ``mimetype`` (``image/...``), then
+        falls back to the filename extension so a file object without a mimetype still
+        routes; both mirror the image extensions the ingest pipeline recognises.
+        """
+        mimetype = file_info.get("mimetype")
+        if isinstance(mimetype, str) and mimetype.lower().startswith("image/"):
+            return True
+        name = file_info.get("name")
+        if isinstance(name, str) and "." in name:
+            return name.rsplit(".", 1)[-1].lower() in _IMAGE_EXTS
+        return False
+
+    @staticmethod
     def _download_url(file_info: dict[str, Any]) -> str | None:
         """Pick the private download URL Slack exposes on a file object."""
         for key in ("url_private_download", "url_private"):
@@ -1206,7 +1285,7 @@ def _build_handlers(
         # the model is overridable without a redeploy via THOTH_INTENT_MODEL.
         intent_classifier=IntentClassifier(
             LLM(config, guard=intent_guard),
-            model=os.environ.get("THOTH_INTENT_MODEL") or DEFAULT_INTENT_MODEL,
+            model=config.intent_model or DEFAULT_INTENT_MODEL,
         ),
         # Durable redelivery dedupe so a Slack retry across a daemon restart is still
         # dropped (the in-memory cache alone is lost on restart, SPEC section 10).

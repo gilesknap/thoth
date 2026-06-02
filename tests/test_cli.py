@@ -960,14 +960,20 @@ class _FakeIngestReport:
 class _RecordingIngestor:
     """Records every ingest() call (the capture/kind/source assertions, #80)."""
 
-    def __init__(self, *, skip: bool = False) -> None:
+    def __init__(self, *, skip: bool = False, defer: bool = False) -> None:
         self.calls: list[tuple[Any, bool, bool]] = []
         self.reports: list[_FakeIngestReport] = []
         self._skip = skip
+        self._defer = defer
 
     def ingest(self, capture: Any, *, commit: bool = True, as_is: bool = False) -> Any:
         self.calls.append((capture, commit, as_is))
-        if self._skip:
+        if self._defer:
+            # LLM unavailable: the item is held un-curated and stays put (#105).
+            report = _FakeIngestReport(
+                [], deferred=True, message="LLM unavailable; held in inbox/."
+            )
+        elif self._skip:
             # A no-op re-run: unchanged content already curated (issue #95, task D).
             report = _FakeIngestReport(
                 [], unchanged=True, message="Unchanged; already curated (skipped)."
@@ -1269,11 +1275,33 @@ def test_run_capture_drain_honours_stamped_mode(
     assert by_text == {"raw dump": True, "curate me": False}
 
 
-def test_run_capture_drain_leaves_unfiled_holds(
+def test_run_capture_drain_leaves_deferred_holds(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A deferred/unchanged hold is NOT removed (data-loss guard, #105)."""
+    """A deferred hold (LLM unavailable) is NOT removed (data-loss guard, #105)."""
     config = _seed_drain_vault(tmp_path, {"hold-aaa.md": "still held"})
+    ingestor = _RecordingIngestor(defer=True)  # always reports deferred (no page)
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+
+    ns = __main__.build_parser().parse_args(["capture"])
+    __main__.run_capture(ns, config)
+
+    assert len(ingestor.calls) == 1
+    # No page was filed and the item is un-curated -> the hold stays for a later run.
+    assert (config.vault_path / "inbox" / "hold-aaa.md").exists()
+
+
+def test_run_capture_drain_retires_unchanged_duplicate_hold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An `unchanged` hold (content provably already curated) is retired (#113).
+
+    `unchanged` is only reported once the classify-routed curated page already exists
+    on disk, so the hold is a duplicate of already-filed content; leaving it in inbox/
+    would linger forever and re-spend a classify call each run. It must be removed.
+    """
+    config = _seed_drain_vault(tmp_path, {"hold-aaa.md": "already curated elsewhere"})
     ingestor = _RecordingIngestor(skip=True)  # always reports unchanged (no page)
     git = _RecordingGit()
     _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
@@ -1282,8 +1310,8 @@ def test_run_capture_drain_leaves_unfiled_holds(
     __main__.run_capture(ns, config)
 
     assert len(ingestor.calls) == 1
-    # No page was filed -> the hold stays put for a later run.
-    assert (config.vault_path / "inbox" / "hold-aaa.md").exists()
+    # The content is durably curated -> the duplicate hold is retired (no lingering).
+    assert not (config.vault_path / "inbox" / "hold-aaa.md").exists()
 
 
 def test_run_capture_no_path_dry_run_writes_nothing(

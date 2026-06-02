@@ -68,6 +68,7 @@ from thoth.config import Config
 from thoth.extract import ExtractError, Extractor, FetchedBinary
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.hindsight import Hindsight, HindsightError
+from thoth.images import downscale_if_oversized
 from thoth.llm import (
     LLM,
     LLMError,
@@ -152,6 +153,14 @@ _TYPE_FOLDER: dict[str, str] = {
 # rather than aborting the whole capture; a persistently invalid plan still raises so
 # the validation gate is preserved.
 _CURATE_ATTEMPTS: int = 2
+
+# Head-truncation cap (chars, ~750 tokens) for the extracted URL/transcript body folded
+# into the *curate* prompt via ``_capture_summary``. The vault is canonical and the full
+# text already lives at ``raw/articles/<slug>.md``; the curated page is a distilled
+# view, so a lead excerpt carries the gist while capping token cost on large
+# articles (issue #75). Classify is kept blind/cheap on purpose -- it never
+# receives the body.
+_URL_EXCERPT_CHARS: int = 3000
 
 # The forced tool the curate pass uses to return its file plan. Making the model emit
 # the plan as a structured ``tool_use.input`` dict (rather than hand-serialised JSON
@@ -274,13 +283,27 @@ class Capture:
     base64 lives only inside one request and is never persisted or treated as the source
     of truth.
 
+    A Slack message that attaches **several images at once** is the natural unit of
+    intent -- the user meant them as *one* thing (three photos of the same whiteboard, a
+    figure plus its caption) -- so it is captured as ONE :class:`Capture`, not N
+    independent ones (issue #84). The first image is the primary ``path`` (it drives the
+    analyse/classify routing); the rest ride on ``extra_paths`` and are saved as extra
+    assets under the *same* slug and embedded in the *same* curated page, so the batch
+    gets one shared summary + one tag set with every image inline. ``extra_paths`` is
+    only populated for an all-image batch (the homogeneous, embed-in-one-page case); a
+    single-file message leaves it empty and is unchanged, and a heterogeneous batch
+    (mixed images/PDFs/text) is still ingested per file by the Slack layer.
+
     Attributes:
         text: Inline text/markdown to capture, if any.
         url: A URL to fetch server-side, if any.
-        path: A server-resolvable local file (image/pdf/audio), if any.
+        path: A server-resolvable local file (image/pdf/audio), if any. For a
+            multi-image batch this is the *primary* image.
         source: The frontmatter ``source`` value (one of
             :data:`thoth.vault.VALID_SOURCES`).
         filename: The original upload name, used for slug and extension hints.
+        extra_paths: Additional server-resolvable image files for a multi-image batch
+            (issue #84), saved as extra assets alongside the primary in upload order.
     """
 
     text: str | None = None
@@ -288,6 +311,7 @@ class Capture:
     path: Path | None = None
     source: str = "slack"
     filename: str | None = None
+    extra_paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -869,9 +893,22 @@ class Ingestor:
             # clean it up here rather than leak it.
             _cleanup_fetched(fetched)
             raise LLMUnavailableError(f"analyse deferred (budget cap): {exc}") from exc
-        except Exception as exc:  # noqa: BLE001 - any client failure defers (raw durable)
-            _cleanup_fetched(fetched)
-            raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - classify a client failure (raw durable)
+            if _is_permanent_vision_rejection(exc):
+                # A PERMANENT vision/document 400 (too-large / unsupported payload) is
+                # NOT a deferrable outage (issue #70): the bytes never change between
+                # attempts, so deferring would re-send the same rejected payload to a
+                # held inbox file forever, burning one budget-guarded call each sweep.
+                # File the binary blind (like an unparseable analysis) so the capture
+                # still lands -- it just goes un-enriched, never into an infinite hold.
+                logger.warning(
+                    "analyse permanently rejected (vision 400); filing blind: %s", exc
+                )
+                analysis = None
+            else:
+                # A transient transport/availability failure DOES defer (raw durable).
+                _cleanup_fetched(fetched)
+                raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
         # The PRIMARY analysis succeeded (or filed blind) -- the capture is already
         # safe. Now derive the best-effort enhancement artifacts (issue #68) from the
         # reported image kind, reusing the SAME bytes already in hand (no second
@@ -924,13 +961,51 @@ class Ingestor:
         so :meth:`capture_raw` reuses the same staged bytes for the asset write -- no
         second network download and no leaked temp file (the staged tmp is consumed and
         cleaned by the asset store).
+
+        An over-threshold **image** is downscaled here (issue #108): the reduced bytes
+        are returned for the vision call *and* the staged source file is rewritten in
+        place, so the same reduced bytes are what :meth:`capture_raw` later hashes and
+        commits to ``raw/assets/`` (a single resize covers both storage and analysis).
+        PDFs are not resized (downscaling a PDF is out of scope).
         """
         if capture.path is not None:
             name = capture.filename or capture.path.name
             ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-            return capture.path.read_bytes(), ext, None
+            data = self._maybe_downscale(
+                capture.path, capture.path.read_bytes(), ext, kind
+            )
+            return data, ext, None
         fetched = self._extractor.fetch_binary(_require(capture.url, "url"))
-        return fetched.tmp_path.read_bytes(), fetched.suggested_ext, fetched
+        data = self._maybe_downscale(
+            fetched.tmp_path, fetched.tmp_path.read_bytes(), fetched.suggested_ext, kind
+        )
+        return data, fetched.suggested_ext, fetched
+
+    def _maybe_downscale(
+        self, staged: Path, data: bytes, ext: str, kind: CaptureKind
+    ) -> bytes:
+        """Downscale an over-threshold image and rewrite its staged file (issue #108).
+
+        Only a :class:`CaptureKind.IMAGE` is resized (a PDF is left untouched). When the
+        reduced bytes differ from the input the staged source file (the Slack/MCP
+        download or the fetched tmp) is rewritten so the *same* reduced bytes flow on to
+        :meth:`capture_raw` -- the asset committed to ``raw/assets/`` is the downscaled
+        one and the bytes-SHA-256 idempotency keys on the reduced content. Resize is
+        best-effort (see :func:`thoth.images.downscale_if_oversized`): a missing Pillow
+        or an undecodable image returns the original bytes and writes nothing.
+        """
+        # TODO(#108): the PDF analogue (re-rendering an over-limit PDF below Anthropic's
+        # 32 MB / 100-page document limit) is out of scope here -- only images resize.
+        # A permanent over-limit PDF 400 is still handled (it files blind, not defers --
+        # see _is_permanent_vision_rejection); shrinking the PDF itself is future work.
+        if kind is not CaptureKind.IMAGE:
+            return data
+        reduced = downscale_if_oversized(
+            data, ext=ext, threshold_bytes=self._config.image_resize_threshold_bytes
+        )
+        if reduced is not data and len(reduced) != len(data):
+            staged.write_bytes(reduced)
+        return reduced
 
     # ---- pass 1: classify --------------------------------------------------------
 
@@ -1675,7 +1750,43 @@ class Ingestor:
             path = _require(capture.path, "path")
             ext = (capture.filename or path.name).rsplit(".", 1)[-1].lower()
             original = self._save_local_asset_result(cls, path, ext)
+        original = self._append_extra_images(capture, cls, original)
         return self._append_derived_assets(cls, original, derived)
+
+    def _append_extra_images(
+        self,
+        capture: Capture,
+        cls: Classification,
+        original: RawCaptureResult,
+    ) -> RawCaptureResult:
+        """Save a multi-image batch's extra images as assets under the same slug (#84).
+
+        A Slack message that carried several images at once is ONE capture, so every
+        extra image rides on :attr:`Capture.extra_paths` and is saved next to the
+        primary under a numbered slug (``<slug>-2.png``, ``<slug>-3.png``, ...), in
+        upload order, and merged into the returned ``asset_paths`` after the primary so
+        :meth:`_append_embeds` embeds them all in the one curated page. Each goes
+        through :meth:`_store_asset`, so it keeps the same bytes-SHA-256
+        idempotency/drift behaviour as the primary. The primary's own disposition is
+        preserved (the extras are additive). An empty ``extra_paths`` (the single-file
+        case) returns the original unchanged.
+        """
+        if not capture.extra_paths:
+            return original
+        asset_paths = list(original.asset_paths)
+        for index, extra in enumerate(capture.extra_paths, start=2):
+            ext = extra.name.rsplit(".", 1)[-1].lower() if "." in extra.name else "png"
+            result = self._save_local_asset_result_named(
+                f"{cls.slug}-{index}", extra, ext
+            )
+            for rel in result.asset_paths:
+                if rel not in asset_paths:
+                    asset_paths.append(rel)
+        return RawCaptureResult(
+            raw_path=original.raw_path,
+            disposition=original.disposition,
+            asset_paths=asset_paths,
+        )
 
     def _append_derived_assets(
         self,
@@ -1757,7 +1868,20 @@ class Ingestor:
         bytes-SHA-256 idempotency/drift rule as :meth:`_save_fetched_asset` applies, and
         the staged tmp copy is always cleaned up on the skip/error path.
         """
-        asset_name = f"{cls.slug}.{ext}"
+        return self._save_local_asset_result_named(cls.slug, path, ext)
+
+    def _save_local_asset_result_named(
+        self, asset_slug: str, path: Path, ext: str
+    ) -> RawCaptureResult:
+        """Stage a local file into ``raw/assets`` under an explicit asset slug.
+
+        The slug-bearing variant of :meth:`_save_local_asset_result`, so a multi-image
+        batch (issue #84) can save each extra image under its own ``<slug>-N`` name
+        while the primary keeps the bare ``<slug>``. The same copy-then-store discipline
+        (the caller's tmp download is never consumed, the staged copy never leaked)
+        applies.
+        """
+        asset_name = f"{asset_slug}.{ext}"
         with tempfile.NamedTemporaryFile(delete=False) as handle:
             handle.write(path.read_bytes())
             staged = Path(handle.name)
@@ -2305,7 +2429,11 @@ class Ingestor:
             summary += "\n\n" + _analysis_summary(analysis)
         if capture.text is None and extracted_body and extracted_body.strip():
             label = "Extracted text (transcript / article body)"
-            summary += f"\n\n{label}:\n{extracted_body.strip()}"
+            # Head-truncate to a bounded lead excerpt so a large article cannot blow up
+            # the curate prompt's token cost (issue #75). The full text stays canonical
+            # in raw/articles/<slug>.md; the opening reliably carries the gist.
+            excerpt = extracted_body.strip()[:_URL_EXCERPT_CHARS]
+            summary += f"\n\n{label}:\n{excerpt}"
         return summary
 
     # ---- shared parse helper -----------------------------------------------------
@@ -2422,6 +2550,27 @@ def _require(value: Any, field_name: str) -> Any:
     if value is None:
         raise IngestError(f"capture is missing required field {field_name!r}")
     return value
+
+
+def _is_permanent_vision_rejection(exc: Exception) -> bool:
+    """Is ``exc`` a PERMANENT vision/document rejection (not a transient outage)? (#70)
+
+    Anthropic's vision/document API rejects an over-limit or unsupported payload (an
+    image over the 5 MB / pixel limit, a PDF over the 32 MB / 100-page document limit)
+    with a permanent HTTP ``400`` ``invalid_request_error`` -- or, when the request
+    body itself exceeds the size limit, a ``413`` ``RequestTooLargeError`` -- the
+    *same* bytes will be rejected on every retry, so treating it as a deferrable outage
+    holds the raw in ``inbox/`` and re-sends the identical payload forever, burning a
+    budget-guarded call each sweep. A ``400`` / ``413`` / ``422`` is therefore
+    classified as permanent; every other status (``429`` rate-limit, ``5xx`` outage)
+    and any non-HTTP transport error stays transient and defers.
+
+    Classified by duck-typing the SDK exception's ``status_code`` (the ``anthropic``
+    ``APIStatusError`` surface) so :mod:`thoth.ingest` never imports the runtime-only
+    ``anthropic`` package; an exception with no ``status_code`` is treated as transient.
+    """
+    status = getattr(exc, "status_code", None)
+    return isinstance(status, int) and status in (400, 413, 422)
 
 
 def _cleanup_fetched(fetched: FetchedBinary | None) -> None:
