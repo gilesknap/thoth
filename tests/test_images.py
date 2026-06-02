@@ -38,6 +38,39 @@ def _jpeg_bytes(width: int, height: int) -> bytes:
     return buffer.getvalue()
 
 
+def _animated_gif_bytes(width: int, height: int, frames: int = 3) -> bytes:
+    """A real multi-frame (animated) GIF, large enough to exceed a small threshold."""
+    import os
+
+    images = [
+        Image.frombytes("RGB", (width, height), os.urandom(width * height * 3))
+        for _ in range(frames)
+    ]
+    buffer = io.BytesIO()
+    images[0].save(
+        buffer, format="GIF", save_all=True, append_images=images[1:], duration=100
+    )
+    return buffer.getvalue()
+
+
+def test_animated_gif_left_untouched_preserves_animation() -> None:
+    """An over-threshold animated GIF is returned unchanged, keeping every frame (#108).
+
+    Re-encoding to a static PNG would drop all but the first frame *and* leave PNG bytes
+    behind a ``.gif`` extension. Preserving the animation beats shrinking it, so the
+    original bytes are returned and the result is still a multi-frame GIF.
+    """
+    data = _animated_gif_bytes(1600, 1600, frames=4)
+    assert len(data) > 1_000
+
+    result = downscale_if_oversized(data, ext="gif", threshold_bytes=1_000)
+
+    assert result is data  # untouched -- the same object, animation intact
+    with Image.open(io.BytesIO(result)) as out:
+        assert getattr(out, "is_animated", False) is True
+        assert getattr(out, "n_frames", 0) == 4
+
+
 def test_under_threshold_returns_identical_bytes() -> None:
     """An image at/under the threshold is returned untouched (byte-identical)."""
     data = _png_bytes(50, 50)

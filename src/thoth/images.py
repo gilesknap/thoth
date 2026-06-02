@@ -20,8 +20,11 @@ optimisation, never a capture-loss risk). The longest edge is capped at
 from __future__ import annotations
 
 import io
+import logging
 
 __all__ = ["MAX_LONGEST_EDGE_PX", "downscale_if_oversized"]
+
+_log = logging.getLogger(__name__)
 
 # The longest-edge cap, in pixels. Above this Claude's vision API downsamples
 # internally, so capping here costs no OCR/understanding accuracy while shrinking both
@@ -74,6 +77,17 @@ def downscale_if_oversized(
         return image_bytes
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
+            # An animated GIF/WebP would lose every frame but the first on re-encode
+            # to a static PNG (and its bytes would no longer match its ``.gif``
+            # extension), so leave it untouched -- preserving the animation beats
+            # shrinking it (#108).
+            if getattr(image, "is_animated", False):
+                _log.info(
+                    "skipping downscale of animated image (%d frames) to preserve "
+                    "animation",
+                    getattr(image, "n_frames", 0),
+                )
+                return image_bytes
             image.load()
             longest = max(image.width, image.height)
             if longest > MAX_LONGEST_EDGE_PX:

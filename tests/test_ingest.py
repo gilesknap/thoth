@@ -1440,6 +1440,43 @@ def test_permanent_vision_400_files_blind_not_deferred(
     assert report.asset_paths == ["raw/assets/huge.jpg"]
 
 
+class _Vision413Error(Exception):
+    """A fake Anthropic permanent-413 ``RequestTooLargeError`` (duck-typed)."""
+
+    status_code = 413
+
+
+def test_permanent_vision_413_files_blind_not_deferred(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A 413 ``RequestTooLargeError`` is PERMANENT too -- it must not defer forever.
+
+    An over-limit PDF/image surfaces as HTTP 413 (request body too large), not 400/422;
+    the identical payload is rejected on every retry, so it must file blind like a 400
+    rather than be held in ``inbox/`` and re-sent each sweep (the #70 trap, #108).
+    """
+    src = tmp_path / "huge.jpg"
+    src.write_bytes(b"\xff\xd8\xff" + b"jpeg")
+    classify = _classify_json(page_type="memory", slug="huge", title="Huge")
+    plan = _file_plan_json(
+        folder="memories", slug="huge", page_type="memory", title="Huge"
+    )
+    analyser = FakeAnalyser(error=_Vision413Error("request too large"))
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+    report = ingestor.ingest(Capture(path=src, filename="huge.jpg"))
+
+    assert report.deferred is False
+    assert report.page_paths == ["memories/huge.md"]
+    assert report.asset_paths == ["raw/assets/huge.jpg"]
+
+
 def test_transient_vision_failure_still_defers(
     harness: IngestHarness, tmp_path: Path
 ) -> None:

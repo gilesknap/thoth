@@ -2438,19 +2438,20 @@ def _is_permanent_vision_rejection(exc: Exception) -> bool:
 
     Anthropic's vision/document API rejects an over-limit or unsupported payload (an
     image over the 5 MB / pixel limit, a PDF over the 32 MB / 100-page document limit)
-    with a permanent HTTP ``400`` ``invalid_request_error`` -- the *same* bytes will be
-    rejected on every retry, so treating it as a deferrable outage holds the raw in
-    ``inbox/`` and re-sends the identical payload forever, burning a budget-guarded call
-    each sweep. A ``400`` (or ``422``) is therefore classified as permanent; every other
-    status (``429`` rate-limit, ``5xx`` outage) and any non-HTTP transport error stays
-    transient and defers.
+    with a permanent HTTP ``400`` ``invalid_request_error`` -- or, when the request
+    body itself exceeds the size limit, a ``413`` ``RequestTooLargeError`` -- the
+    *same* bytes will be rejected on every retry, so treating it as a deferrable outage
+    holds the raw in ``inbox/`` and re-sends the identical payload forever, burning a
+    budget-guarded call each sweep. A ``400`` / ``413`` / ``422`` is therefore
+    classified as permanent; every other status (``429`` rate-limit, ``5xx`` outage)
+    and any non-HTTP transport error stays transient and defers.
 
     Classified by duck-typing the SDK exception's ``status_code`` (the ``anthropic``
     ``APIStatusError`` surface) so :mod:`thoth.ingest` never imports the runtime-only
     ``anthropic`` package; an exception with no ``status_code`` is treated as transient.
     """
     status = getattr(exc, "status_code", None)
-    return isinstance(status, int) and status in (400, 422)
+    return isinstance(status, int) and status in (400, 413, 422)
 
 
 def _cleanup_fetched(fetched: FetchedBinary | None) -> None:
