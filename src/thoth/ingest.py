@@ -142,6 +142,14 @@ _TYPE_FOLDER: dict[str, str] = {
 # the validation gate is preserved.
 _CURATE_ATTEMPTS: int = 2
 
+# Head-truncation cap (chars, ~750 tokens) for the extracted URL/transcript body folded
+# into the *curate* prompt via ``_capture_summary``. The vault is canonical and the full
+# text already lives at ``raw/articles/<slug>.md``; the curated page is a distilled
+# view, so a lead excerpt carries the gist while capping token cost on large
+# articles (issue #75). Classify is kept blind/cheap on purpose -- it never
+# receives the body.
+_URL_EXCERPT_CHARS: int = 3000
+
 # The forced tool the curate pass uses to return its file plan. Making the model emit
 # the plan as a structured ``tool_use.input`` dict (rather than hand-serialised JSON
 # free text) means the SDK/transport handles all escaping -- a body with raw newlines,
@@ -2314,7 +2322,11 @@ class Ingestor:
             summary += "\n\n" + _analysis_summary(analysis)
         if capture.text is None and extracted_body and extracted_body.strip():
             label = "Extracted text (transcript / article body)"
-            summary += f"\n\n{label}:\n{extracted_body.strip()}"
+            # Head-truncate to a bounded lead excerpt so a large article cannot blow up
+            # the curate prompt's token cost (issue #75). The full text stays canonical
+            # in raw/articles/<slug>.md; the opening reliably carries the gist.
+            excerpt = extracted_body.strip()[:_URL_EXCERPT_CHARS]
+            summary += f"\n\n{label}:\n{excerpt}"
         return summary
 
     # ---- shared parse helper -----------------------------------------------------

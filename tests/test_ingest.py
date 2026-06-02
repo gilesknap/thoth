@@ -31,6 +31,7 @@ from thoth.hindsight import HindsightError, RecallHit
 from thoth.ingest import (
     _CURATE_ATTEMPTS,
     _TEXT_EXTS,
+    _URL_EXCERPT_CHARS,
     Capture,
     CaptureKind,
     Classification,
@@ -2498,6 +2499,38 @@ def test_curate_prompt_does_not_duplicate_inline_text(harness: IngestHarness) ->
 
     assert "Extracted text" not in prompt
     assert prompt.count("hello") == 1
+
+
+def test_curate_prompt_head_truncates_long_extracted_body(
+    harness: IngestHarness,
+) -> None:
+    """A long article body is head-truncated to ``_URL_EXCERPT_CHARS`` for curate.
+
+    The full text stays canonical in ``raw/articles/<slug>.md``; only a bounded lead
+    excerpt reaches the prompt so a large article cannot blow up token cost (issue #75).
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="article", title="Article")
+    raw = RawCaptureResult(raw_path="raw/articles/article.md", disposition="created")
+    capture = Capture(url="https://example.com/article")
+
+    head = "A" * _URL_EXCERPT_CHARS
+    tail = "Z" * 500
+    body = head + tail
+
+    prompt = ingestor._curate_prompt(capture, cls, raw, [], extracted_body=body)
+
+    label = "Extracted text (transcript / article body)"
+    excerpt = prompt.split(f"{label}:\n", 1)[1]
+    # The inlined excerpt is head-truncated to exactly the cap; the tail is dropped.
+    assert excerpt == head
+    assert len(excerpt) == _URL_EXCERPT_CHARS
+    assert "Z" not in prompt
 
 
 def test_curate_retries_then_succeeds_on_corrective_plan(
