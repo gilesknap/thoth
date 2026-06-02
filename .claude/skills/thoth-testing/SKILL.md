@@ -30,6 +30,20 @@ tests/`, `uv run pyright`.
 **Known flake:** `test_cli_version` can fail under parallel (`-p`) runs; if it
 fails, confirm it passes standalone before treating it as a real regression.
 
+## First verification step: `THOTH_LOG_LEVEL=DEBUG`
+
+Before probing the vault bytes or the state DB by hand, set
+`THOTH_LOG_LEVEL=DEBUG` and reproduce the capture: the ingest pipeline emits a
+DEBUG trail at every decision point (issue #125) — downscale (fired vs
+under-threshold, before→after bytes), analyse (kind, image count, bytes sent,
+OCR/text length, model), classify (chosen type/slug/title), write-page
+(created vs updated-by-slug — page reuse), dedup short-circuit, defer/hold
+(reason + permanent-vs-transient + HTTP status), and the budget guard
+(allowed/blocked + spend vs cap). Default `INFO` output is unchanged, so this is
+opt-in and quiet by default. Read the log to confirm *what fired* — it answers
+"did the downscale run?" / "which type did classify pick?" / "did this merge an
+existing page?" instantly, without an out-of-band probe.
+
 ## Why CI is necessary but not sufficient
 
 Every external boundary (Slack, Anthropic, Hindsight, Exa, Firecrawl, the git

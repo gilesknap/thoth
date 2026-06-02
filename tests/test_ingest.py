@@ -663,6 +663,69 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
     assert "notes/transformer-models.md" in harness.origin_files()
 
 
+def test_default_info_output_gains_no_debug_lines(
+    harness: IngestHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """At the default INFO level the ingest pipeline emits NO new DEBUG lines (#125).
+
+    The DEBUG instrumentation must keep the appliance quiet by default: nothing is
+    promoted to INFO, so capturing ``thoth.ingest`` at INFO yields only the existing
+    ``ingest filed:`` summary line and zero records at DEBUG.
+    """
+    doc = ExtractedDoc(
+        source_url="https://e.com/a", title="T", markdown="some article body"
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="thoth.ingest"):
+        ingestor.ingest(Capture(url="https://e.com/a"))
+
+    ingest_records = [r for r in caplog.records if r.name == "thoth.ingest"]
+    # No record fell below INFO (no DEBUG leaked into the default output).
+    assert all(r.levelno >= logging.INFO for r in ingest_records)
+    # The one existing INFO summary line is still there.
+    assert any("ingest filed:" in r.getMessage() for r in ingest_records)
+
+
+def test_debug_level_reveals_classify_decision(
+    harness: IngestHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """At DEBUG, the pipeline reveals its decision points (#125).
+
+    A single capture's DEBUG trail includes the classify decision line (chosen type /
+    slug / title) -- so a tester can set ``THOTH_LOG_LEVEL=DEBUG`` and read what fired
+    instead of probing the vault by hand.
+    """
+    doc = ExtractedDoc(
+        source_url="https://e.com/a", title="T", markdown="some article body"
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="thoth.ingest"):
+        ingestor.ingest(Capture(url="https://e.com/a"))
+
+    debug_messages = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
+    ]
+    assert any("classify chose:" in m for m in debug_messages)
+    # And the write-page reuse-vs-create decision is visible too.
+    assert any("write page:" in m for m in debug_messages)
+
+
 def test_ingest_does_not_touch_static_index_and_appends_log(
     harness: IngestHarness,
 ) -> None:

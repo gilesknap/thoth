@@ -596,8 +596,19 @@ class Ingestor:
             # change. Skip curate (and navigation/retain) entirely so a re-run to finish
             # an interrupted import costs nothing for the parts already done. Applies to
             # both the curate and as-is paths (each files to the same folder/slug).
+            logger.debug(
+                "capture_raw: disposition=%s raw_path=%s assets=%d",
+                raw.disposition,
+                raw.raw_path,
+                len(raw.asset_paths),
+            )
             curated = self._unchanged_curated(raw, classification)
             if curated is not None:
+                logger.debug(
+                    "dedup short-circuit: unchanged, already curated at %s "
+                    "(skipping curate/navigation/retain)",
+                    curated,
+                )
                 return self._skip_unchanged(holding, classification, curated, commit)
             if as_is:
                 # Low-touch import (ADR 0010): SKIP curate; file the original body
@@ -917,13 +928,20 @@ class Ingestor:
             # An unparseable analysis must not lose the capture: file the binary blind
             # (the prior behaviour) rather than abort. The fetched binary is still
             # threaded forward so capture_raw reuses (and cleans up) it.
+            logger.debug("analyse: unparseable result; filing binary blind")
             analysis = None
         except BudgetExceededError as exc:
             # The capture defers, so capture_raw will not consume the fetched binary --
             # clean it up here rather than leak it.
             _cleanup_fetched(fetched)
+            logger.debug("analyse defer: budget cap reached (transient): %s", exc)
             raise LLMUnavailableError(f"analyse deferred (budget cap): {exc}") from exc
         except Exception as exc:  # noqa: BLE001 - classify a client failure (raw durable)
+            logger.debug(
+                "analyse failure: status=%s permanent=%s",
+                getattr(exc, "status_code", None),
+                _is_permanent_vision_rejection(exc),
+            )
             if _is_permanent_vision_rejection(exc):
                 # A PERMANENT vision/document 400 (too-large / unsupported payload) is
                 # NOT a deferrable outage (issue #70): the bytes never change between
@@ -939,6 +957,17 @@ class Ingestor:
                 # A transient transport/availability failure DOES defer (raw durable).
                 _cleanup_fetched(fetched)
                 raise LLMUnavailableError(f"analyse LLM call failed: {exc}") from exc
+        image_count = 1 if kind is CaptureKind.PDF else 1 + len(extra_images)
+        logger.debug(
+            "analyse done: kind=%s images=%d bytes_sent=%d text_len=%d "
+            "suggested_type=%s model=%s",
+            kind.value,
+            image_count,
+            len(image_bytes),
+            len(analysis.text) if analysis is not None else 0,
+            analysis.suggested_type if analysis is not None else None,
+            self._config.analyse_model or self._config.anthropic_model,
+        )
         # The PRIMARY analysis succeeded (or filed blind) -- the capture is already
         # safe. Now derive the best-effort enhancement artifacts (issue #68) from the
         # reported image kind, reusing the SAME bytes already in hand (no second
@@ -1077,6 +1106,19 @@ class Ingestor:
         )
         if reduced is not data and len(reduced) != len(data):
             staged.write_bytes(reduced)
+            logger.debug(
+                "downscale fired (%s): %d -> %d bytes",
+                ext or "?",
+                len(data),
+                len(reduced),
+            )
+        else:
+            logger.debug(
+                "downscale: no resize for %s (%d bytes, threshold=%d)",
+                ext or "?",
+                len(data),
+                self._config.image_resize_threshold_bytes,
+            )
         return reduced
 
     # ---- pass 1: classify --------------------------------------------------------
@@ -1158,6 +1200,16 @@ class Ingestor:
         if analysis is not None:
             entities = _merge_terms(entities, analysis.entities)
             concepts = _merge_terms(concepts, analysis.concepts)
+        logger.debug(
+            "classify chose: type=%s slug=%s title=%r (analysis_folded=%s, "
+            "%d entities, %d concepts)",
+            page_type,
+            slug,
+            title,
+            analysis is not None,
+            len(entities),
+            len(concepts),
+        )
         return Classification(
             page_type=page_type,
             slug=slug,
@@ -2054,6 +2106,18 @@ class Ingestor:
         body = page["body"]
         body = self._append_embeds(body, page, raw)
         body = self._ensure_analysis_text(body, raw, analysis)
+        # Page reuse vs create (issue #125): a plan ``action`` of "update", or a slug
+        # already on disk, means this capture merges into an existing page rather than
+        # creating a new one -- the signal that explains a screenshot folding into an
+        # existing note.
+        existed = self._vault.page_exists(f"{folder}/{slug}.md")
+        logger.debug(
+            "write page: %s/%s action=%s (%s by slug)",
+            folder,
+            slug,
+            page.get("action", "?"),
+            "updating existing" if existed else "creating new",
+        )
         try:
             return self._vault.write_page(folder, slug, frontmatter, body)
         except (SchemaError, SlugError, VaultError) as exc:
