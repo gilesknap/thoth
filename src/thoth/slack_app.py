@@ -58,7 +58,6 @@ module is always import-safe under pytest collection.
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 import time
 import urllib.request
@@ -1206,7 +1205,7 @@ def _build_handlers(
         # the model is overridable without a redeploy via THOTH_INTENT_MODEL.
         intent_classifier=IntentClassifier(
             LLM(config, guard=intent_guard),
-            model=os.environ.get("THOTH_INTENT_MODEL") or DEFAULT_INTENT_MODEL,
+            model=config.intent_model or DEFAULT_INTENT_MODEL,
         ),
         # Durable redelivery dedupe so a Slack retry across a daemon restart is still
         # dropped (the in-memory cache alone is lost on restart, SPEC section 10).
