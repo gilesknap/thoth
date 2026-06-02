@@ -2,5 +2,9 @@
   {
     "version": "main",
     "url": "https://gilesknap.github.io/thoth/main/"
+  },
+  {
+    "version": "0.5.0",
+    "url": "https://gilesknap.github.io/thoth/0.5.0/"
   }
 ]
