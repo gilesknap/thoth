@@ -112,6 +112,99 @@ def test_live_anthropic_classify_returns_valid_json(live_config: Config) -> None
     assert classification.slug, "classify returned an empty slug"
 
 
+def test_live_curate_repair_turn_round_trips_after_tool_use_rejection(
+    live_config: Config,
+) -> None:
+    """The curate repair retry round-trips on the REAL Messages API after a rejection.
+
+    Regression guard for #110's repair-loop fix. The curate pass FORCES the
+    ``submit_file_plan`` tool, so a rejected plan must be re-asked with a user turn that
+    LEADS with a ``tool_result`` block keyed to the prior ``tool_use`` id -- a plain
+    text user turn there makes the live Messages API reject the request with HTTP 400
+    ("tool_use ids were found without tool_result blocks immediately after"). Injected
+    fakes ignore that precondition, so only a real round-trip proves the shape.
+
+    This forces exactly ONE validation failure: ``_parse_and_validate_plan`` is wrapped
+    to reject the first (real) tool_use plan and then delegate to the genuine validator
+    on the second attempt. So curate builds the ``tool_result`` repair turn and sends it
+    to the real API; the test passes only if that second call is accepted and returns a
+    validated plan. The vault write is stubbed (the boundary under test is the LLM
+    repair turn, not the filesystem), and no budget guard is wired so two real calls
+    are allowed.
+    """
+    from thoth.extract import Extractor
+    from thoth.git_sync import GitSync
+    from thoth.hindsight import Hindsight
+    from thoth.ingest import (
+        Capture,
+        Classification,
+        IngestError,
+        Ingestor,
+        RawCaptureResult,
+    )
+    from thoth.llm import LLM
+    from thoth.vault import Vault
+
+    live_config.require_anthropic()  # fail fast + clearly if ANTHROPIC_API_KEY is unset
+
+    # A real LLM (no budget guard, so the repair attempt's second call is allowed);
+    # every other collaborator is unused by this path except the stubbed page writer.
+    llm = LLM(live_config)
+    ingestor = Ingestor(
+        config=live_config,
+        vault=cast(Vault, _unused("vault")),
+        llm=llm,
+        extractor=cast(Extractor, _unused("extractor")),
+        hindsight=cast(Hindsight, _unused("hindsight")),
+        git=cast(GitSync, _unused("git")),
+    )
+
+    # Force exactly one validation failure: reject the first parsed plan (so curate
+    # emits the tool_result repair turn to the live API), then pass the second through
+    # the real validator.
+    original_validate = ingestor._parse_and_validate_plan  # noqa: SLF001
+    attempts = {"n": 0}
+
+    def _reject_once(response: object) -> dict[str, object]:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise IngestError(
+                "pages[0]: forced validation failure (live repair-turn probe)"
+            )
+        return original_validate(response)
+
+    ingestor._parse_and_validate_plan = _reject_once  # type: ignore[method-assign]  # noqa: SLF001
+    # The boundary under test is the LLM repair turn, not the vault write.
+    ingestor._write_planned_page = (  # type: ignore[method-assign]  # noqa: SLF001
+        lambda page, source, raw, *, analysis=None: "notes/live-repair-probe.md"
+    )
+
+    capture = Capture(
+        text=(
+            "Remote login to ArgoCD: set up a VPN, run `ec-login`, then ctrl-click the "
+            "shown URL and complete SSO in the browser."
+        ),
+        source="mcp",
+    )
+    cls = Classification(
+        page_type="note",
+        slug="live-repair-probe",
+        title="Remote Login to ArgoCD",
+    )
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+
+    plan = ingestor.curate(capture, cls, raw, [])
+
+    assert attempts["n"] == 2, (
+        "expected exactly one repair retry (first plan rejected, second accepted); "
+        f"saw {attempts['n']} validation attempt(s)"
+    )
+    assert plan.get("pages"), (
+        "curate did not return a validated plan after the tool_result repair turn -- "
+        "the live Messages API likely rejected the repair message shape (#110)"
+    )
+
+
 # --------------------------------------------------------------------------------------
 # 2. Hindsight -- retain then recall round-trip, tag-provenance recoverable (#7/#13)
 # --------------------------------------------------------------------------------------
