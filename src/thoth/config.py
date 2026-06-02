@@ -30,6 +30,10 @@ Documented defaults (the single source of truth):
   (issue #68, hand-drawn diagram -> editable scene) then resolves to
   :data:`DEFAULT_ANTHROPIC_MODEL` via the LLM. That call needs spatial reasoning plus
   valid JSON, so it is worth pinning to a stronger model (Sonnet/Opus) independently.
+* ``THOTH_INTENT_MODEL`` defaults to ``None`` -- the free-text intent gate (issue #5)
+  then falls back to :data:`thoth.intent.DEFAULT_INTENT_MODEL` (a cheap Haiku). The gate
+  is a one-shot routing call, so a cheap model is the point; override it to re-tier the
+  gate without a redeploy.
 * ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``); the daemon
   entrypoint passes it to :func:`logging.basicConfig` so the appliance is no longer
   silent on the happy path (issue #52).
@@ -97,6 +101,7 @@ class Config:
     anthropic_model: str
     analyse_model: str | None
     diagram_model: str | None
+    intent_model: str | None
     slack_bot_token: str | None
     slack_app_token: str | None
     slack_summary_channel: str | None
@@ -303,6 +308,7 @@ def load_config(
         anthropic_model=lookup("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL,
         analyse_model=lookup("THOTH_ANALYSE_MODEL"),
         diagram_model=lookup("THOTH_DIAGRAM_MODEL"),
+        intent_model=lookup("THOTH_INTENT_MODEL"),
         slack_bot_token=lookup("SLACK_BOT_TOKEN"),
         slack_app_token=lookup("SLACK_APP_TOKEN"),
         slack_summary_channel=lookup("SLACK_SUMMARY_CHANNEL"),

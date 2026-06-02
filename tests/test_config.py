@@ -45,6 +45,7 @@ def test_happy_path_minimal() -> None:
     assert cfg.anthropic_model == DEFAULT_ANTHROPIC_MODEL == "claude-sonnet-4-6"
     assert cfg.analyse_model is None
     assert cfg.diagram_model is None
+    assert cfg.intent_model is None
     assert str(cfg.thoth_home).endswith(".thoth")
     assert cfg.anthropic_api_key is None
     assert cfg.slack_bot_token is None
@@ -70,6 +71,7 @@ def test_all_fields_populated() -> None:
         "ANTHROPIC_MODEL": "claude-x-1",
         "THOTH_ANALYSE_MODEL": "claude-analyse-1",
         "THOTH_DIAGRAM_MODEL": "claude-diagram-1",
+        "THOTH_INTENT_MODEL": "claude-intent-1",
         "SLACK_BOT_TOKEN": FAKE_SHORT,
         "SLACK_APP_TOKEN": FAKE_SHORT,
         "SLACK_SUMMARY_CHANNEL": "D0B61LKA3NV",
@@ -90,6 +92,7 @@ def test_all_fields_populated() -> None:
     assert cfg.anthropic_model == "claude-x-1"
     assert cfg.analyse_model == "claude-analyse-1"
     assert cfg.diagram_model == "claude-diagram-1"
+    assert cfg.intent_model == "claude-intent-1"
     assert cfg.slack_bot_token == FAKE_SHORT
     assert cfg.slack_app_token == FAKE_SHORT
     assert cfg.slack_summary_channel == "D0B61LKA3NV"
@@ -412,3 +415,20 @@ def test_advanced_image_model_knobs_parsed() -> None:
     )
     assert cfg.analyse_model == "claude-haiku-4-5"
     assert cfg.diagram_model == "claude-opus-4-1"
+
+
+def test_intent_model_knob_default_none() -> None:
+    """THOTH_INTENT_MODEL defaults to None when unset/empty (#87).
+
+    A None knob lets the intent gate fall back to its own cheap Haiku default
+    (``DEFAULT_INTENT_MODEL``) rather than pinning a model; an empty string is unset
+    too.
+    """
+    cfg = load_config({"PKM_VAULT": "/x", "THOTH_INTENT_MODEL": ""})
+    assert cfg.intent_model is None
+
+
+def test_intent_model_knob_parsed() -> None:
+    """THOTH_INTENT_MODEL maps onto its Config field like the sibling knobs (#87)."""
+    cfg = load_config({"PKM_VAULT": "/x", "THOTH_INTENT_MODEL": "claude-haiku-4-5"})
+    assert cfg.intent_model == "claude-haiku-4-5"

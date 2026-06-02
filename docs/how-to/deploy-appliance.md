@@ -194,7 +194,7 @@ Fill in these variables. **Where to get each key:**
 | `THOTH_HINDSIGHT_PROFILE` | yes | `thoth`. |
 | `THOTH_HINDSIGHT_BANK` | yes | `thoth`. |
 | `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate / answer. |
-| `ANTHROPIC_MODEL` | no | Override the default model for all calls. `THOTH_ANALYSE_MODEL` (vision) and `THOTH_DIAGRAM_MODEL` (Excalidraw, worth an Opus) override per-call. |
+| `ANTHROPIC_MODEL` | no | Override the default model for all calls. `THOTH_ANALYSE_MODEL` (vision), `THOTH_DIAGRAM_MODEL` (Excalidraw, worth an Opus), and `THOTH_INTENT_MODEL` (the intent gate, a cheap Haiku) override per-call. |
 | `GEMINI_API_KEY` | yes (for the index) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey). The **same key** you gave Hindsight in step 4; it powers embeddings + fact-extraction. |
 | `EXA_API_KEY` | no | [dashboard.exa.ai](https://dashboard.exa.ai) → API keys. Web **search** for the `research:` path. Blank ⇒ vault-only. |
 | `FIRECRAWL_API_KEY` | no | [firecrawl.dev](https://www.firecrawl.dev) → dashboard → API keys. URL→Markdown **extraction**. Blank ⇒ vault-only. |
