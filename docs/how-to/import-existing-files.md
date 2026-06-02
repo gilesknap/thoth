@@ -58,6 +58,30 @@ $ thoth capture ~/notes --budget 0     # unlimited for this import (escape hatch
 `--budget 0` disables the cap for the run (the guard treats a non-positive limit as
 disabled). With no flag, the configured daily budget applies unchanged.
 
+## Drain the inbox (bare `thoth capture`, no path)
+
+A capture that could not be curated when it arrived — an LLM outage, or a bulk import
+that hit the daily budget cap partway — is held durably as `inbox/hold-<sha>.md` with its
+body and original intent intact. Running `thoth capture` with **no path** re-files every
+recoverable hold from its stored body through the same ingest pipeline:
+
+```console
+$ thoth capture                      # drain the inbox: re-file every text hold
+$ thoth capture --dry-run            # list what would be re-filed; write nothing
+$ thoth capture --budget 0           # drain with the cap disabled for this run
+```
+
+This is source-independent: it works even for Slack/MCP captures whose original source is
+long gone, because the hold body is the source. Each hold is re-filed with the **mode it
+was captured under** — a hold deferred during a `--as-is` import re-files as-is, a normal
+one re-curates — so you do not have to remember which is which. A hold is removed only
+once its page is genuinely filed; a hold that defers again (still no LLM) or is already
+curated (unchanged) is left in place, so the drain is safely resumable across budget days.
+
+Binary holds (an image/PDF whose bytes were never durably kept) are **skipped and logged**
+rather than re-filed from a content-free stub; only re-running the original `thoth capture
+<path>` over the source file recovers those.
+
 ## Trial runs and filtering
 
 ```console

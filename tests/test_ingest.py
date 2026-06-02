@@ -2118,6 +2118,42 @@ def test_ingest_deferred_hold_carries_capture_source(harness: IngestHarness) -> 
     assert harness.vault.read_page(holds[0]).frontmatter["source"] == "mcp"
 
 
+def test_ingest_deferred_hold_stamps_mode_and_filename(harness: IngestHarness) -> None:
+    """A deferred hold records the intended mode + original filename (#95, task E).
+
+    Acceptance: a normal (curate) deferral stamps ``mode: curate`` and the original
+    ``filename``; an ``--as-is`` deferral stamps ``mode: as-is`` -- so a later inbox
+    sweep honours the original intent instead of guessing.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_RaisingClient(),  # force the deferred path
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+
+    report = ingestor.ingest(
+        Capture(text="curate this later", source="slack", filename="thought.md")
+    )
+    assert report.deferred is True
+    holds = _inbox_holds(harness)
+    assert len(holds) == 1
+    front = harness.vault.read_page(holds[0]).frontmatter
+    assert front["mode"] == "curate"
+    assert front["filename"] == "thought.md"
+
+    # A second, distinct capture in --as-is mode stamps the as-is intent.
+    report = ingestor.ingest(
+        Capture(text="file this as-is later", source="slack"), as_is=True
+    )
+    assert report.deferred is True
+    asis_hold = next(h for h in _inbox_holds(harness) if h not in holds)
+    asis_front = harness.vault.read_page(asis_hold).frontmatter
+    assert asis_front["mode"] == "as-is"
+    # No filename supplied -> the key is omitted (frontmatter stays minimal).
+    assert "filename" not in asis_front
+
+
 def test_ingest_deferred_hold_durable_when_push_conflicts(
     harness: IngestHarness,
 ) -> None:

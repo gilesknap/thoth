@@ -16,6 +16,14 @@ can remove the original hold by its path once the page is filed (the re-persist 
 original are one file). The body is passed VERBATIM -- no string-rewriting (the
 project's hard rule).
 
+Each hold records the intended curation ``mode`` (``curate``/``as-is``) and the original
+``filename`` in its frontmatter (issue #95, task E). The drain reads them back and
+yields the ``as_is`` flag alongside the :class:`~thoth.ingest.Capture` (threading the
+original filename onto it), so the sweep re-files each hold with the ORIGINAL intent
+rather than guessing -- a capture deferred under ``--as-is`` re-files low-touch, the
+default re-curates. A missing/unknown ``mode`` falls back to the curate default (the
+safe one), so an older or hand-written hold never aborts the sweep.
+
 Scope v1 is TEXT holds. A binary hold carries only the
 :meth:`Ingestor._binary_stub_body` provenance stub (its bytes were never recoverable),
 so it is skipped-and-logged rather than re-fed: there is nothing to re-curate. Detection
@@ -31,16 +39,34 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from thoth.vault import VALID_SOURCES, Vault, VaultError
 
 if TYPE_CHECKING:
     from thoth.ingest import Capture
 
-__all__ = ["drain_captures"]
+__all__ = ["DrainedHold", "drain_captures"]
 
 logger = logging.getLogger(__name__)
+
+
+class DrainedHold(NamedTuple):
+    """One recoverable inbox hold ready to re-feed, plus its intent (issue #95).
+
+    Attributes:
+        rel: The vault-relative ``inbox/hold-*.md`` path (so the caller can remove it
+            once the page is filed).
+        capture: The :class:`~thoth.ingest.Capture` built from the hold's stored body,
+            threaded ``source:`` and original ``filename:``.
+        as_is: Whether the hold was captured in low-touch ``--as-is`` mode, so the sweep
+            re-files it as-is rather than re-curating (read from the hold's ``mode:``).
+    """
+
+    rel: str
+    capture: Capture
+    as_is: bool
+
 
 # The source stamped on a hold whose frontmatter ``source:`` is missing or not a known
 # value, so one odd hold never aborts a sweep. ``import`` is a member of VALID_SOURCES.
@@ -57,14 +83,16 @@ _BINARY_STUB_MARKERS: tuple[str, ...] = (
 )
 
 
-def drain_captures(vault: Vault) -> Iterator[tuple[str, Capture]]:
-    """Yield ``(hold_rel_path, Capture)`` per recoverable text hold under ``inbox/``.
+def drain_captures(vault: Vault) -> Iterator[DrainedHold]:
+    """Yield a :class:`DrainedHold` per recoverable text hold under ``inbox/``.
 
     Walks ``inbox/hold-*.md`` in sorted path order (deterministic). For each, the hold's
     stored body becomes a ``text`` :class:`~thoth.ingest.Capture` carrying the hold's
     threaded ``source:`` (validated against :data:`~thoth.vault.VALID_SOURCES`, falling
-    back to ``import`` when absent/unknown so one odd hold never aborts the sweep). The
-    body is passed verbatim.
+    back to ``import`` when absent/unknown so one odd hold never aborts the sweep) and
+    its original ``filename:`` (issue #95, task E). The hold's stamped ``mode:`` decides
+    the ``as_is`` flag so the sweep re-files with the ORIGINAL intent (a missing/unknown
+    mode falls back to re-curate, the safe default). The body is passed verbatim.
 
     A binary hold -- whose body is the
     :meth:`thoth.ingest.Ingestor._binary_stub_body` provenance stub -- has no
@@ -74,7 +102,7 @@ def drain_captures(vault: Vault) -> Iterator[tuple[str, Capture]]:
         vault: The real, path-confined vault facade to read holds from.
 
     Yields:
-        ``(hold_rel_path, Capture)`` for each recoverable text hold, sorted by path.
+        A :class:`DrainedHold` for each recoverable text hold, sorted by path.
     """
     from thoth.ingest import Capture
 
@@ -93,7 +121,13 @@ def drain_captures(vault: Vault) -> Iterator[tuple[str, Capture]]:
             logger.info("inbox drain: skip %s (binary stub, no recoverable bytes)", rel)
             continue
         source = _resolve_source(page.frontmatter.get("source"))
-        yield rel, Capture(text=body, source=source)
+        filename = _resolve_filename(page.frontmatter.get("filename"))
+        as_is = _resolve_as_is(page.frontmatter.get("mode"))
+        yield DrainedHold(
+            rel=rel,
+            capture=Capture(text=body, source=source, filename=filename),
+            as_is=as_is,
+        )
 
 
 def _is_binary_stub(body: str) -> bool:
@@ -109,3 +143,21 @@ def _resolve_source(raw: object) -> str:
     if isinstance(raw, str) and raw in VALID_SOURCES:
         return raw
     return _FALLBACK_SOURCE
+
+
+def _resolve_filename(raw: object) -> str | None:
+    """Return the hold's original ``filename:`` when present, else ``None``."""
+    return raw if isinstance(raw, str) and raw else None
+
+
+def _resolve_as_is(raw: object) -> bool:
+    """Return whether the hold's stamped ``mode:`` is the low-touch as-is mode.
+
+    Imports the mode vocabulary from :mod:`thoth.ingest` (the single source of the hold
+    mode strings) at call time, mirroring the module's deferred-import contract. Any
+    value other than the explicit as-is marker -- including a missing or hand-written
+    mode -- falls back to ``False`` (re-curate), the safe default.
+    """
+    from thoth.ingest import HOLD_MODE_AS_IS
+
+    return raw == HOLD_MODE_AS_IS

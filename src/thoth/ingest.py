@@ -97,6 +97,9 @@ from thoth.vault import (
 )
 
 __all__ = [
+    "HOLD_MODES",
+    "HOLD_MODE_AS_IS",
+    "HOLD_MODE_CURATE",
     "Capture",
     "CaptureKind",
     "Classification",
@@ -111,6 +114,15 @@ logger = logging.getLogger(__name__)
 
 # Folders scanned by the read-only create-vs-update candidate search (reference layer).
 _CANDIDATE_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
+
+# The two intended-curation modes stamped into a hold's ``mode:`` frontmatter (issue
+# #95, task E) so a later inbox sweep honours the ORIGINAL intent instead of guessing: a
+# capture deferred under ``--as-is`` re-files low-touch, a normal capture re-curates.
+# The values are kept here (the single place the hold mode vocabulary is expressed) and
+# read back by :mod:`thoth.inbox_drain`.
+HOLD_MODE_CURATE: str = "curate"
+HOLD_MODE_AS_IS: str = "as-is"
+HOLD_MODES: frozenset[str] = frozenset({HOLD_MODE_CURATE, HOLD_MODE_AS_IS})
 
 # File extensions (no dot) that select a binary/audio/text capture kind.
 _IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
@@ -554,7 +566,7 @@ class Ingestor:
         # skip the per-call orient and let the staged changes accumulate for its commit.
         if commit:
             self._orient()
-        holding = self.persist_inbound(capture)
+        holding = self.persist_inbound(capture, as_is=as_is)
         analysed = _Analysed(analysis=None)
         try:
             analysed = self.analyse(capture)
@@ -757,7 +769,7 @@ class Ingestor:
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
 
-    def persist_inbound(self, capture: Capture) -> _Holding:
+    def persist_inbound(self, capture: Capture, *, as_is: bool = False) -> _Holding:
         """Extract and persist the inbound item durably *before* any LLM call.
 
         Writes a holding page under ``inbox/<sha12>.md`` whose body is the extracted
@@ -768,6 +780,12 @@ class Ingestor:
         idempotent (``skipped_unchanged``). This is the *capture-never-lost* guarantee:
         the text is on disk and committable before classify/curate run.
 
+        The intended curation mode (``--as-is`` low-touch vs the default re-curate) and
+        the original ``filename`` are stamped into the hold frontmatter (issue #95, task
+        E) so a later inbox sweep (:mod:`thoth.inbox_drain`) honours the ORIGINAL intent
+        rather than guessing: a hold deferred under ``--as-is`` is re-filed as-is, a
+        normal one is re-curated.
+
         The extraction itself (the only network step) happens here, so an
         :class:`thoth.extract.ExtractError` still aborts the ingest loudly (nothing is
         lost -- there was nothing to persist). The extracted text is returned on the
@@ -776,6 +794,9 @@ class Ingestor:
 
         Args:
             capture: The inbound item.
+            as_is: Whether this capture was requested in low-touch ``--as-is`` mode, so
+                the hold records ``mode: as-is`` and a later sweep re-files it low-touch
+                (default ``False`` records ``mode: curate``).
 
         Returns:
             A :class:`_Holding` carrying the holding :class:`RawCaptureResult` and the
@@ -794,8 +815,11 @@ class Ingestor:
             # A binary with no extracted text yet: hold a provenance stub so the capture
             # is durable and a later sweep can re-fetch + curate the source.
             body = self._binary_stub_body(capture)
+        mode = HOLD_MODE_AS_IS if as_is else HOLD_MODE_CURATE
         try:
-            result = self._write_inbox_holding(body, capture.source)
+            result = self._write_inbox_holding(
+                body, capture.source, mode=mode, filename=capture.filename
+            )
         except VaultError as exc:
             raise IngestError(f"capture failed during vault write: {exc}") from exc
         return _Holding(result=result, prefetched=prefetched)
@@ -1504,7 +1528,14 @@ class Ingestor:
             "reindex/sweep to fetch and curate._"
         )
 
-    def _write_inbox_holding(self, body: str, source: str) -> RawCaptureResult:
+    def _write_inbox_holding(
+        self,
+        body: str,
+        source: str,
+        *,
+        mode: str = HOLD_MODE_CURATE,
+        filename: str | None = None,
+    ) -> RawCaptureResult:
         """Write the durable ``inbox/<sha12>.md`` holding page (idempotent on body SHA).
 
         The slug is the first 12 hex chars of the body SHA-256, so re-persisting an
@@ -1517,9 +1548,16 @@ class Ingestor:
         :meth:`Vault.stored_body_sha256` (the same digest the writer stamps), matching
         :meth:`_write_raw_doc`.
 
+        The intended curation ``mode`` (``curate``/``as-is``) and the original
+        ``filename`` are stamped into the frontmatter (issue #95, task E) so a later
+        inbox sweep honours the original intent; ``filename`` is omitted when the
+        capture had none (Slack/MCP text), keeping the frontmatter minimal.
+
         Args:
             body: The extracted inbound text (or a binary provenance stub) to hold.
             source: The capture's frontmatter ``source`` value.
+            mode: The intended curation mode to stamp (``curate``/``as-is``).
+            filename: The original upload name to stamp, or ``None`` to omit it.
 
         Returns:
             A :class:`RawCaptureResult` naming the held page and its disposition.
@@ -1538,7 +1576,12 @@ class Ingestor:
             "tags": ["inbox"],
             # Stamp the body digest so re-persist is idempotent (mirrors write_raw).
             "sha256": new_sha,
+            # Stamp the intended curation mode (issue #95, task E) so the inbox sweep
+            # re-files this hold with the ORIGINAL intent rather than guessing.
+            "mode": mode,
         }
+        if filename:
+            meta["filename"] = filename
         self._vault.write_page("inbox", slug, meta, body)
         return RawCaptureResult(raw_path=rel, disposition=disposition)
 
