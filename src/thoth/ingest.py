@@ -155,11 +155,13 @@ _TYPE_FOLDER: dict[str, str] = {
 _CURATE_ATTEMPTS: int = 2
 
 # Head-truncation cap (chars, ~750 tokens) for the extracted URL/transcript body folded
-# into the *curate* prompt via ``_capture_summary``. The vault is canonical and the full
-# text already lives at ``raw/articles/<slug>.md``; the curated page is a distilled
-# view, so a lead excerpt carries the gist while capping token cost on large
-# articles (issue #75). Classify is kept blind/cheap on purpose -- it never
-# receives the body.
+# into the classify AND curate prompts via ``_capture_summary``. The vault is canonical
+# and the full text already lives at ``raw/articles/<slug>.md``; the curated page is a
+# distilled view, so a lead excerpt carries the gist while capping token cost on large
+# articles (issue #75). The SAME bounded excerpt feeds classify so routing is
+# content-aware -- a personal URL routes differently from a technical one rather than
+# being decided from the link + title alone (issue #123); classify stays on Sonnet (the
+# Haiku move is issue #79).
 _URL_EXCERPT_CHARS: int = 3000
 
 # The forced tool the curate pass uses to return its file plan. Making the model emit
@@ -571,7 +573,15 @@ class Ingestor:
         try:
             analysed = self.analyse(capture)
             analysis = analysed.analysis
-            classification = self.classify(capture, analysis=analysis)
+            classification = self.classify(
+                capture,
+                analysis=analysis,
+                extracted_body=(
+                    holding.prefetched.body
+                    if holding.prefetched is not None
+                    else None
+                ),
+            )
             raw = self.capture_raw(
                 capture,
                 classification,
@@ -1010,7 +1020,11 @@ class Ingestor:
     # ---- pass 1: classify --------------------------------------------------------
 
     def classify(
-        self, capture: Capture, *, analysis: Analysis | None = None
+        self,
+        capture: Capture,
+        *,
+        analysis: Analysis | None = None,
+        extracted_body: str | None = None,
     ) -> Classification:
         """Run the cheap classify call and validate its routing output.
 
@@ -1025,9 +1039,19 @@ class Ingestor:
         routed *by its content* -- a whiteboard photo lands in ``notes/``, not the
         ``memories/`` default -- and the candidate fetch sees the analysed terms.
 
+        ``extracted_body`` does the same for a *text-bearing* capture whose body was
+        extracted before classify (a URL article's markdown / an audio transcript): the
+        same bounded lead excerpt that already feeds curate (head-truncated to
+        :data:`_URL_EXCERPT_CHARS`) is folded into the classify prompt too, so routing is
+        **content-aware** -- a clearly-personal URL routes differently from a technical
+        one, instead of being decided from the link + title alone (issue #123). classify
+        stays on Sonnet here (the Haiku move is issue #79).
+
         Args:
             capture: The inbound item to classify.
             analysis: Optional content analysis of a binary capture (image/PDF).
+            extracted_body: Optional pre-extracted text body (URL article markdown /
+                audio transcript) folded in -- bounded -- so routing is content-aware.
 
         Returns:
             The validated :class:`Classification`.
@@ -1036,7 +1060,9 @@ class Ingestor:
             IngestError: if the model output is unparseable or names an
                 out-of-vocabulary type or an invalid slug.
         """
-        prompt = self._classify_prompt(capture, analysis=analysis)
+        prompt = self._classify_prompt(
+            capture, analysis=analysis, extracted_body=extracted_body
+        )
         try:
             response = self._llm.complete([Message(role="user", content=prompt)])
         except Exception as exc:  # noqa: BLE001 - any client failure aborts classify
@@ -2337,7 +2363,11 @@ class Ingestor:
     # ---- prompt builders ---------------------------------------------------------
 
     def _classify_prompt(
-        self, capture: Capture, *, analysis: Analysis | None = None
+        self,
+        capture: Capture,
+        *,
+        analysis: Analysis | None = None,
+        extracted_body: str | None = None,
     ) -> str:
         """Build the cheap classify-call prompt from the capture.
 
@@ -2345,9 +2375,13 @@ class Ingestor:
         :data:`thoth.vault.TYPE_ENUMERATION` (the canonical vocabulary, issue #19),
         not restated here, so a type added to the vault contract is offered to the
         classifier automatically and the two cannot diverge. A binary capture's analysis
-        (issue #42) is folded in so the model classifies by the asset's real content.
+        (issue #42) is folded in so the model classifies by the asset's real content;
+        ``extracted_body`` folds in the same bounded URL/transcript excerpt that feeds
+        curate so routing is content-aware (issue #123).
         """
-        what = self._capture_summary(capture, analysis=analysis)
+        what = self._capture_summary(
+            capture, analysis=analysis, extracted_body=extracted_body
+        )
         type_list = ", ".join(TYPE_ENUMERATION)
         return (
             "Classify this captured item for a personal knowledge vault. Return ONLY a "

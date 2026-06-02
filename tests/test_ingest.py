@@ -1700,6 +1700,94 @@ def test_classify_prompt_enumerates_exactly_the_vault_types(
     assert "wibble" not in prompt
 
 
+def test_classify_prompt_folds_in_bounded_extracted_body(
+    harness: IngestHarness,
+) -> None:
+    """The classify prompt carries the bounded URL/transcript excerpt (issue #123).
+
+    Routing is content-aware: the same head-truncated excerpt that already feeds curate
+    is folded into the classify prompt so a URL is routed by its content, not the link +
+    title alone. The excerpt is bounded to ``_URL_EXCERPT_CHARS`` chars exactly as the
+    curate path bounds it (the full text stays canonical in ``raw/``).
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    body = "PERSONAL-DIARY-MARKER " + ("x" * (_URL_EXCERPT_CHARS * 2))
+    prompt = ingestor._classify_prompt(
+        Capture(url="https://example.com/diary"), extracted_body=body
+    )
+    # The lead excerpt (with its content marker) reaches classify...
+    assert "PERSONAL-DIARY-MARKER" in prompt
+    assert "Extracted text" in prompt
+    # ...head-truncated to the same bound curate uses (the tail never reaches classify).
+    excerpt = body.strip()[:_URL_EXCERPT_CHARS]
+    assert excerpt in prompt
+    assert body not in prompt  # the full body is NOT inlined
+
+
+def test_classify_call_receives_url_excerpt_end_to_end(
+    harness: IngestHarness,
+) -> None:
+    """The classify LLM call (not just curate) sees the URL body excerpt (issue #123).
+
+    Drives the full ingest pass for a URL capture and inspects the FIRST model call (the
+    classify call) to prove the extracted article body reaches it -- the content-aware
+    routing fix -- rather than only the second (curate) call.
+    """
+    doc = ExtractedDoc(
+        source_url="https://example.com/transformers",
+        title="Transformer Models",
+        markdown="UNIQUE-ARTICLE-BODY transformers use attention to weigh tokens.",
+    )
+    client = _ScriptedClient(_classify_json(), _file_plan_json())
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    ingestor.ingest(Capture(url="https://example.com/transformers"))
+
+    classify_call = client.messages.calls[0]
+    classify_prompt = classify_call["messages"][0]["content"]
+    assert "UNIQUE-ARTICLE-BODY" in classify_prompt
+
+
+def test_classify_text_image_pdf_captures_have_no_excerpt_regression(
+    harness: IngestHarness,
+) -> None:
+    """No regression: text/image/PDF classify prompts gain no spurious excerpt (#123).
+
+    A plain-text capture's inline text already rides in the prompt verbatim (it is never
+    re-inlined as an "Extracted text" excerpt), and an image/PDF capture -- with no
+    pre-extracted text body -- carries no excerpt block at all.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json()),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    # Plain text capture: the inline text shows once, not duplicated as an excerpt.
+    text_prompt = ingestor._classify_prompt(Capture(text="a plain note"))
+    assert "a plain note" in text_prompt
+    assert "Extracted text" not in text_prompt
+    # Image / PDF captures with no extracted_body carry no excerpt block.
+    img_prompt = ingestor._classify_prompt(
+        Capture(path=Path("/tmp/x.png"), filename="x.png")
+    )
+    assert "Extracted text" not in img_prompt
+    pdf_prompt = ingestor._classify_prompt(
+        Capture(path=Path("/tmp/x.pdf"), filename="x.pdf")
+    )
+    assert "Extracted text" not in pdf_prompt
+
+
 def test_classify_rejects_bad_slug(harness: IngestHarness) -> None:
     """A classification with a malformed slug surfaces as IngestError."""
     ingestor = _build_ingestor(
