@@ -1424,8 +1424,13 @@ def test_file_upload_downloads_to_tmp_and_ingests(config: Config) -> None:
     capture.path.unlink()
 
 
-def test_file_upload_with_multiple_files_ingests_each(config: Config) -> None:
-    """An upload carrying several files ingests every one of them."""
+def test_file_upload_heterogeneous_batch_ingests_each(config: Config) -> None:
+    """A mixed image+PDF upload still ingests every file separately (issue #84).
+
+    The one-capture batch path is reserved for a *homogeneous image* message; a batch
+    that mixes kinds (an image plus a PDF) keeps today's per-file fan-out, since
+    per-page-type classification of mixed kinds is deferred (issue #84 open questions).
+    """
     client = FakeSlackClient(payload=b"DATA")
     handlers, ing, _ = _handlers(config)
     say = Recorder()
@@ -1445,6 +1450,74 @@ def test_file_upload_with_multiple_files_ingests_each(config: Config) -> None:
     for capture in ing.captures:
         assert capture.path is not None
         capture.path.unlink()
+
+
+def test_file_upload_image_batch_is_one_capture(config: Config) -> None:
+    """A multi-image Slack message is captured as ONE capture/page (issue #84).
+
+    All images are downloaded server-side; the first is the primary ``path`` and the
+    rest ride on ``extra_paths`` in upload order, so the batch is curated once -- one
+    summary, one tag set, every image embedded in the one page -- instead of fanning out
+    into N disconnected notes.
+    """
+    client = FakeSlackClient(payload=b"IMG")
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {"name": "a.png", "url_private_download": "https://files.slack.com/a.png"},
+            {"name": "b.jpg", "url_private_download": "https://files.slack.com/b.jpg"},
+            {"name": "c.png", "url_private": "https://files.slack.com/c.png"},
+        ),
+        say,
+        client,
+    )
+    assert client.downloaded == [
+        "https://files.slack.com/a.png",
+        "https://files.slack.com/b.jpg",
+        "https://files.slack.com/c.png",
+    ]
+    # Exactly one capture spanning all three images.
+    assert len(ing.captures) == 1
+    capture = ing.captures[0]
+    assert capture.filename == "a.png"
+    assert capture.path is not None
+    assert capture.path.suffix == ".png"
+    assert len(capture.extra_paths) == 2
+    assert [p.suffix for p in capture.extra_paths] == [".jpg", ".png"]
+    capture.path.unlink()
+    for extra in capture.extra_paths:
+        extra.unlink()
+
+
+def test_file_upload_image_batch_by_mimetype_is_one_capture(config: Config) -> None:
+    """An image batch detected by Slack ``mimetype`` (no extension) is one capture."""
+    client = FakeSlackClient(payload=b"IMG")
+    handlers, ing, _ = _handlers(config)
+    say = Recorder()
+    handlers.handle_message(
+        _file_share_event(
+            {
+                "name": "shot1",
+                "mimetype": "image/png",
+                "url_private_download": "https://files.slack.com/1",
+            },
+            {
+                "name": "shot2",
+                "mimetype": "image/jpeg",
+                "url_private_download": "https://files.slack.com/2",
+            },
+        ),
+        say,
+        client,
+    )
+    assert len(ing.captures) == 1
+    capture = ing.captures[0]
+    assert capture.path is not None
+    assert len(capture.extra_paths) == 1
+    capture.path.unlink()
+    for extra in capture.extra_paths:
+        extra.unlink()
 
 
 def test_file_upload_denied_user_not_downloaded(config: Config) -> None:
