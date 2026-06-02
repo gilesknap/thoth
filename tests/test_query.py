@@ -230,12 +230,13 @@ def engine(config: Config, vault: Vault, hindsight: _FakeHindsight) -> QueryEngi
 # --- module constants --------------------------------------------------------------
 
 
-def test_searched_dirs_are_reference_folders() -> None:
-    """The lexical scan targets the reference folders (ADR 0005)."""
+def test_searched_dirs_span_reference_and_actions() -> None:
+    """The lexical scan targets the reference folders plus actions/ (issue #106)."""
     assert SEARCHED_DIRS == (
         "entities",
         "notes",
         "memories",
+        "actions",
     )
 
 
@@ -354,17 +355,16 @@ def test_grep_empty_term_returns_empty(engine: QueryEngine) -> None:
 
 
 def test_grep_skips_unsearched_folders(vault: Vault, engine: QueryEngine) -> None:
-    """A matching page in a non-searched folder (e.g. actions) is not returned."""
-    (vault.root / "actions" / "fix-fence.md").write_text(
+    """A matching page in raw/ (still excluded) is not returned by grep."""
+    (vault.root / "raw" / "articles" / "leaked.md").write_text(
         _page(
-            title="Fix fence",
-            page_type="action",
-            body="# Fix fence\n\nunique-action-token here.\n",
-            tags="[task]",
+            title="Leaked",
+            page_type="note",
+            body="# Leaked\n\nunique-raw-token here.\n",
         ),
         encoding="utf-8",
     )
-    assert engine.grep("unique-action-token") == []
+    assert engine.grep("unique-raw-token") == []
 
 
 # --- grep ranking (issue #96) ------------------------------------------------------
@@ -676,8 +676,13 @@ def test_answer_logs_success_line(
 def test_answer_structural_path_does_not_use_recall(
     engine: QueryEngine, hindsight: _FakeHindsight
 ) -> None:
-    """When grep/index already answer, used_recall is False and recall is not called."""
-    result = engine.answer("program-motion-controller", max_pages=5)
+    """When grep/index fill max_pages, used_recall is False and recall is not called.
+
+    The PMC query reaches PMC + its two existing wikilink targets (drive-control-module,
+    distributed-systems) = 3 pages, so at max_pages=2 the cheap passes already fill the
+    set and the thin-results top-up (#107) never fires.
+    """
+    result = engine.answer("program-motion-controller", max_pages=2)
     assert result.used_recall is False
     assert hindsight.recall_calls == []
 
@@ -706,6 +711,84 @@ def test_answer_falls_back_to_recall_and_sets_flag(
     assert result.used_recall is True
     assert result.citations[0].path == "notes/distributed-systems.md"
     assert hindsight.recall_calls  # recall was consulted
+
+
+def test_answer_thin_grep_tops_up_with_recall(config: Config, vault: Vault) -> None:
+    """A thin grep result (< max_pages) is topped up by recall, grep keeping its rank.
+
+    grep for ``kinematics`` hits exactly one page (jane-doe, summary-only match) with no
+    wikilinks, so the cheap passes are thin (1 < max_pages=3) and recall (#107) fires to
+    top up with a DIFFERENT page; the grep hit keeps its leading rank.
+    """
+    hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
+    hindsight = _FakeHindsight(config, hits=hits)
+    # An LLM whose USED line names both candidates, so both ride into the citations and
+    # we can assert grep keeps its leading rank ahead of the recall top-up.
+    llm = LLM(config, client=_FakeClient("prose\nUSED: 1, 2"))  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, hindsight, llm)
+    result = engine.answer("kinematics", max_pages=3)
+    paths = [c.path for c in result.citations]
+    assert "entities/jane-doe.md" in paths
+    assert "notes/distributed-systems.md" in paths
+    assert paths.index("entities/jane-doe.md") < paths.index(
+        "notes/distributed-systems.md"
+    )
+    assert hindsight.recall_calls  # recall fired despite a non-empty grep result
+
+
+def test_answer_full_grep_does_not_top_up(config: Config, vault: Vault) -> None:
+    """When grep alone fills max_pages, recall is not consulted (cost-ordering)."""
+    hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
+    hindsight = _FakeHindsight(config, hits=hits)
+    engine = QueryEngine(config, vault, hindsight)
+    # PMC + drive-control-module + distributed-systems >= max_pages=1.
+    engine.answer("program-motion-controller", max_pages=1)
+    assert hindsight.recall_calls == []
+
+
+def test_answer_topup_recall_flag_only_when_used(config: Config, vault: Vault) -> None:
+    """used_recall reflects whether a recall-only page is in the model's USED subset."""
+    hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
+    # USED names only the grep page (index 1) -> recall consulted but not used.
+    llm_grep = LLM(config, client=_FakeClient("prose\nUSED: 1"))  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, _FakeHindsight(config, hits=hits), llm_grep)
+    result = engine.answer("kinematics", max_pages=3)
+    assert result.used_recall is False
+    # USED names the recall page (index 2) -> recall helped.
+    llm_recall = LLM(config, client=_FakeClient("prose\nUSED: 2"))  # type: ignore[arg-type]
+    engine2 = QueryEngine(config, vault, _FakeHindsight(config, hits=hits), llm_recall)
+    result2 = engine2.answer("kinematics", max_pages=3)
+    assert result2.used_recall is True
+
+
+def test_answer_qa_recall_scope_includes_actions(config: Config, vault: Vault) -> None:
+    """The knowledge-Q&A recall pass surfaces action-typed hits (issue #106)."""
+    (vault.root / "actions" / "read-paper.md").write_text(
+        _page(title="Read paper", page_type="action", body="todo", tags="[task]"),
+        encoding="utf-8",
+    )
+    hits = [RecallHit(path="actions/read-paper.md", text="y", page_type="action")]
+    hindsight = _FakeHindsight(config, hits=hits)
+    engine = QueryEngine(config, vault, hindsight)
+    # A query with no lexical hit falls through to recall; the action hit survives the
+    # Q&A type scope (RECALL_QA_TYPES) instead of being filtered out.
+    result = engine.answer("zzzznolexicalmatch", max_pages=3)
+    assert "actions/read-paper.md" in {c.path for c in result.citations}
+
+
+def test_grep_finds_action_pages(config: Config, vault: Vault) -> None:
+    """Lexical grep now scans actions/, so a filed action page is reachable (#106)."""
+    (vault.root / "actions" / "read-paper.md").write_text(
+        _page(
+            title="Read paper",
+            page_type="action",
+            body="Follow up on the zzqxaction marker.",
+            tags="[task]",
+        ),
+        encoding="utf-8",
+    )
+    engine = QueryEngine(config, vault, _FakeHindsight(config))
+    assert engine.grep("zzqxaction") == ["actions/read-paper.md"]
 
 
 def test_answer_caps_citations_at_max_pages(config: Config, vault: Vault) -> None:

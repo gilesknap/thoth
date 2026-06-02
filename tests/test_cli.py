@@ -795,6 +795,10 @@ def test_build_parser_capture_flags() -> None:
     assert ns.include == ["*.md"]
     assert ns.exclude == ["drafts/*"]
 
+    # No path: the capture parser accepts zero paths (drain the inbox, #105).
+    no_path = parser.parse_args(["capture"])
+    assert no_path.paths == []
+
     bare = parser.parse_args(["capture", "x"])
     assert [str(p) for p in bare.paths] == ["x"]
     assert bare.dry_run is False
@@ -1140,6 +1144,121 @@ def test_run_capture_as_is_threads_flag(
     ns = __main__.build_parser().parse_args(["capture", str(tmp_path), "--as-is"])
     __main__.run_capture(ns, config)
     assert all(as_is is True for _, _, as_is in ingestor.calls)
+
+
+# --- run_capture inbox-drain branch (#105) -----------------------------------------
+
+
+def _seed_drain_vault(tmp_path: Path, holds: dict[str, str]) -> Config:
+    """Seed a real vault with ``inbox/<name>`` hold pages; return its Config.
+
+    ``holds`` maps a hold filename to its stored body. Each is written with the real
+    ``type: inbox`` frontmatter so ``Vault.read_page`` (the drain) reads it back.
+    """
+    root = tmp_path / "vault"
+    for folder in ("entities", "notes", "memories", "actions", "inbox"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    for name, body in holds.items():
+        (root / "inbox" / name).write_text(
+            "---\ntitle: Held capture\ntype: inbox\nsource: slack\n"
+            "tags: [inbox]\n---\n\n" + body + "\n",
+            encoding="utf-8",
+        )
+    return load_config({"PKM_VAULT": str(root)})
+
+
+def test_run_capture_no_path_drains_inbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`capture` with NO path ingests each hold (commit=False), removes filed holds."""
+    config = _seed_drain_vault(
+        tmp_path, {"hold-aaa.md": "note about dogs", "hold-bbb.md": "note about cats"}
+    )
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+
+    ns = __main__.build_parser().parse_args(["capture", "--as-is"])
+    __main__.run_capture(ns, config)
+
+    # One ingest per hold, commit deferred, as_is threaded.
+    assert len(ingestor.calls) == 2
+    assert all(commit is False for _, commit, _ in ingestor.calls)
+    assert all(as_is is True for _, _, as_is in ingestor.calls)
+    bodies = {c.text for c, _, _ in ingestor.calls}
+    assert bodies == {"note about dogs", "note about cats"}
+    # A filed report removes the superseded hold; the inbox shrinks.
+    root = config.vault_path
+    assert not (root / "inbox" / "hold-aaa.md").exists()
+    assert not (root / "inbox" / "hold-bbb.md").exists()
+
+
+def test_run_capture_drain_leaves_unfiled_holds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A deferred/unchanged hold is NOT removed (data-loss guard, #105)."""
+    config = _seed_drain_vault(tmp_path, {"hold-aaa.md": "still held"})
+    ingestor = _RecordingIngestor(skip=True)  # always reports unchanged (no page)
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+
+    ns = __main__.build_parser().parse_args(["capture"])
+    __main__.run_capture(ns, config)
+
+    assert len(ingestor.calls) == 1
+    # No page was filed -> the hold stays put for a later run.
+    assert (config.vault_path / "inbox" / "hold-aaa.md").exists()
+
+
+def test_run_capture_no_path_dry_run_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`capture --dry-run` with no path prints would-re-curate, no ingest/remove."""
+    config = _seed_drain_vault(tmp_path, {"hold-aaa.md": "x", "hold-bbb.md": "y"})
+    ingestor = _RecordingIngestor()
+    git = _RecordingGit()
+    _wire_capture_fakes(monkeypatch, ingestor=ingestor, git=git)
+
+    ns = __main__.build_parser().parse_args(["capture", "--dry-run"])
+    __main__.run_capture(ns, config)
+
+    assert ingestor.calls == []
+    assert git.pull_calls == 0
+    # Holds untouched.
+    assert (config.vault_path / "inbox" / "hold-aaa.md").exists()
+    out = capsys.readouterr().out
+    assert out.count("would re-curate") == 2
+
+
+def test_run_capture_drain_honours_budget_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`capture --budget 0` on the drain path wires the unlimited override (#105)."""
+    config = _seed_drain_vault(tmp_path, {"hold-aaa.md": "x"})
+    recorded: list[Any] = []
+
+    import thoth.alerts as alerts_mod
+    import thoth.budget as budget_mod
+    import thoth.git_sync as git_mod
+
+    def _record_guard(cfg: Config, **kw: Any) -> Any:
+        recorded.append(kw.get("limit", "MISSING"))
+        return object()
+
+    monkeypatch.setattr(budget_mod, "make_budget_guard", _record_guard)
+    monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())
+    monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: _RecordingGit())
+    monkeypatch.setattr(
+        __main__,
+        "_build_graph",
+        lambda cfg, *, guard=None: __main__._Graph(
+            ingestor=_RecordingIngestor(), query_engine=None, research=None
+        ),
+    )
+
+    ns = __main__.build_parser().parse_args(["capture", "--budget", "0"])
+    __main__.run_capture(ns, config)
+    assert recorded == [0]
 
 
 def test_run_capture_budget_override_reaches_guard(
