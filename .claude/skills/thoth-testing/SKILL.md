@@ -55,6 +55,25 @@ THOTH_LIVE_SMOKE=1 uv run --extra runtime pytest -m live -k "<area>"
 These are skipped by default (no keys in CI). Run them where real credentials and
 the real Hindsight CLI are available.
 
+### Testing a tool-use repair/retry path live
+
+Some live-only failures are about **message shape**, not the happy path. The
+canonical case (issue #110): after a forced tool call, the repair/retry user turn
+must lead with a `tool_result` block keyed to the `tool_use` id, or the real
+Messages API returns HTTP 400. Injected fakes ignore that precondition, so only a
+real round-trip proves the shape — exactly the gap above.
+
+Two things make this hard to exercise: it fires only on a **validation failure**
+(not the happy path), and you **cannot** trigger it by exhausting the budget —
+`--budget 1` defers the second call *before* the repair turn fires (wrong lever).
+Instead, force exactly one failure deterministically: wrap the validator
+(`_parse_and_validate_plan`) to raise on the first call and delegate to the real
+one on the second, stub the downstream side effect (`_write_planned_page`), wire
+**no** budget guard so two real calls are allowed, then assert the call recovers.
+See `tests/test_live_smoke.py::test_live_curate_repair_turn_round_trips_after_tool_use_rejection`.
+The pattern generalises: to test any "second attempt" boundary live, inject a
+one-shot failure rather than relying on the model or the budget to produce one.
+
 ## Verify live before merge (the gold standard)
 
 For boundary/SDK changes, the strongest verification is running the **feature
