@@ -45,20 +45,6 @@ search and URL→Markdown extraction; **Hindsight** provides the semantic index;
 on a small VPS as a single long-running Slack daemon (`thoth slack`) plus a handful of cron
 jobs.
 
-See the [architecture explanation](https://gilesknap.github.io/thoth/explanations/architecture.html)
-for the full picture, and the [design decisions](https://gilesknap.github.io/thoth/explanations/decisions.html)
-for the why.
-
-## Get started
-
-- **Deploy the appliance** (the main path) — a full, dependency-by-dependency setup
-  including every API key and the `.env`:
-  [Deploy the thoth appliance](https://gilesknap.github.io/thoth/how-to/deploy-appliance.html).
-- **Set up the Slack app** —
-  [Slack setup](https://gilesknap.github.io/thoth/how-to/slack-setup.html).
-- **First-light smoke checklist** — verify each live boundary after deploy:
-  [First light](https://gilesknap.github.io/thoth/how-to/first-light.html).
-
 ```console
 $ thoth --version    # confirm the CLI is on your PATH
 $ thoth slack        # run the capture/retrieve daemon (Socket Mode)
@@ -66,4 +52,17 @@ $ thoth slack        # run the capture/retrieve daemon (Socket Mode)
 
 <!-- README only content. Anything below this line won't be included in index.md -->
 
-See https://gilesknap.github.io/thoth for more detailed documentation.
+## Documentation
+
+Full documentation is published at <https://gilesknap.github.io/thoth>. The key guides
+(source under [`docs/`](docs/)):
+
+- **Deploy the appliance** (the main path) — a full, dependency-by-dependency setup
+  including every API key and the `.env`:
+  [`docs/how-to/deploy-appliance.md`](docs/how-to/deploy-appliance.md).
+- **Set up the Slack app** — [`docs/how-to/slack-setup.md`](docs/how-to/slack-setup.md).
+- **First-light smoke checklist** — verify each live boundary after deploy:
+  [`docs/how-to/first-light.md`](docs/how-to/first-light.md).
+- **Install for local development** — [`docs/tutorials/installation.md`](docs/tutorials/installation.md).
+- **How it works / why** — [`docs/explanations/architecture.md`](docs/explanations/architecture.md)
+  and [`docs/explanations/decisions.md`](docs/explanations/decisions.md).
