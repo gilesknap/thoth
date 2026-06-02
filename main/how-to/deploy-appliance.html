@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Deploy the thoth appliance &#8212; thoth 0.1.dev103+ga62d2062d documentation</title>
+    <title>Deploy the thoth appliance &#8212; thoth 0.5.1.dev5+g2b0fb309f documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=0911a06b"></script>
+    <script src="../_static/documentation_options.js?v=bdad67d8"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -691,39 +691,43 @@ install<span class="w"> </span>-m600<span class="w"> </span>/opt/thoth/deploy/.e
 <td><p>no</p></td>
 <td><p>Override the default model for all calls. <code class="docutils literal notranslate"><span class="pre">THOTH_ANALYSE_MODEL</span></code> (vision) and <code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL</span></code> (Excalidraw, worth an Opus) override per-call.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">GEMINI_API_KEY</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_IMAGE_RESIZE_THRESHOLD_BYTES</span></code></p></td>
+<td><p>no</p></td>
+<td><p>Captured images larger than this are downscaled (longest edge capped at ~1568px, aspect ratio preserved) before they are stored in <code class="docutils literal notranslate"><span class="pre">raw/assets/</span></code> <em>and</em> before they reach the vision model. Default <code class="docutils literal notranslate"><span class="pre">2097152</span></code> (2 MB); a non-positive value disables resizing.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">GEMINI_API_KEY</span></code></p></td>
 <td><p>yes (for the index)</p></td>
 <td><p><a class="reference external" href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a>. The <strong>same key</strong> you gave Hindsight in step 4; it powers embeddings + fact-extraction.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">EXA_API_KEY</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">EXA_API_KEY</span></code></p></td>
 <td><p>no</p></td>
 <td><p><a class="reference external" href="https://dashboard.exa.ai">dashboard.exa.ai</a> → API keys. Web <strong>search</strong> for the <code class="docutils literal notranslate"><span class="pre">research:</span></code> path. Blank ⇒ vault-only.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">FIRECRAWL_API_KEY</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">FIRECRAWL_API_KEY</span></code></p></td>
 <td><p>no</p></td>
 <td><p><a class="reference external" href="https://www.firecrawl.dev">firecrawl.dev</a> → dashboard → API keys. URL→Markdown <strong>extraction</strong>. Blank ⇒ vault-only.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">GITHUB_PKM_VAULT_TOKEN</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">GITHUB_PKM_VAULT_TOKEN</span></code></p></td>
 <td><p>yes</p></td>
 <td><p>A GitHub <strong>fine-grained PAT</strong> scoped to the <code class="docutils literal notranslate"><span class="pre">pkm-vault</span></code> repo with <strong>Contents: Read and write</strong> (<a class="reference external" href="https://github.com/settings/tokens">github.com/settings/tokens</a>). thoth feeds it to git as an <code class="docutils literal notranslate"><span class="pre">x-access-token</span></code> HTTPS credential to push the vault.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code></p></td>
 <td><p>yes</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">xoxb-…</span></code> — see <a class="reference internal" href="slack-setup.html"><span class="doc">Set up the Slack app</span></a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code></p></td>
 <td><p>yes</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">xapp-…</span></code> (scope <code class="docutils literal notranslate"><span class="pre">connections:write</span></code>) — see <a class="reference internal" href="slack-setup.html"><span class="doc">Set up the Slack app</span></a>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code></p></td>
 <td><p>yes</p></td>
 <td><p>The private channel id (<code class="docutils literal notranslate"><span class="pre">C…</span></code>/<code class="docutils literal notranslate"><span class="pre">G…</span></code>) the bot listens in — see <a class="reference internal" href="slack-setup.html"><span class="doc">Set up the Slack app</span></a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code></p></td>
 <td><p>yes</p></td>
 <td><p>Your Slack <strong>member id</strong> (<code class="docutils literal notranslate"><span class="pre">U…</span></code>, <em>not</em> a <code class="docutils literal notranslate"><span class="pre">D…</span></code>/<code class="docutils literal notranslate"><span class="pre">C…</span></code>). Fail-closed: blank denies everyone.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_SUMMARY_CHANNEL</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_SUMMARY_CHANNEL</span></code></p></td>
 <td><p>for <code class="docutils literal notranslate"><span class="pre">summary</span></code></p></td>
 <td><p>Channel/DM id the daily/weekly digest posts to.</p></td>
 </tr>
