@@ -77,6 +77,17 @@ via Hindsight ``retain``, per Europe/London day; ``THOTH_DAILY_LLM_BUDGET`` over
 and a non-positive value disables the guard. See :mod:`thoth.budget`.
 """
 
+DEFAULT_IMAGE_RESIZE_THRESHOLD_BYTES: int = 2 * 1024 * 1024
+"""Default size above which a captured image is downscaled before storage + analysis.
+
+An image whose encoded bytes exceed this (2 MB) is scaled down so its longest edge is at
+most ~1568px (the point above which Claude's vision API downsamples anyway) *before* it
+is hashed, written to ``raw/assets/``, or sent to the vision model -- so the reduced
+binary is both what the vault commits and what the LLM sees (issue #108).
+``THOTH_IMAGE_RESIZE_THRESHOLD_BYTES`` overrides it; a non-positive value disables
+resizing. See :mod:`thoth.images`.
+"""
+
 REQUIRED_VARS: tuple[str, ...] = ("PKM_VAULT",)
 """Environment variables that must be present; only the vault path in Phase 0."""
 
@@ -107,6 +118,7 @@ class Config:
     firecrawl_api_key: str | None
     gemini_api_key: str | None
     daily_llm_budget: int
+    image_resize_threshold_bytes: int
 
     @property
     def state_db_path(self) -> Path:
@@ -316,6 +328,11 @@ def load_config(
             lookup("THOTH_DAILY_LLM_BUDGET"),
             default=DEFAULT_DAILY_LLM_BUDGET,
             name="THOTH_DAILY_LLM_BUDGET",
+        ),
+        image_resize_threshold_bytes=_int_opt(
+            lookup("THOTH_IMAGE_RESIZE_THRESHOLD_BYTES"),
+            default=DEFAULT_IMAGE_RESIZE_THRESHOLD_BYTES,
+            name="THOTH_IMAGE_RESIZE_THRESHOLD_BYTES",
         ),
     )
 
