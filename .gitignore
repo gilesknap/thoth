@@ -72,4 +72,7 @@ lockfiles/
 
 # api keys
 .env
+
+# claude
 .claude/worktrees
+.claude/scheduled_tasks.lock
