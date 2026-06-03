@@ -30,6 +30,30 @@ tests/`, `uv run pyright`.
 **Known flake:** `test_cli_version` can fail under parallel (`-p`) runs; if it
 fails, confirm it passes standalone before treating it as a real regression.
 
+**Pyright "X cannot be assigned to X" duplicate-module errors** mean a stale
+`build/` tree (an editable/sdist build artifact) is shadowing `src/` — pyright
+sees two copies of every type. `build/` is gitignored, so just `rm -rf build`
+and re-run; it is never a real type error.
+
+## Rebasing a PR onto main before merge
+
+When `main` has moved under a PR (e.g. a sibling PR merged first), GitHub may
+report a conflict at merge time. Rebase the branch locally, resolve, re-run the
+GATE, force-push, then merge. Two foot-guns that bit a real session:
+
+- **Commit *every* post-rebase fix before you force-push.** `git rebase
+  --continue` commits the conflict resolution — but any edits you make *after*
+  that to get the GATE green (a lint wrap, a stale-kwarg test fix) are
+  uncommitted working-tree changes. Force-pushing the rebase commit ships a tree
+  that is **not** what you just GATE-tested, leaving `main` red after merge.
+  Always `git status` clean + re-run the GATE on the *committed* tip before
+  `push --force`. (Recovery is a follow-up "repair GATE" PR — avoidable.)
+- **Convergent designs merge, they don't fight.** Two parallel branches can
+  independently introduce the *same* concept (e.g. both #129 and #134 added an
+  `is_transcript` flag). Resolve by taking the richer base and threading the
+  branch's unique delta through it (mirror the symmetric call site), not by
+  picking one side wholesale.
+
 ## First verification step: `THOTH_LOG_LEVEL=DEBUG`
 
 Before probing the vault bytes or the state DB by hand, set
