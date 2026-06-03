@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -209,7 +210,13 @@ class _ConflictingGitSync(GitSync):
     yields a rebase conflict, which is racy to reproduce with two clones in-process.
     """
 
-    def commit(self, message: str, *, timeout: float = 120.0) -> Any:
+    def commit(
+        self,
+        message: str,
+        *,
+        paths: Any = None,
+        timeout: float = 120.0,
+    ) -> Any:
         """Raise :class:`VaultConflictError` as the vault-commit script would."""
         raise VaultConflictError(
             "vault-commit failed (exit 1). stderr: 'VAULT CONFLICT: resolve'"
@@ -224,7 +231,13 @@ class _FailingGitSync(GitSync):
     ``except GitSyncError`` branch (distinct from the rebase-conflict subclass).
     """
 
-    def commit(self, message: str, *, timeout: float = 120.0) -> Any:
+    def commit(
+        self,
+        message: str,
+        *,
+        paths: Any = None,
+        timeout: float = 120.0,
+    ) -> Any:
         """Raise :class:`GitSyncError` as a failed push would (no conflict)."""
         raise GitSyncError("vault-commit failed (exit 1). stderr: 'push rejected'")
 
@@ -1386,6 +1399,210 @@ def test_image_capture_from_local_path(harness: IngestHarness, tmp_path: Path) -
     )
     # The caller's original tmp file is preserved (we stage a copy before the move).
     assert src.is_file()
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency / orphaned-asset regression (issue #85): the Slack daemon runs each
+# capture on a worker thread sharing ONE git working tree, so a commit must stage
+# only its own paths (never ``add -A``) and the small commit section must serialise.
+# --------------------------------------------------------------------------- #
+
+
+class _BlockingAnalyser(FakeAnalyser):
+    """A FakeAnalyser whose first ``analyse_images`` blocks until released (issue #85).
+
+    Lets a test pin one capture *inside* its ingest window -- after its asset is staged
+    on disk but before it commits -- while a second capture runs to completion, so the
+    concurrent-capture behaviour is exercised deterministically (no timing race).
+    """
+
+    def __init__(self, gate: threading.Event, entered: threading.Event) -> None:
+        super().__init__()
+        self._gate = gate
+        self._entered = entered
+
+    def analyse_images(self, images: Sequence[tuple[bytes, str]]) -> Analysis:
+        self._entered.set()
+        self._gate.wait(timeout=5.0)
+        return super().analyse_images(images)
+
+
+def _image_ingestor(
+    harness: IngestHarness,
+    tmp_path: Path,
+    *,
+    slug: str,
+    filename: str,
+    image_bytes: bytes,
+    analyser: Any = None,
+) -> Ingestor:
+    """Wire an Ingestor for one local-path image capture filed under ``memories/``."""
+    src = tmp_path / filename
+    src.write_bytes(image_bytes)
+    classify = _classify_json(page_type="memory", slug=slug, title=slug.title())
+    plan = _file_plan_json(
+        folder="memories", slug=slug, page_type="memory", title=slug.title()
+    )
+    return _build_ingestor(
+        harness,
+        client=_ScriptedClient(classify, plan),
+        extractor=FakeExtractor(),  # local path: no fetch
+        hindsight=FakeHindsight(),
+        analyser=analyser,
+    )
+
+
+def test_commit_stages_only_its_own_paths_not_a_concurrent_untracked_asset(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """A commit stages ONLY its own paths, never sweeping a concurrent asset (#85).
+
+    The orphaned-asset bug came from ``vault-commit``'s blanket ``git add -A``: a
+    capture that ran its commit while a *different*, concurrent capture had written an
+    asset to the shared tree (still untracked) would sweep that foreign asset into the
+    wrong commit. The fix stages exactly the paths a given capture wrote, so this proves
+    a real commit leaves an unrelated untracked file completely alone.
+
+    A stray untracked asset is planted in the shared working tree (as an in-flight
+    capture's just-written asset would be); then a full capture commits. Its commit must
+    contain only its own page + asset (+ log.md), and the stray file must stay untracked
+    -- not committed, and not deleted.
+    """
+    stray = harness.work / "raw/assets/in-flight-other.png"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_bytes(b"\x89PNG\r\n\x1a\n" + b"a-concurrent-captures-untracked-asset")
+
+    ingestor = _image_ingestor(
+        harness,
+        tmp_path,
+        slug="my-shot",
+        filename="mine.png",
+        image_bytes=b"\x89PNG\r\n\x1a\n" + b"my-own-bytes",
+    )
+    report = ingestor.ingest(Capture(path=tmp_path / "mine.png", filename="mine.png"))
+    assert report.committed is True
+
+    committed = set(harness.origin_files())
+    # This capture's own page + asset committed atomically.
+    assert "memories/my-shot.md" in committed
+    assert "raw/assets/my-shot.png" in committed
+    # The unrelated, still-in-flight asset was NOT swept into this commit...
+    assert "raw/assets/in-flight-other.png" not in committed
+    # ...and was left on disk untouched (not deleted by the explicit-path stage).
+    assert stray.is_file()
+
+
+def test_concurrent_image_captures_commit_each_asset_atomically(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """Two concurrent image captures each commit their page WITH their asset (#85).
+
+    The Slack daemon dispatches events on a worker-thread pool sharing one git working
+    tree. The first capture is pinned *inside* its ingest window (its analyser blocks)
+    while the second capture runs to completion and commits. The narrow commit-section
+    lock means the second cannot run its git work while the first holds it; once the
+    first is released, BOTH pages and BOTH assets must be present in committed history
+    -- no page is committed without its embedded asset (no orphan).
+    """
+    gate = threading.Event()
+    first_entered = threading.Event()
+
+    first = _image_ingestor(
+        harness,
+        tmp_path,
+        slug="alpha-shot",
+        filename="alpha.png",
+        image_bytes=b"\x89PNG\r\n\x1a\n" + b"alpha-bytes",
+        analyser=_BlockingAnalyser(gate, first_entered),
+    )
+    second = _image_ingestor(
+        harness,
+        tmp_path,
+        slug="bravo-shot",
+        filename="bravo.png",
+        image_bytes=b"\x89PNG\r\n\x1a\n" + b"bravo-bytes",
+    )
+
+    results: dict[str, Any] = {}
+
+    def run_first() -> None:
+        results["first"] = first.ingest(
+            Capture(path=tmp_path / "alpha.png", filename="alpha.png", source="slack")
+        )
+
+    def run_second() -> None:
+        results["second"] = second.ingest(
+            Capture(path=tmp_path / "bravo.png", filename="bravo.png", source="slack")
+        )
+
+    t1 = threading.Thread(target=run_first)
+    t1.start()
+    # Pin the first capture inside its ingest window (its analyser is blocked).
+    assert first_entered.wait(timeout=5.0)
+
+    t2 = threading.Thread(target=run_second)
+    t2.start()
+    # The second capture completes (commits) while the first is still pinned; it touches
+    # only its own paths, so it never depends on (or steals) the first's work.
+    t2.join(timeout=5.0)
+    assert not t2.is_alive(), "second capture did not finish while first was pinned"
+
+    # Release the first; it now commits its own page + asset.
+    gate.set()
+    t1.join(timeout=5.0)
+    assert not t1.is_alive()
+    assert results["first"].committed is True
+    assert results["second"].committed is True
+
+    committed = set(harness.origin_files())
+    # Both pages AND both assets are in committed history -- each page with its asset.
+    assert "memories/alpha-shot.md" in committed
+    assert "raw/assets/alpha-shot.png" in committed
+    assert "memories/bravo-shot.md" in committed
+    assert "raw/assets/bravo-shot.png" in committed
+
+
+def test_commit_section_lock_is_not_held_during_the_llm_passes(
+    harness: IngestHarness, tmp_path: Path
+) -> None:
+    """The working-tree lock wraps only the commit section, never the LLM passes (#85).
+
+    A wide lock held across analyse/classify/curate would serialise slow captures
+    end-to-end (the rejected design). This asserts the lock is FREE while a capture sits
+    in its analyse pass: a probe thread acquires ``capture_lock`` non-blocking while the
+    pinned capture is inside ``analyse_images``. If the lock spanned the LLM window the
+    probe could not acquire it.
+    """
+    gate = threading.Event()
+    entered = threading.Event()
+    ingestor = _image_ingestor(
+        harness,
+        tmp_path,
+        slug="probe-shot",
+        filename="probe.png",
+        image_bytes=b"\x89PNG\r\n\x1a\n" + b"probe-bytes",
+        analyser=_BlockingAnalyser(gate, entered),
+    )
+
+    def run() -> None:
+        ingestor.ingest(
+            Capture(path=tmp_path / "probe.png", filename="probe.png", source="slack")
+        )
+
+    # The RLock's non-blocking acquire is not on the AbstractContextManager facade type.
+    lock = cast(Any, harness.git.capture_lock)
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert entered.wait(timeout=5.0)
+        # The capture is parked in analyse; the commit-section lock must be FREE.
+        acquired = lock.acquire(blocking=False)
+        assert acquired, "capture_lock held during the analyse LLM pass (wide lock!)"
+        lock.release()
+    finally:
+        gate.set()
+        worker.join(timeout=5.0)
+    assert not worker.is_alive()
 
 
 def test_multi_image_batch_is_one_page_with_all_images(
@@ -3966,14 +4183,21 @@ class _RecordingGitSync(GitSync):
         super().__init__(*args, **kwargs)
         self.pull_calls = 0
         self.commit_calls = 0
+        self.stage_calls = 0
 
     def pull(self, *, timeout: float = 120.0) -> Any:  # noqa: D102 - recorder
         self.pull_calls += 1
         return super().pull(timeout=timeout)
 
-    def commit(self, message: str, *, timeout: float = 120.0) -> Any:  # noqa: D102
+    def stage(self, paths: Any, *, timeout: float = 30.0) -> Any:  # noqa: D102
+        self.stage_calls += 1
+        return super().stage(paths, timeout=timeout)
+
+    def commit(  # noqa: D102
+        self, message: str, *, paths: Any = None, timeout: float = 120.0
+    ) -> Any:
         self.commit_calls += 1
-        return super().commit(message, timeout=timeout)
+        return super().commit(message, paths=paths, timeout=timeout)
 
 
 def test_ingest_as_is_skips_curate_and_files_verbatim(harness: IngestHarness) -> None:

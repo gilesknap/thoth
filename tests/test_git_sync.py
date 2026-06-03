@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -265,6 +266,46 @@ def test_vault_root_and_bin_path_properties(git_vault: GitVault) -> None:
     assert (git_vault.sync.bin_path / VAULT_COMMIT_SCRIPT).is_file()
 
 
+def test_capture_lock_is_the_same_reentrant_instance(git_vault: GitVault) -> None:
+    """``capture_lock`` is one stable, re-entrant per-instance mutex (issue #85).
+
+    Re-entrancy matters because the held commit section nests :meth:`commit` /
+    :meth:`pull` while the lock is held; a plain ``Lock`` would self-deadlock. Acquiring
+    it twice from the same thread (nested ``with``) must not block, and the property
+    must return the SAME object each time (the per-working-tree mutex).
+    """
+    lock = git_vault.sync.capture_lock
+    assert git_vault.sync.capture_lock is lock
+    acquired = False
+    with lock:
+        with lock:  # re-entrant acquire from the same thread does not deadlock
+            acquired = True
+    assert acquired
+
+
+def test_capture_lock_blocks_a_second_thread_while_held(git_vault: GitVault) -> None:
+    """While one thread holds ``capture_lock`` a second thread cannot enter it (#85).
+
+    This is the serialisation the narrow commit section relies on: two captures' commit
+    sequences cannot interleave on the shared working tree / ``.git/index.lock``.
+    """
+    lock = git_vault.sync.capture_lock
+    entered_second = threading.Event()
+
+    def grab() -> None:
+        with lock:
+            entered_second.set()
+
+    with lock:
+        worker = threading.Thread(target=grab)
+        worker.start()
+        # Held by this thread: the second is blocked out.
+        assert not entered_second.wait(timeout=0.3)
+    # Released: the second thread now acquires it promptly.
+    assert entered_second.wait(timeout=2.0)
+    worker.join(timeout=2.0)
+
+
 def test_pkm_vault_forced_to_config_even_with_ambient_env(tmp_path: Path) -> None:
     """PKM_VAULT in the child env is the config path, not an ambient value.
 
@@ -333,7 +374,9 @@ def test_commit_happy_path_pushes_and_advances_origin(git_vault: GitVault) -> No
     (git_vault.work / "entities" / "foo.md").parent.mkdir(parents=True, exist_ok=True)
     (git_vault.work / "entities" / "foo.md").write_text("# Foo\n")
 
-    result = git_vault.sync.commit("add foo")
+    # The Slack path passes the EXACT paths it wrote (explicit-path staging, issue #85);
+    # the script stages only those, never ``add -A``.
+    result = git_vault.sync.commit("add foo", paths=["entities/foo.md"])
 
     assert result.returncode == 0
     assert result.committed is True
@@ -364,7 +407,7 @@ def test_commit_conflict_raises_and_leaves_clean_tree(git_vault: GitVault) -> No
     (git_vault.work / "clash.md").write_text("APPLIANCE-LINE\n")
 
     with pytest.raises(VaultConflictError) as exc_info:
-        git_vault.sync.commit("appliance writes clash")
+        git_vault.sync.commit("appliance writes clash", paths=["clash.md"])
 
     # The conflict sentinel is surfaced for the Slack report.
     assert "VAULT CONFLICT" in str(exc_info.value)
@@ -382,7 +425,7 @@ def test_commit_conflict_is_subclass_of_gitsyncerror(git_vault: GitVault) -> Non
     git_vault.push_from_other("clash.md", "A\n", "obsidian")
     (git_vault.work / "clash.md").write_text("B\n")
     with pytest.raises(GitSyncError):
-        git_vault.sync.commit("appliance")
+        git_vault.sync.commit("appliance", paths=["clash.md"])
 
 
 def test_commit_generic_failure_is_not_conflict(git_vault: GitVault) -> None:
@@ -400,7 +443,7 @@ def test_commit_generic_failure_is_not_conflict(git_vault: GitVault) -> None:
     (git_vault.work / "note.md").write_text("content\n")
 
     with pytest.raises(GitSyncError) as exc_info:
-        sync.commit("will fail at push")
+        sync.commit("will fail at push", paths=["note.md"])
     assert not isinstance(exc_info.value, VaultConflictError)
     assert "VAULT CONFLICT" not in str(exc_info.value)
     assert "vault-commit" in str(exc_info.value)
@@ -418,7 +461,7 @@ def test_commit_pushes_to_origin_when_push_remote_unset(git_vault: GitVault) -> 
     before = git_vault.origin_sha()
     (git_vault.work / "via-origin.md").write_text("filed via origin\n")
 
-    result = sync.commit("file via origin")
+    result = sync.commit("file via origin", paths=["via-origin.md"])
 
     assert result.committed is True
     assert git_vault.origin_sha() != before
@@ -470,7 +513,7 @@ def test_commit_pull_then_commit_round_trip(git_vault: GitVault) -> None:
     git_vault.push_from_other("a.md", "alpha\n", "obsidian adds a")
     git_vault.sync.pull()
     (git_vault.work / "b.md").write_text("beta\n")
-    result = git_vault.sync.commit("appliance adds b")
+    result = git_vault.sync.commit("appliance adds b", paths=["b.md"])
     assert result.committed is True
     # Fresh verification clone sees both files.
     verify = git_vault.work.parent / "verify"
@@ -494,7 +537,7 @@ def test_credential_helper_never_invoked_for_local_remote(git_vault: GitVault) -
     _git(git_vault.work, "config", "credential.helper", POISON_HELPER)
     (git_vault.work / "safe.md").write_text("safe\n")
 
-    result = git_vault.sync.commit("push without credentials")
+    result = git_vault.sync.commit("push without credentials", paths=["safe.md"])
 
     assert result.committed is True
     assert result.returncode == 0
@@ -512,7 +555,7 @@ def test_run_operates_on_vault_root_not_pytest_cwd(git_vault: GitVault) -> None:
     """
     assert Path.cwd() != git_vault.work
     (git_vault.work / "cwd-proof.md").write_text("x\n")
-    result = git_vault.sync.commit("cwd proof")
+    result = git_vault.sync.commit("cwd proof", paths=["cwd-proof.md"])
     assert result.committed is True
     verify = git_vault.work.parent / "verify-cwd"
     _git(git_vault.work.parent, "clone", str(git_vault.bare), str(verify))
