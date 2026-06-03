@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>2. Adopt python-copier-template for project structure &#8212; thoth 0.5.1.dev45+g35d2181a3 documentation</title>
+    <title>11. MCP HTTP transport with tiered authentication &#8212; thoth 0.5.1.dev45+g35d2181a3 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=30646c52"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0002-switched-to-python-copier-template';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0011-mcp-http-transport-and-tiered-auth';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="3. Slack free-text intent gate (route prose to the right engine)" href="0003-slack-free-text-intent-gate.html" />
-    <link rel="prev" title="1. Record architecture decisions" href="0001-record-architecture-decisions.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="10. CLI capture: an as-is low-touch import mode and a transient budget override" href="0010-capture-as-is-low-touch-import.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -425,7 +425,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../architecture-review.html">Architecture review notes</a></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../decisions.html">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">2. Adopt python-copier-template for project structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
@@ -434,7 +434,7 @@
 <li class="toctree-l2"><a class="reference internal" href="0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l2"><a class="reference internal" href="0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">11. MCP HTTP transport with tiered authentication</a></li>
 </ul>
 </details></li>
 </ul>
@@ -483,7 +483,7 @@
     
     <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">2. Adopt python-copier-template for project structure</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">11. MCP HTTP transport with tiered authentication</span></li>
   </ul>
 </nav>
 </div>
@@ -500,33 +500,107 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="adopt-python-copier-template-for-project-structure">
-<h1>2. Adopt python-copier-template for project structure<a class="headerlink" href="#adopt-python-copier-template-for-project-structure" title="Link to this heading">#</a></h1>
+  <section id="mcp-http-transport-with-tiered-authentication">
+<h1>11. MCP HTTP transport with tiered authentication<a class="headerlink" href="#mcp-http-transport-with-tiered-authentication" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-03</p>
 <section id="status">
 <h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
 <p>Accepted</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
-<p>We should use the following <a class="reference external" href="https://github.com/DiamondLightSource/python-copier-template">python-copier-template</a>.
-The template will ensure consistency in developer
-environments and package management.</p>
+<p>thoth’s MCP server (<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code>) has so far spoken only <strong>stdio</strong>: the host (Claude
+Code, locally) spawns <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code> as a child process and the OS process boundary is the
+trust boundary — there is no socket, no authentication, and only a local user who can
+already run the binary can reach the tools. That is the right default and it stays the
+default.</p>
+<p>But the appliance runs headless on a VPS, and the owner wants to reach the same seven
+<code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tools from <strong>claude.ai (web + mobile)</strong> and from a <strong>remote Claude Code</strong>. That
+needs a network transport. Three things make this more than “open a port”:</p>
+<ol class="arabic simple">
+<li><p><strong>A network socket is an attack surface.</strong> The MCP tools are a closed surface (SPEC
+section 3) — no shell, no arbitrary file access, every path vault-confined — but they
+still <em>write the vault</em> and <em>spend the LLM budget</em>. An unauthenticated socket would
+let anyone who can route to it file pages and burn API spend. So the transport must
+authenticate every request, and it must be <em>impossible to start it unauthenticated</em>.</p></li>
+<li><p><strong>claude.ai connectors do not accept a user-pasted static bearer.</strong> A remote MCP
+client like Claude Code can be configured with a static <code class="docutils literal notranslate"><span class="pre">Authorization:</span> <span class="pre">Bearer</span> <span class="pre">&lt;key&gt;</span></code>
+header. claude.ai’s web/mobile <strong>custom connectors</strong> cannot: they only authenticate a
+remote MCP server through an <strong>OAuth 2.1</strong> flow (discovery, dynamic client
+registration, PKCE). We do not want to <em>build</em> an OAuth authorization server inside
+thoth.</p></li>
+<li><p><strong>The closed-surface model already governs <em>what</em>, not <em>who</em>.</strong> thoth’s authority
+model is the tool surface itself — every caller, however authenticated, can do exactly
+the seven <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> operations and nothing more. Authentication here is purely a
+gate on <em>who reaches the door</em>; it does not need per-user authorization, scopes, or
+roles, because there is only one user and one capability set.</p></li>
+</ol>
 </section>
 <section id="decision">
 <h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
-<p>We have switched to using the template.</p>
+<p><strong>Add an opt-in HTTP transport with two stacked authentication tiers, and delegate
+network exposure and OAuth to Cloudflare rather than building them in thoth.</strong></p>
+<p><strong>Transport.</strong> <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code> gains <code class="docutils literal notranslate"><span class="pre">--transport</span> <span class="pre">stdio|http</span></code> (default <code class="docutils literal notranslate"><span class="pre">stdio</span></code>, byte-for-byte
+unchanged — no socket, host/port ignored). <code class="docutils literal notranslate"><span class="pre">--transport</span> <span class="pre">http</span></code> serves FastMCP’s
+streamable-HTTP app via uvicorn, bound to <code class="docutils literal notranslate"><span class="pre">--host</span></code> (default <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code> — <strong>loopback,
+never <code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code> by default</strong>) and <code class="docutils literal notranslate"><span class="pre">--port</span></code> (default <code class="docutils literal notranslate"><span class="pre">8765</span></code>).</p>
+<p><strong>Tier 1 — static bearer (mandatory for HTTP).</strong> Every HTTP request must carry
+<code class="docutils literal notranslate"><span class="pre">Authorization:</span> <span class="pre">Bearer</span> <span class="pre">&lt;key&gt;</span></code> matching one of the comma-separated keys in
+<code class="docutils literal notranslate"><span class="pre">THOTH_MCP_API_KEYS</span></code> (comma-separated to support rotation). The match is constant-time
+(<code class="docutils literal notranslate"><span class="pre">hmac.compare_digest</span></code>). A missing/invalid bearer is rejected <strong>401 before any tool is
+dispatched</strong>. If <code class="docutils literal notranslate"><span class="pre">--transport</span> <span class="pre">http</span></code> is selected and <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_API_KEYS</span></code> is unset/empty,
+the server <strong>fails fast at startup</strong> — it never binds an unauthenticated socket. This is
+the tier remote Claude Code uses.</p>
+<p><strong>Tier 2 — Cloudflare-Access JWT (opt-in defense-in-depth).</strong> When BOTH
+<code class="docutils literal notranslate"><span class="pre">THOTH_MCP_CF_ACCESS_TEAM_DOMAIN</span></code> and <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_CF_ACCESS_AUD</span></code> are set, the origin
+<em>also</em> requires and validates the <code class="docutils literal notranslate"><span class="pre">Cf-Access-Jwt-Assertion</span></code> header that cloudflared adds:
+signature against the team JWKS (<code class="docutils literal notranslate"><span class="pre">https://&lt;team-domain&gt;/cdn-cgi/access/certs</span></code>), <code class="docutils literal notranslate"><span class="pre">aud</span></code>
+match, <code class="docutils literal notranslate"><span class="pre">exp</span></code> in the future, with the algorithm <strong>pinned to RS256</strong> (rejecting the <code class="docutils literal notranslate"><span class="pre">none</span></code>
+algorithm and RS/HS key-confusion). Unset → bearer-only.</p>
+<p><strong>Exposure + OAuth — Cloudflare, not thoth.</strong> The loopback socket is exposed to the
+internet by a <strong>cloudflared tunnel</strong>, and <strong>claude.ai’s OAuth requirement is satisfied by
+Cloudflare Access “Managed OAuth”</strong> sitting in front of it — Cloudflare is the OAuth 2.1
+authorization server (discovery, DCR, PKCE), not thoth. Cloudflare authenticates the
+human; the Cf-Access JWT (Tier 2) lets the origin verify the request really transited
+Access; the static bearer (Tier 1) is the always-on baseline that also serves the
+non-browser Claude Code path. The Tier-2 wiring is documented as a how-to
+(<code class="docutils literal notranslate"><span class="pre">docs/how-to/deploy-appliance.md</span></code>, placeholders only); thoth ships the <em>enforcement
+hook</em> (env-gated) but no live Cloudflare configuration.</p>
 </section>
 <section id="consequences">
 <h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
-<p>This module will use a fixed set of tools as developed in <code class="docutils literal notranslate"><span class="pre">python-copier-template</span></code>
-and can pull from this template to update the packaging to the latest techniques.</p>
-<p>As such, the developer environment may have changed, the following could be
-different:</p>
 <ul class="simple">
-<li><p>linting</p></li>
-<li><p>formatting</p></li>
-<li><p>pip venv setup</p></li>
-<li><p>CI/CD</p></li>
+<li><p><strong>The local default is untouched.</strong> <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code> (stdio) is byte-for-byte the same
+spawn-as-a-child server; no socket, no key, no behaviour change for the local Claude
+Code path.</p></li>
+<li><p><strong>An HTTP server can never start unauthenticated.</strong> <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_API_KEYS</span></code> is a fail-fast
+precondition checked <em>before</em> the graph is wired or a socket is bound.</p></li>
+<li><p><strong>Two callers, one surface.</strong> Claude Code authenticates with a static bearer;
+claude.ai authenticates through Cloudflare-Access OAuth and the request arrives bearing
+both a bearer (configured on the Access side) and the Cf-Access JWT. Both reach the
+identical seven-tool closed surface — authentication gates <em>who</em>, the surface still
+governs <em>what</em>.</p></li>
+<li><p><strong>No OAuth server in thoth.</strong> We depend on Cloudflare Access Managed OAuth for the
+claude.ai flow rather than implementing RFC 8414 / 7591 / PKCE ourselves. The trade-off
+is a dependency on that Cloudflare feature and on tuning Cloudflare bot rules so OAuth
+discovery is not blocked (documented in the how-to).</p></li>
+<li><p><strong>New optional dependencies</strong> (the <code class="docutils literal notranslate"><span class="pre">runtime</span></code> extra only): <code class="docutils literal notranslate"><span class="pre">uvicorn</span></code> + <code class="docutils literal notranslate"><span class="pre">starlette</span></code> to
+serve the ASGI app, <code class="docutils literal notranslate"><span class="pre">pyjwt[crypto]</span></code> to verify the Cf-Access assertion. CI is unchanged
+(these are absent there; the HTTP wiring is exercised live, the auth primitives are unit
+tested with a throwaway RSA keypair).</p></li>
+<li><p><strong>Defense-in-depth, opt-in.</strong> Running bearer-only (no Cf-Access vars) is supported and
+simplest; turning on Tier 2 hardens the origin against a tunnel misconfiguration that
+ever let a request reach it without transiting Access.</p></li>
+<li><p><strong>DNS-rebinding guard vs the tunnel.</strong> FastMCP’s streamable-HTTP transport enables
+DNS-rebinding protection that, by default, accepts only loopback <code class="docutils literal notranslate"><span class="pre">Host</span></code>/<code class="docutils literal notranslate"><span class="pre">Origin</span></code> headers
+— so the public hostname forwarded by cloudflared would <code class="docutils literal notranslate"><span class="pre">421</span></code>. The deployment resolves
+this by rewriting the origin <code class="docutils literal notranslate"><span class="pre">Host</span></code> to loopback in the tunnel ingress
+(<code class="docutils literal notranslate"><span class="pre">httpHostHeader:</span> <span class="pre">localhost:&lt;port&gt;</span></code>, preferred — the guard stays meaningful), with
+optional <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_ALLOWED_HOSTS</span></code> / <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_ALLOWED_ORIGINS</span></code> env vars that <em>append</em>
+to the loopback defaults as an explicit-allowlist alternative. Verified locally against
+the real <code class="docutils literal notranslate"><span class="pre">mcp</span></code> package: with an allowed <code class="docutils literal notranslate"><span class="pre">Host</span></code>, an authenticated <code class="docutils literal notranslate"><span class="pre">initialize</span></code> round-trips
+over streamable-HTTP through the auth middleware (confirming the bearer gate sits ahead
+of dispatch without breaking the SSE stream).</p></li>
 </ul>
 </section>
 </section>
@@ -542,20 +616,20 @@ different:</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="0001-record-architecture-decisions.html"
+       href="0010-capture-as-is-low-touch-import.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">1. Record architecture decisions</p>
+        <p class="prev-next-title">10. CLI capture: an as-is low-touch import mode and a transient budget override</p>
       </div>
     </a>
     <a class="right-next"
-       href="0003-slack-free-text-intent-gate.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">3. Slack free-text intent gate (route prose to the right engine)</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -589,7 +663,7 @@ different:</p>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0002-switched-to-python-copier-template.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0011-mcp-http-transport-and-tiered-auth.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -604,7 +678,7 @@ different:</p>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/explanations/decisions/0002-switched-to-python-copier-template.md.txt">
+    <a href="../../_sources/explanations/decisions/0011-mcp-http-transport-and-tiered-auth.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

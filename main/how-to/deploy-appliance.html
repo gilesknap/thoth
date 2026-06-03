@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Deploy the thoth appliance &#8212; thoth 0.5.1.dev41+g024c67aae documentation</title>
+    <title>Deploy the thoth appliance &#8212; thoth 0.5.1.dev45+g35d2181a3 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=5891452b"></script>
+    <script src="../_static/documentation_options.js?v=3c691802"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -789,6 +789,114 @@ install<span class="w"> </span>-d<span class="w"> </span>-o<span class="w"> </sp
 </table>
 </div>
 </section>
+<section id="a-optional-the-remote-mcp-http-server">
+<h2>7a. Optional: the remote MCP HTTP server<a class="headerlink" href="#a-optional-the-remote-mcp-http-server" title="Link to this heading">#</a></h2>
+<p>The local MCP transport (<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code>, stdio) needs no service — a local Claude Code spawns
+it as a child process. Install this unit <strong>only</strong> if you want to reach the seven <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code>
+tools from a <em>remote</em> client (claude.ai web/mobile, or a remote Claude Code). It runs
+<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span> <span class="pre">--transport</span> <span class="pre">http</span></code>, which serves bearer-authenticated streamable-HTTP bound to
+<strong>loopback</strong> (<code class="docutils literal notranslate"><span class="pre">127.0.0.1:8765</span></code>); a cloudflared tunnel (section 7b) exposes it. See
+<a class="reference internal" href="../explanations/decisions/0011-mcp-http-transport-and-tiered-auth.html"><span class="doc">11. MCP HTTP transport with tiered authentication</span></a> for the design.</p>
+<p>First add at least one bearer key to <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code> (the server <strong>fails fast</strong> if it is
+unset — it never binds an unauthenticated socket). As <strong><code class="docutils literal notranslate"><span class="pre">pkm</span></code></strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># generate a key and append it; rotate later by adding a second comma-separated value</span>
+<span class="nv">KEY</span><span class="o">=</span><span class="k">$(</span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;import secrets; print(secrets.token_urlsafe(32))&#39;</span><span class="k">)</span>
+<span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;THOTH_MCP_API_KEYS=%s\n&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$KEY</span><span class="s2">&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>/home/pkm/.thoth/.env
+chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/home/pkm/.thoth/.env
+</pre></div>
+</div>
+<p>Then install and enable the unit. As <strong>root</strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cp<span class="w"> </span>/opt/thoth/deploy/thoth-mcp.service<span class="w"> </span>/etc/systemd/system/
+systemctl<span class="w"> </span>daemon-reload
+systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>thoth-mcp.service
+systemctl<span class="w"> </span>status<span class="w"> </span>thoth-mcp.service<span class="w"> </span>--no-pager
+</pre></div>
+</div>
+<p>Like the other units it is pre-hardened and runs as <code class="docutils literal notranslate"><span class="pre">pkm</span></code>, reading secrets only from
+<code class="docutils literal notranslate"><span class="pre">/home/pkm/.thoth/.env</span></code>. A remote Claude Code reaches it with that bearer:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># from your laptop, once the tunnel (7b) is up — replace &lt;public-hostname&gt; and &lt;key&gt;</span>
+claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>--transport<span class="w"> </span>http<span class="w"> </span>thoth<span class="w"> </span>https://&lt;public-hostname&gt;/mcp<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--header<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;key&gt;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="b-optional-expose-it-with-cloudflared-cloudflare-access">
+<h2>7b. Optional: expose it with cloudflared + Cloudflare Access<a class="headerlink" href="#b-optional-expose-it-with-cloudflared-cloudflare-access" title="Link to this heading">#</a></h2>
+<p>claude.ai’s web/mobile custom connectors authenticate a remote MCP server through an
+<strong>OAuth 2.1</strong> flow, not a pasted bearer — so to use the connector from claude.ai, front
+the loopback server with a <strong>cloudflared tunnel</strong> and <strong>Cloudflare Access “Managed OAuth”</strong>
+(Cloudflare is the OAuth authorization server; thoth ships only the env-gated JWT
+enforcement hook). Everything below uses <strong>placeholders</strong> — substitute your own domain,
+team, and tags; never commit the real values.</p>
+<ol class="arabic">
+<li><p><strong>Install cloudflared and create a tunnel</strong> (as root):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># install cloudflared per Cloudflare&#39;s apt/rpm instructions, then:</span>
+cloudflared<span class="w"> </span>tunnel<span class="w"> </span>login
+cloudflared<span class="w"> </span>tunnel<span class="w"> </span>create<span class="w"> </span>thoth-mcp
+cloudflared<span class="w"> </span>tunnel<span class="w"> </span>route<span class="w"> </span>dns<span class="w"> </span>thoth-mcp<span class="w"> </span>&lt;public-hostname&gt;<span class="w">   </span><span class="c1"># e.g. mcp.example.com</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Point the tunnel ingress at the loopback MCP server.</strong> In
+<code class="docutils literal notranslate"><span class="pre">/etc/cloudflared/config.yml</span></code> (placeholders):</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">tunnel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;tunnel-uuid&gt;</span>
+<span class="nt">credentials-file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/cloudflared/&lt;tunnel-uuid&gt;.json</span>
+
+<span class="nt">ingress</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;public-hostname&gt;</span><span class="w">          </span><span class="c1"># e.g. mcp.example.com</span>
+<span class="w">    </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://127.0.0.1:8765</span><span class="w">       </span><span class="c1"># matches thoth-mcp.service ExecStart</span>
+<span class="w">    </span><span class="nt">originRequest</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">httpHostHeader</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">localhost:8765</span><span class="w">     </span><span class="c1"># see the DNS-rebinding note below</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http_status:404</span>
+</pre></div>
+</div>
+<p>Run it as a service: <code class="docutils literal notranslate"><span class="pre">cloudflared</span> <span class="pre">service</span> <span class="pre">install</span> <span class="pre">&amp;&amp;</span> <span class="pre">systemctl</span> <span class="pre">enable</span> <span class="pre">--now</span> <span class="pre">cloudflared</span></code>.</p>
+<p><strong>DNS-rebinding / <code class="docutils literal notranslate"><span class="pre">Host</span></code> header (don’t skip this).</strong> FastMCP’s streamable-HTTP
+transport ships DNS-rebinding protection that, by default, only accepts a <strong>loopback</strong>
+<code class="docutils literal notranslate"><span class="pre">Host</span></code> header (<code class="docutils literal notranslate"><span class="pre">127.0.0.1:*</span></code> / <code class="docutils literal notranslate"><span class="pre">localhost:*</span></code>). The tunnel forwards your <em>public</em>
+hostname, so without intervention every real request gets a <code class="docutils literal notranslate"><span class="pre">421</span> <span class="pre">Misdirected</span> <span class="pre">Request</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">httpHostHeader:</span> <span class="pre">localhost:8765</span></code> line above rewrites the origin <code class="docutils literal notranslate"><span class="pre">Host</span></code> back to the
+allowed loopback value — the simplest fix, and it keeps the guard meaningful.
+<em>Alternatively</em> (or if a client also sends an <code class="docutils literal notranslate"><span class="pre">Origin</span></code> the guard rejects), allow the
+public names explicitly in <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code> — these <strong>append to</strong>, never replace, the
+loopback defaults:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># as pkm — only if you are NOT using httpHostHeader above</span>
+<span class="nv">THOTH_MCP_ALLOWED_HOSTS</span><span class="o">=</span>&lt;public-hostname&gt;
+<span class="nv">THOTH_MCP_ALLOWED_ORIGINS</span><span class="o">=</span>https://&lt;public-hostname&gt;
+</pre></div>
+</div>
+<p>During the live verify, watch <code class="docutils literal notranslate"><span class="pre">journalctl</span> <span class="pre">-u</span> <span class="pre">thoth-mcp</span></code> for <code class="docutils literal notranslate"><span class="pre">421</span></code> and adjust whichever
+knob your setup needs.</p>
+</li>
+<li><p><strong>Create a Cloudflare Access application</strong> for <code class="docutils literal notranslate"><span class="pre">&lt;public-hostname&gt;</span></code> (self-hosted),
+enable <strong>Managed OAuth</strong> in its Advanced settings, allow <strong>localhost / loopback
+clients</strong> with redirect <code class="docutils literal notranslate"><span class="pre">http://localhost/*</span></code> (claude.ai uses an ephemeral callback
+port), and add an Access policy permitting your identity (e.g. one-time-PIN to your
+email). Add a <strong>cache rule</strong> to bypass cache for <code class="docutils literal notranslate"><span class="pre">/.well-known/*</span></code> and ensure the
+“Block AI training bots” rule does <strong>not</strong> cover this app, or OAuth discovery is blocked.</p></li>
+<li><p><strong>Turn on origin-side JWT enforcement (Tier 2, defense-in-depth).</strong> Copy the Access
+application’s <strong>Audience (AUD) tag</strong> and your <strong>team domain</strong>, and add to
+<code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code> (placeholders), then restart the unit:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># as pkm — placeholders only, real values from the Cloudflare dashboard</span>
+cat<span class="w"> </span>&gt;&gt;<span class="w"> </span>/home/pkm/.thoth/.env<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<span class="s">THOTH_MCP_CF_ACCESS_TEAM_DOMAIN=&lt;your-team&gt;.cloudflareaccess.com</span>
+<span class="s">THOTH_MCP_CF_ACCESS_AUD=&lt;your-access-application-aud-tag&gt;</span>
+<span class="s">EOF</span>
+chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/home/pkm/.thoth/.env
+sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>thoth-mcp.service
+</pre></div>
+</div>
+<p>With both set, thoth additionally validates the <code class="docutils literal notranslate"><span class="pre">Cf-Access-Jwt-Assertion</span></code> header
+(signature against <code class="docutils literal notranslate"><span class="pre">https://&lt;your-team&gt;.cloudflareaccess.com/cdn-cgi/access/certs</span></code>,
+<code class="docutils literal notranslate"><span class="pre">aud</span></code>, <code class="docutils literal notranslate"><span class="pre">exp</span></code>, RS256-pinned) on every request. Leave them unset to run bearer-only.</p>
+</li>
+<li><p><strong>Add the connector in claude.ai</strong> → Settings → Connectors → <em>Add custom connector</em> →
+MCP server URL <code class="docutils literal notranslate"><span class="pre">https://&lt;public-hostname&gt;/mcp</span></code>, and complete the Access login when
+prompted. Verify discovery first with
+<code class="docutils literal notranslate"><span class="pre">curl</span> <span class="pre">-s</span> <span class="pre">https://&lt;public-hostname&gt;/.well-known/oauth-authorization-server</span></code>.</p></li>
+</ol>
+<p>The env vars added above are also listed (with placeholders) in <code class="docutils literal notranslate"><span class="pre">deploy/.env.example</span></code>.</p>
+</section>
 <section id="first-light">
 <h2>8. First light<a class="headerlink" href="#first-light" title="Link to this heading">#</a></h2>
 <p>The first time the box hits the real services is the first time those seams run for real.
@@ -878,6 +986,8 @@ changes against the real services before merge, see the <code class="docutils li
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-audio-transcription-whisper-optional">5. Install audio transcription (Whisper) — optional</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-secrets-thoth-env">6. Configure secrets — <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-and-enable-the-systemd-units-cron">7. Install and enable the systemd units + cron</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#a-optional-the-remote-mcp-http-server">7a. Optional: the remote MCP HTTP server</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#b-optional-expose-it-with-cloudflared-cloudflare-access">7b. Optional: expose it with cloudflared + Cloudflare Access</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#first-light">8. First light</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrading-redeploying-a-change">Upgrading / redeploying a change</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#see-also">See also</a></li>
