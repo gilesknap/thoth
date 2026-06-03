@@ -1,0 +1,76 @@
+# thoth-mcp.service — the MCP streamable-HTTP server (issue #103).
+#
+# This is the OPTIONAL network MCP surface: `thoth mcp --transport http` serves the same
+# seven `pkm_*` tools as the stdio transport, but over an authenticated HTTP socket so a
+# remote client (claude.ai web/mobile via Cloudflare-Access OAuth, or Claude Code via a
+# static bearer) can reach the vault. Install it ONLY when you want remote MCP; the local
+# stdio transport (`thoth mcp`) needs no service. See docs/how-to/deploy-appliance.md
+# (section 7a) and ADR 0011 for the cloudflared + Cloudflare Access wiring.
+#
+# The socket binds LOOPBACK ONLY (127.0.0.1 — the `thoth mcp` default host). It is NEVER
+# exposed on a public interface directly: a cloudflared tunnel + Cloudflare Access front
+# it (defense-in-depth on top of the mandatory bearer auth). The server fails fast at
+# startup if THOTH_MCP_API_KEYS is unset, so an unauthenticated socket can never bind.
+#
+# Secrets (THOTH_MCP_API_KEYS, and — if Cf-Access enforcement is enabled —
+# THOTH_MCP_CF_ACCESS_TEAM_DOMAIN / THOTH_MCP_CF_ACCESS_AUD) live only in
+# ~/.thoth/.env (chmod 600, gitignored, never in any repo); the unit sources them via
+# EnvironmentFile so no key is ever written into this tracked file. Install it under
+# `/etc/systemd/system/thoth-mcp.service`.
+
+[Unit]
+Description=thoth PKM MCP HTTP server (remote pkm_* tools, bearer-authenticated)
+After=network-online.target
+Wants=network-online.target
+# Hindsight runs as its own always-on unit (thoth-hindsight.service); this server only
+# TALKS to it over 127.0.0.1:9277 and must never spawn it (ProtectHome=read-only below).
+# Order after it and pull it in so a boot brings the index up first.
+After=thoth-hindsight.service
+Wants=thoth-hindsight.service
+
+# Bound restart flapping (mirrors thoth-slack.service): with Restart=on-failure (below),
+# StartLimitBurst restarts within StartLimitIntervalSec then enters a permanent `failed`
+# state instead of looping forever. A fail-fast on a missing THOTH_MCP_API_KEYS therefore
+# stops cleanly rather than crash-looping.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Dedicated unprivileged account for least privilege (SPEC section 12). Create the `pkm`
+# user + group before enabling, or edit these two lines to an existing unprivileged user.
+User=pkm
+Group=pkm
+
+# Non-secret resolution config (SPEC Appendix -> Vault identity). The app resolves the
+# concrete absolute vault path from PKM_VAULT before any file op.
+Environment=PKM_VAULT=/opt/pkm-vault
+Environment=OBSIDIAN_VAULT_NAME=pkm-vault
+Environment=THOTH_HOME=/home/pkm/.thoth
+
+# Secrets (ANTHROPIC_API_KEY, GEMINI_API_KEY, THOTH_MCP_API_KEYS, and the optional
+# THOTH_MCP_CF_ACCESS_TEAM_DOMAIN / THOTH_MCP_CF_ACCESS_AUD, ...) come from the chmod-600
+# .env — never from this tracked unit file. THOTH_MCP_API_KEYS is REQUIRED: the server
+# fails fast at startup if it is unset (it refuses to bind an unauthenticated socket).
+EnvironmentFile=/home/pkm/.thoth/.env
+
+WorkingDirectory=/opt/thoth
+# Loopback bind (the `thoth mcp` default host); the port matches the cloudflared ingress
+# origin in docs/how-to/deploy-appliance.md. Override --host/--port only if you also
+# re-point the tunnel.
+ExecStart=/opt/thoth/.venv/bin/thoth mcp --transport http --host 127.0.0.1 --port 8765
+# Restart on a crash, paced by RestartSec, and bounded by the [Unit] StartLimit*.
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the server reads its config and writes the vault working tree (a pkm_ingest
+# / pkm_write_page call files a page), and shells out to `hindsight-embed` (client-side
+# state under ~/.hindsight and the embedded PG dir ~/.pg0), exactly like thoth-slack.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/pkm-vault /home/pkm/.thoth /home/pkm/.hindsight /home/pkm/.pg0
+
+[Install]
+WantedBy=multi-user.target

@@ -45,7 +45,9 @@ def build_parser() -> ArgumentParser:
 
     Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
     ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
-    stdio MCP server), ``reindex`` (nightly incremental, ``--full-rebuild`` for
+    MCP server -- ``--transport stdio`` by default, ``--transport http`` for the
+    bearer-authenticated network surface on ``--host``/``--port``, issue #103),
+    ``reindex`` (nightly incremental, ``--full-rebuild`` for
     recovery, ``--budget`` for a transient cap override, issue #95), ``summary``
     (``daily`` / ``weekly`` Slack digest), ``lint`` (the
     13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
@@ -76,7 +78,31 @@ def build_parser() -> ArgumentParser:
     )
 
     sub.add_parser("slack", help="run the Slack Socket-Mode capture/retrieve daemon")
-    sub.add_parser("mcp", help="serve the pkm_* tools over stdio MCP")
+
+    mcp = sub.add_parser("mcp", help="serve the pkm_* tools over MCP (stdio or HTTP)")
+    mcp.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="stdio (default, spawn-as-child for Claude Code) or http (network "
+        "streamable-HTTP, bearer-authenticated; THOTH_MCP_API_KEYS required) (#103)",
+    )
+    # Defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST/PORT; kept as literals here so
+    # parsing --help never imports the (heavy, mcp-dependent) server module. Loopback by
+    # default by design: network exposure is delegated to cloudflared + Cloudflare
+    # Access (ADR 0011), never a raw 0.0.0.0 socket.
+    mcp.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP bind address (http transport only); loopback by default -- expose "
+        "via cloudflared + Cloudflare Access, never bind 0.0.0.0 directly (#103)",
+    )
+    mcp.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="HTTP listen port (http transport only)",
+    )
 
     reindex = sub.add_parser("reindex", help="reindex Hindsight from the vault")
     reindex.add_argument(
@@ -269,14 +295,23 @@ def run_slack(namespace: Namespace, config: Config) -> None:
 
 
 def run_mcp(namespace: Namespace, config: Config) -> None:
-    """Build the MCP context and serve over stdio (``thoth mcp``).
+    """Build the MCP context and serve over the chosen transport (``thoth mcp``).
 
     Delegates to :func:`thoth.mcp_server.run`, which wires its own collaborator graph
-    from ``config`` and serves the ``pkm_*`` tools over stdio (blocking).
+    from ``config`` and serves the ``pkm_*`` tools (blocking). ``--transport stdio``
+    (the default) is the byte-for-byte-unchanged spawn-as-child model Claude Code uses;
+    ``--transport http`` serves bearer-authenticated streamable-HTTP on
+    ``--host``:``--port`` (loopback by default), failing fast if ``THOTH_MCP_API_KEYS``
+    is unset (issue #103).
     """
     from . import mcp_server
 
-    mcp_server.run(config)
+    mcp_server.run(
+        config,
+        transport=namespace.transport,
+        host=namespace.host,
+        port=namespace.port,
+    )
 
 
 def run_reindex(namespace: Namespace, config: Config) -> None:

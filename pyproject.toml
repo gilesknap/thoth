@@ -38,7 +38,14 @@ runtime = [
     "firecrawl-py",
     "mcp",
     "pillow",
+    # MCP HTTP transport (issue #103): uvicorn serves FastMCP's streamable-HTTP ASGI app,
+    # starlette provides the auth middleware, and pyjwt[crypto] verifies the Cloudflare-
+    # Access assertion JWT (RS256). starlette ships with mcp/uvicorn but is pinned
+    # explicitly since thoth.mcp_auth imports it directly.
+    "pyjwt[crypto]",
     "slack-bolt",
+    "starlette",
+    "uvicorn",
 ]
 
 [dependency-groups]
@@ -47,6 +54,12 @@ dev = [
     "myst-parser",
     "pillow",
     "pre-commit",
+    # pyjwt[crypto] + starlette are also runtime dependencies (issue #103); they are in
+    # the dev group too so the deterministic auth tests run in the GATE without the full
+    # runtime extra: pyjwt[crypto] for the Cf-Access JWT unit tests (throwaway RSA keypair
+    # + stubbed JWKS) and starlette for the bearer middleware tests.
+    "pyjwt[crypto]",
+    "starlette",
     "pydata-sphinx-theme>=0.12",
     "pyright",
     "pytest",

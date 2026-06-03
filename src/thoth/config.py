@@ -136,6 +136,9 @@ class Config:
     daily_llm_budget: int
     image_resize_threshold_bytes: int
     max_analyse_images: int
+    mcp_api_keys: str | None
+    mcp_cf_access_team_domain: str | None
+    mcp_cf_access_aud: str | None
 
     @property
     def state_db_path(self) -> Path:
@@ -207,6 +210,51 @@ class Config:
                 "SLACK_CAPTURE_CHANNEL is required to run the Slack daemon but is unset"
             )
         return self.slack_capture_channel
+
+    def mcp_api_key_set(self) -> frozenset[str]:
+        """Parse ``THOTH_MCP_API_KEYS`` into the accepted bearer-key set (issue #103).
+
+        The HTTP transport (``thoth mcp --transport http``) authenticates every request
+        with a static ``Authorization: Bearer <key>`` (Tier 1). Multiple keys are
+        comma-separated so a key can be rotated without downtime (add the new one, let
+        clients cut over, then drop the old one). Surrounding whitespace and blank
+        entries are dropped; an unset/empty var yields the empty set, which the caller
+        treats as "fail fast, never bind an unauthenticated socket".
+
+        Returns:
+            The frozenset of non-empty bearer keys (empty when unconfigured).
+        """
+        raw = self.mcp_api_keys
+        if not raw:
+            return frozenset()
+        return frozenset(key.strip() for key in raw.split(",") if key.strip())
+
+    def require_mcp_api_keys(self) -> frozenset[str]:
+        """Return the bearer-key set or raise :class:`ConfigError` if none are set.
+
+        Called when starting the HTTP transport: an unauthenticated network socket must
+        never bind (issue #103), so an unset/empty ``THOTH_MCP_API_KEYS`` is a fail-fast
+        startup error rather than a silently-open server.
+        """
+        keys = self.mcp_api_key_set()
+        if not keys:
+            raise ConfigError(
+                "THOTH_MCP_API_KEYS is required for the MCP HTTP transport (at least "
+                "one bearer key) but is unset; refusing to bind an unauthenticated "
+                "socket"
+            )
+        return keys
+
+    def mcp_cf_access_enabled(self) -> bool:
+        """Return ``True`` when Cloudflare-Access JWT enforcement is configured.
+
+        The Cf-Access second factor (Tier 2 defense-in-depth, issue #103) is *opt-in*:
+        it is enabled only when BOTH ``THOTH_MCP_CF_ACCESS_TEAM_DOMAIN`` and
+        ``THOTH_MCP_CF_ACCESS_AUD`` are set. With either unset the HTTP transport is
+        bearer-only (the cloudflared tunnel + Access still front it in production; this
+        flag governs whether the origin *also* validates the signed assertion header).
+        """
+        return bool(self.mcp_cf_access_team_domain and self.mcp_cf_access_aud)
 
     def alert_target(self) -> str | None:
         """Resolve where unattended error/heartbeat alerts are posted (issue #15).
@@ -357,6 +405,9 @@ def load_config(
             default=DEFAULT_MAX_ANALYSE_IMAGES,
             name="THOTH_MAX_ANALYSE_IMAGES",
         ),
+        mcp_api_keys=lookup("THOTH_MCP_API_KEYS"),
+        mcp_cf_access_team_domain=lookup("THOTH_MCP_CF_ACCESS_TEAM_DOMAIN"),
+        mcp_cf_access_aud=lookup("THOTH_MCP_CF_ACCESS_AUD"),
     )
 
 
