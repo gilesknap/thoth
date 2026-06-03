@@ -1,0 +1,844 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Set up the Slack app &#8212; thoth 0.6.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
+
+    <script src="../_static/documentation_options.js?v=8fa8b3e9"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=30646c52"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'how-to/slack-setup';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.6.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="icon" href="../_static/dls-logo.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Explanations" href="../explanations.html" />
+    <link rel="prev" title="Recover from a lost VPS" href="recovery.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.6.0" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/dls-logo.svg" class="logo__image only-light" alt=""/>
+    <img src="../_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">thoth</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../tutorials.html">
+    Tutorials
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../how-to.html">
+    How-to Guides
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../explanations.html">
+    Explanations
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../reference.html">
+    Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/gilesknap/thoth" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/thoth" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fas fa-cube fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../tutorials.html">
+    Tutorials
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../how-to.html">
+    How-to Guides
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../explanations.html">
+    Explanations
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../reference.html">
+    Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/gilesknap/thoth" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/thoth" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fas fa-cube fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item pst-sidebar-collapse"><button id="pst-collapse-sidebar-button" aria-expanded="true" aria-controls="pst-primary-sidebar"><svg class="pst-icon svg-inline--fa" role="img" aria-hidden="true" focusable="false" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <path fill="currentColor" d="M3 15.5C2.36232 15.5 1.74874 15.2564 1.28478 14.8189C0.820828 14.3815 0.541576 13.7832 0.504167 13.1467L0.5 13L0.5 3C0.499965 2.36232 0.743605 1.74874 1.18107 1.28478C1.61854 0.820828 2.21676 0.541576 2.85333 0.504167L3 0.5L13 0.5C13.6377 0.499965 14.2513 0.743605 14.7152 1.18107C15.1792 1.61854 15.4584 2.21676 15.4958 2.85333L15.5 3L15.5 13C15.5 13.6377 15.2564 14.2513 14.8189 14.7152C14.3815 15.1792 13.7832 15.4584 13.1467 15.4958L13 15.5L3 15.5ZM3 13.8333L10.5 13.8333L10.5 2.16667L3 2.16667C2.79589 2.16669 2.59889 2.24163 2.44636 2.37726C2.29383 2.5129 2.19638 2.69979 2.1725 2.9025L2.16667 3L2.16667 13C2.16669 13.2041 2.24163 13.4011 2.37726 13.5536C2.5129 13.7062 2.69979 13.8036 2.9025 13.8275L3 13.8333ZM6.65583 10.325L6.5775 10.2558L4.91083 8.58917C4.76735 8.44567 4.68116 8.25476 4.66843 8.05223C4.65569 7.84971 4.71729 7.6495 4.84167 7.48917L4.91083 7.41083L6.5775 5.74417C6.72747 5.59471 6.9287 5.50794 7.14032 5.50148C7.35194 5.49502 7.55809 5.56935 7.7169 5.70937C7.8757 5.8494 7.97525 6.04463 7.99533 6.25539C8.01541 6.46616 7.95451 6.67667 7.825 6.84417L7.75583 6.9225L6.67917 8L7.75583 9.0775C7.89931 9.22099 7.98551 9.41191 7.99824 9.61443C8.01097 9.81695 7.94938 10.0172 7.825 10.1775L7.75583 10.2558C7.61234 10.3993 7.42142 10.4855 7.2189 10.4982C7.01638 10.511 6.81617 10.4494 6.65583 10.325Z"/>
+  </svg>
+  <span class="pst-collapse-sidebar-label">Collapse Sidebar</span>
+  <span class="pst-expand-sidebar-label">Expand Sidebar</span>
+</button></div>
+        <div class="sidebar-primary-item">
+
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="contribute.html">Contribute to the project</a></li>
+<li class="toctree-l1"><a class="reference internal" href="deploy-appliance.html">Deploy the thoth appliance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="first-light.html">First-light smoke checklist</a></li>
+<li class="toctree-l1"><a class="reference internal" href="import-existing-files.html">Import existing files and folders (<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code>)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">Recover from a lost VPS</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Set up the Slack app</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../how-to.html" class="nav-link">How-to Guides</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Set up the Slack app</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="set-up-the-slack-app">
+<h1>Set up the Slack app<a class="headerlink" href="#set-up-the-slack-app" title="Link to this heading">#</a></h1>
+<p>thoth’s primary capture/retrieve surface is a Slack bot (SPEC sections 6, 7, 10): in <strong>one
+dedicated private channel</strong> (just you and the bot) you post a URL, a file, a note, or a
+question, and it files to (or answers from) your vault — each post handled in <strong>its own
+thread</strong> (issue #61). This guide creates that Slack app <strong>from an embedded manifest</strong>,
+turns on Socket Mode, wires the two tokens thoth reads, and points thoth at the capture
+channel. It is the prerequisite for <a class="reference internal" href="first-light.html"><span class="doc">First-light smoke checklist</span></a> §3 (the live round-trip).</p>
+<p>thoth connects over <strong>Socket Mode</strong> (an outbound WebSocket), so the app needs <em>no</em> public
+URL, no inbound webhook, and no request-URL verification – it runs fine on a VPS behind a
+firewall. Two tokens are involved: a <strong>bot token</strong> (<code class="docutils literal notranslate"><span class="pre">xoxb-…</span></code>, the app’s identity) and an
+<strong>app-level token</strong> (<code class="docutils literal notranslate"><span class="pre">xapp-…</span></code>, scope <code class="docutils literal notranslate"><span class="pre">connections:write</span></code>, which opens the Socket Mode
+connection).</p>
+<p><strong>Why a private channel?</strong> A private channel with just you and the bot renders the same
+across mobile and web, gives a clean per-topic timeline, and lets per-conversation state be
+keyed by <strong>thread</strong> — so two interleaved topics never clobber each other’s “reply <em>y</em> to
+save” (issue #61).</p>
+<section id="create-the-app-from-the-manifest">
+<h2>1. Create the app from the manifest<a class="headerlink" href="#create-the-app-from-the-manifest" title="Link to this heading">#</a></h2>
+<ol class="arabic simple">
+<li><p>Go to <a class="reference external" href="https://api.slack.com/apps">https://api.slack.com/apps</a> → <strong>Create New App</strong> → <strong>From an app manifest</strong>.</p></li>
+<li><p>Pick your workspace.</p></li>
+<li><p>Paste the manifest below (JSON tab) and create the app.</p></li>
+</ol>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;display_information&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Thoth&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your thoth PKM on Slack&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;features&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;bot_user&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;display_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Thoth&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;always_online&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;oauth_config&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;scopes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;bot&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="s2">&quot;chat:write&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s2">&quot;groups:history&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s2">&quot;groups:read&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s2">&quot;files:read&quot;</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;settings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;event_subscriptions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;bot_events&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="s2">&quot;message.groups&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s2">&quot;file_shared&quot;</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;interactivity&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;is_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;socket_mode_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;token_rotation_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Why exactly these scopes/events (no dead scopes).</strong> They are trimmed to what
+<code class="docutils literal notranslate"><span class="pre">thoth.slack_app</span></code> actually does, so the consent screen claims nothing the bot does not use:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">chat:write</span></code> — post the reply (in-thread), and <strong>edit it in place</strong> while a slow
+capture/answer runs (the placeholder → <code class="docutils literal notranslate"><span class="pre">chat.update</span></code> processing feedback, see §6).
+<code class="docutils literal notranslate"><span class="pre">chat.update</span></code> needs no extra scope beyond <code class="docutils literal notranslate"><span class="pre">chat:write</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">groups:history</span></code> — receive the <code class="docutils literal notranslate"><span class="pre">message.groups</span></code> event for messages in the <strong>private
+channel</strong> the bot is invited to (the capture/question/reply).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">groups:read</span></code> — read the private channel’s basic metadata (needed alongside
+<code class="docutils literal notranslate"><span class="pre">groups:history</span></code> to subscribe to its message events).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">files:read</span></code> — download an uploaded file’s bytes from its private URL (an upload arrives
+as a <code class="docutils literal notranslate"><span class="pre">message</span></code>/<code class="docutils literal notranslate"><span class="pre">file_share</span></code> event carrying the file objects; thoth fetches the bytes
+server-side with an authenticated <code class="docutils literal notranslate"><span class="pre">GET</span></code>).</p></li>
+<li><p>event <code class="docutils literal notranslate"><span class="pre">message.groups</span></code> — the private-channel text/upload/thread-reply the bot routes.</p></li>
+<li><p>event <code class="docutils literal notranslate"><span class="pre">file_shared</span></code> — Slack also emits this stub for every upload; thoth <strong>acks it as a
+no-op</strong> (it carries only a file id, no download URL or conversation channel), so the
+upload is ingested from the <code class="docutils literal notranslate"><span class="pre">message</span></code>/<code class="docutils literal notranslate"><span class="pre">file_share</span></code> event instead. It is subscribed only
+so Bolt does not log it as unhandled.</p></li>
+</ul>
+<p>The bot does <strong>not</strong> use <code class="docutils literal notranslate"><span class="pre">im:*</span></code> (it has no DM surface), <code class="docutils literal notranslate"><span class="pre">channels:*</span></code> (it lives in a
+<em>private</em> channel, not public ones), <code class="docutils literal notranslate"><span class="pre">reactions:write</span></code> (the baseline feedback edits the
+message rather than reacting), or <code class="docutils literal notranslate"><span class="pre">assistant:write</span></code> (no Slack Assistant pane), so those
+scopes are deliberately omitted.</p>
+</section>
+<section id="enable-socket-mode-and-mint-the-app-level-token">
+<h2>2. Enable Socket Mode and mint the app-level token<a class="headerlink" href="#enable-socket-mode-and-mint-the-app-level-token" title="Link to this heading">#</a></h2>
+<ol class="arabic simple">
+<li><p><strong>Settings → Socket Mode</strong> → toggle <strong>Enable Socket Mode</strong> on (the manifest already
+requests it; confirm it is on).</p></li>
+<li><p>When prompted (or under <strong>Settings → Basic Information → App-Level Tokens</strong>), generate
+an app-level token with the <strong><code class="docutils literal notranslate"><span class="pre">connections:write</span></code></strong> scope. Copy the <code class="docutils literal notranslate"><span class="pre">xapp-…</span></code> value —
+this is <code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code>.</p></li>
+</ol>
+</section>
+<section id="install-to-the-workspace-and-copy-the-bot-token">
+<h2>3. Install to the workspace and copy the bot token<a class="headerlink" href="#install-to-the-workspace-and-copy-the-bot-token" title="Link to this heading">#</a></h2>
+<ol class="arabic simple">
+<li><p><strong>Settings → Install App</strong> → <strong>Install to Workspace</strong> → authorise.</p></li>
+<li><p>Copy the <strong>Bot User OAuth Token</strong> (<code class="docutils literal notranslate"><span class="pre">xoxb-…</span></code>) — this is <code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code>.</p></li>
+</ol>
+</section>
+<section id="create-the-private-capture-channel-and-invite-the-bot">
+<h2>4. Create the private capture channel and invite the bot<a class="headerlink" href="#create-the-private-capture-channel-and-invite-the-bot" title="Link to this heading">#</a></h2>
+<p>thoth listens and replies in <strong>one dedicated private channel</strong> (issue #61) — it ignores
+every other conversation it happens to be in. Create it and add the bot:</p>
+<ol class="arabic simple">
+<li><p>In Slack, <strong>create a private channel</strong> (e.g. <code class="docutils literal notranslate"><span class="pre">#thoth</span></code>) — <em>Create channel</em>, then set it
+<strong>Private</strong>. Keep it to just you and the bot; this is your capture/retrieve surface.</p></li>
+<li><p><strong>Invite the bot</strong>: in that channel, type <code class="docutils literal notranslate"><span class="pre">/invite</span> <span class="pre">&#64;Thoth</span></code> (or <em>channel name → Integrations
+→ Add apps</em>).</p></li>
+<li><p><strong>Copy the channel id</strong> (a <code class="docutils literal notranslate"><span class="pre">C…</span></code> / <code class="docutils literal notranslate"><span class="pre">G…</span></code> id, <em>not</em> the <code class="docutils literal notranslate"><span class="pre">#name</span></code>): click the channel name →
+scroll to the bottom of the <strong>About</strong> tab → <strong>Copy</strong> the channel ID. This is
+<code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code>.</p></li>
+</ol>
+<p>The bot replies <strong>in a thread</strong> under each message you post, so a capture/answer and its
+“reply <em>y</em> to save” confirmation stay together per topic. A <code class="docutils literal notranslate"><span class="pre">y</span></code> typed at the channel top
+level (not in the thread) is treated as a new message and will not confirm — reply <em>in the
+thread</em> to save.</p>
+</section>
+<section id="set-the-environment-variables-thoth-reads">
+<h2>5. Set the environment variables thoth reads<a class="headerlink" href="#set-the-environment-variables-thoth-reads" title="Link to this heading">#</a></h2>
+<p>thoth reads its configuration from the environment, optionally seeded from
+<code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code> (chmod 600). The Slack-related variables (verified against
+<code class="docutils literal notranslate"><span class="pre">src/thoth/config.py</span></code>):</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Required?</p></th>
+<th class="head"><p>What it is</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code></p></td>
+<td><p>yes (for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>)</p></td>
+<td><p>The bot token, <code class="docutils literal notranslate"><span class="pre">xoxb-…</span></code>, from step 3.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code></p></td>
+<td><p>yes (for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>)</p></td>
+<td><p>The app-level token, <code class="docutils literal notranslate"><span class="pre">xapp-…</span></code>, scope <code class="docutils literal notranslate"><span class="pre">connections:write</span></code>, from step 2.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code></p></td>
+<td><p>yes (for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>)</p></td>
+<td><p>The private channel id (<code class="docutils literal notranslate"><span class="pre">C…</span></code>/<code class="docutils literal notranslate"><span class="pre">G…</span></code>) the bot listens/replies in, from step 4.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code></p></td>
+<td><p>yes (fail-closed)</p></td>
+<td><p>Comma/space-separated Slack <strong>member ids</strong> (<code class="docutils literal notranslate"><span class="pre">U…</span></code>, not a <code class="docutils literal notranslate"><span class="pre">D…</span></code>/<code class="docutils literal notranslate"><span class="pre">C…</span></code> id) allowed to use the bot. Empty = nobody (fail-closed).</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_SUMMARY_CHANNEL</span></code></p></td>
+<td><p>only for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">summary</span></code></p></td>
+<td><p>The channel/DM id the daily/weekly digest is posted to.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code>, <code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code>, and <code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code> are all required to start
+the daemon — <code class="docutils literal notranslate"><span class="pre">Config.require_slack</span></code> raises naming whichever token is missing, and
+<code class="docutils literal notranslate"><span class="pre">Config.require_slack_capture_channel</span></code> raises if the channel is unset (a pure cutover: there
+is no DM fallback, so the daemon fails fast rather than listen nowhere). <code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code>
+is <strong>fail-closed</strong>: an unset/blank value denies everyone, so set it before you expect a reply
+(in a two-member private channel it is largely moot, but kept). (<code class="docutils literal notranslate"><span class="pre">SLACK_ALERT_CHANNEL</span></code> is an
+optional unattended-error target; when unset, alerts fall back to the first id in
+<code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code> as a DM target — see SPEC section 10.)</p>
+<p>Example <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SLACK_BOT_TOKEN</span><span class="o">=</span>xoxb-your-bot-token
+<span class="nv">SLACK_APP_TOKEN</span><span class="o">=</span>xapp-your-app-level-token
+<span class="nv">SLACK_CAPTURE_CHANNEL</span><span class="o">=</span>C0123CAPTURE
+<span class="nv">SLACK_ALLOWED_USERS</span><span class="o">=</span>U0123ABCD
+<span class="nv">SLACK_SUMMARY_CHANNEL</span><span class="o">=</span>U0123ABCD
+</pre></div>
+</div>
+<section id="find-your-slack-user-id">
+<h3>Find your Slack user id<a class="headerlink" href="#find-your-slack-user-id" title="Link to this heading">#</a></h3>
+<p>The allow-list is keyed by your <strong>user (member) id</strong>, which always starts with <strong><code class="docutils literal notranslate"><span class="pre">U</span></code></strong> (a
+<code class="docutils literal notranslate"><span class="pre">U…</span></code> value like <code class="docutils literal notranslate"><span class="pre">U0123ABCD</span></code>). In Slack: click your avatar → <strong>Profile</strong> → the <strong>⋮</strong> (More)
+menu → <strong>Copy member ID</strong>. The parser tolerates <code class="docutils literal notranslate"><span class="pre">&#64;U…</span></code> and <code class="docutils literal notranslate"><span class="pre">&lt;&#64;U…&gt;</span></code> mention wrappers, so a
+pasted mention works too.</p>
+<p><strong>It must be a <code class="docutils literal notranslate"><span class="pre">U…</span></code> member id, not a conversation id.</strong> A <code class="docutils literal notranslate"><span class="pre">D…</span></code> (direct-message), <code class="docutils literal notranslate"><span class="pre">C…</span></code> /
+<code class="docutils literal notranslate"><span class="pre">G…</span></code> (channel), or a display name / <code class="docutils literal notranslate"><span class="pre">&#64;handle</span></code> will <strong>never</strong> match the id Slack puts on your
+message, so every message is refused with <em>“Sorry, you are not authorised to use this
+assistant.”</em> even though the daemon is otherwise healthy. (<code class="docutils literal notranslate"><span class="pre">D…</span></code> ids are an easy slip — they
+look channel-ish, and a DM id may be lying around from <code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code> /
+<code class="docutils literal notranslate"><span class="pre">SLACK_SUMMARY_CHANNEL</span></code>.) If you hit a persistent “not authorised”, check the <strong><code class="docutils literal notranslate"><span class="pre">U</span></code></strong> prefix
+first.</p>
+<p>No GUI handy? Ask Slack for the capture channel’s members from the box (you + the bot — the
+human <code class="docutils literal notranslate"><span class="pre">U…</span></code> is yours):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-s<span class="w"> </span><span class="s2">&quot;https://slack.com/api/conversations.members?channel=</span><span class="nv">$SLACK_CAPTURE_CHANNEL</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$SLACK_BOT_TOKEN</span><span class="s2">&quot;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="processing-feedback-what-you-will-see">
+<h2>6. Processing feedback (what you will see)<a class="headerlink" href="#processing-feedback-what-you-will-see" title="Link to this heading">#</a></h2>
+<p>A capture is a multi-step chain (<code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">pull</span></code> → classify → extract → curate → Hindsight
+retain+probe → commit+push) and can take 5–15s. So the bot posts an <strong>immediate
+placeholder</strong> the instant it receives your message and then <strong>edits that same message in
+place</strong> with the final result (<code class="docutils literal notranslate"><span class="pre">chat.update</span></code>) — you see a working signal within ~1s rather
+than a dead pause:</p>
+<ul class="simple">
+<li><p>a capture shows <code class="docutils literal notranslate"><span class="pre">⏳</span> <span class="pre">Filing…</span></code>, then becomes the filed-page confirmation;</p></li>
+<li><p>a question shows <code class="docutils literal notranslate"><span class="pre">🔎</span> <span class="pre">Looking…</span></code>, then becomes the answer with its sources.</p></li>
+</ul>
+<p>This needs no extra scope beyond <code class="docutils literal notranslate"><span class="pre">chat:write</span></code>. (If the edit cannot be performed for any
+reason, the bot falls back to posting the reply as a normal message — you always get the
+answer.)</p>
+</section>
+<section id="how-answers-read">
+<h2>7. How answers read<a class="headerlink" href="#how-answers-read" title="Link to this heading">#</a></h2>
+<p>Answers come back as clean, conversational prose. The model refers to your pages by
+<strong>title</strong> (never a raw file path or a dead-in-Slack <code class="docutils literal notranslate"><span class="pre">[[wikilink]]</span></code>), and every reference
+is collected into one concise <code class="docutils literal notranslate"><span class="pre">Sources:</span></code> block at the end — a clickable <code class="docutils literal notranslate"><span class="pre">obsidian://</span></code>
+link plus the vault-relative path per page.</p>
+<p>For a vault-only question the <code class="docutils literal notranslate"><span class="pre">Sources:</span></code> list shows only the pages the answer actually
+<strong>used</strong>, not the whole retrieval candidate set, so the list stays short and honest. (How
+many pages were consulted versus used is recorded in the operator logs for tuning recall.)</p>
+</section>
+<section id="connect-and-verify">
+<h2>8. Connect and verify<a class="headerlink" href="#connect-and-verify" title="Link to this heading">#</a></h2>
+<p>Start the daemon, then post in the capture channel from an allow-listed account:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>thoth<span class="w"> </span>slack
+</pre></div>
+</div>
+<p>Then work through <a class="reference internal" href="first-light.html"><span class="doc">First-light smoke checklist</span></a> §3 — the live round-trip (post in the channel →
+threaded reply, the page lands in the vault, a <code class="docutils literal notranslate"><span class="pre">research:</span></code> question answers and offers to
+save <em>in the thread</em>). A <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code> naming <code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code> / <code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code> /
+<code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code> means that variable is missing; silence usually means Socket Mode is
+off, the app-level token lacks <code class="docutils literal notranslate"><span class="pre">connections:write</span></code>, the bot was not <code class="docutils literal notranslate"><span class="pre">/invite</span></code>d to the
+channel, or <code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code> points at a different channel than the one you posted in.</p>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="recovery.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Recover from a lost VPS</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../explanations.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Explanations</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-the-app-from-the-manifest">1. Create the app from the manifest</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-socket-mode-and-mint-the-app-level-token">2. Enable Socket Mode and mint the app-level token</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-to-the-workspace-and-copy-the-bot-token">3. Install to the workspace and copy the bot token</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-the-private-capture-channel-and-invite-the-bot">4. Create the private capture channel and invite the bot</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#set-the-environment-variables-thoth-reads">5. Set the environment variables thoth reads</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#find-your-slack-user-id">Find your Slack user id</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#processing-feedback-what-you-will-see">6. Processing feedback (what you will see)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-answers-read">7. How answers read</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#connect-and-verify">8. Connect and verify</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/gilesknap/thoth/edit/0.6.0/docs/how-to/slack-setup.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/how-to/slack-setup.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.18.0.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>
