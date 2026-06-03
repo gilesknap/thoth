@@ -95,3 +95,13 @@ hook* (env-gated) but no live Cloudflare configuration.
 - **Defense-in-depth, opt-in.** Running bearer-only (no Cf-Access vars) is supported and
   simplest; turning on Tier 2 hardens the origin against a tunnel misconfiguration that
   ever let a request reach it without transiting Access.
+- **DNS-rebinding guard vs the tunnel.** FastMCP's streamable-HTTP transport enables
+  DNS-rebinding protection that, by default, accepts only loopback `Host`/`Origin` headers
+  — so the public hostname forwarded by cloudflared would `421`. The deployment resolves
+  this by rewriting the origin `Host` to loopback in the tunnel ingress
+  (`httpHostHeader: localhost:<port>`, preferred — the guard stays meaningful), with
+  optional `THOTH_MCP_ALLOWED_HOSTS` / `THOTH_MCP_ALLOWED_ORIGINS` env vars that *append*
+  to the loopback defaults as an explicit-allowlist alternative. Verified locally against
+  the real `mcp` package: with an allowed `Host`, an authenticated `initialize` round-trips
+  over streamable-HTTP through the auth middleware (confirming the bearer gate sits ahead
+  of dispatch without breaking the SSE stream).

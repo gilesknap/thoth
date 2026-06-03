@@ -98,9 +98,14 @@ def bearer_key_accepted(token: str | None, accepted_keys: Iterable[str]) -> bool
     """
     if not token:
         return False
+    # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII *str* input,
+    # and the token is fully attacker-controlled (the Authorization header). Encoding
+    # both sides turns a malformed/non-ASCII token into a clean non-match (-> 401)
+    # instead of an unhandled error (-> 500), while staying constant-time.
+    token_bytes = token.encode("utf-8")
     matched = False
     for key in accepted_keys:
-        if hmac.compare_digest(token, key):
+        if hmac.compare_digest(token_bytes, key.encode("utf-8")):
             matched = True
     return matched
 

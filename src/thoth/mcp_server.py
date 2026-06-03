@@ -871,6 +871,23 @@ def _run_http(server: Any, config: Config, *, host: str, port: int) -> None:
     # FastMCP reads host/port from its settings; set them before building the ASGI app.
     server.settings.host = host
     server.settings.port = port
+    # FastMCP's streamable-HTTP transport enables DNS-rebinding protection that, by
+    # default, only accepts loopback Host/Origin headers. Behind the cloudflared tunnel
+    # the inbound Host is the public hostname, so without this every real connector
+    # request 421s. Append any operator-configured public host(s)/origin(s) to the
+    # loopback defaults (ADR 0011); the alternative is a cloudflared httpHostHeader
+    # rewrite, documented in the deploy how-to.
+    extra_hosts = config.mcp_allowed_hosts_list()
+    extra_origins = config.mcp_allowed_origins_list()
+    if extra_hosts or extra_origins:
+        sec = server.settings.transport_security
+        if sec is None:  # pragma: no cover - FastMCP always provides defaults
+            from mcp.server.transport_security import TransportSecuritySettings
+
+            sec = TransportSecuritySettings()
+            server.settings.transport_security = sec
+        sec.allowed_hosts = [*sec.allowed_hosts, *extra_hosts]
+        sec.allowed_origins = [*sec.allowed_origins, *extra_origins]
     app = server.streamable_http_app()
     # The auth gate runs ahead of the MCP routes: a missing/invalid bearer (or, when
     # Cf-Access is configured, a missing/invalid assertion) yields 401 and the request

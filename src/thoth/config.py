@@ -139,6 +139,8 @@ class Config:
     mcp_api_keys: str | None
     mcp_cf_access_team_domain: str | None
     mcp_cf_access_aud: str | None
+    mcp_allowed_hosts: str | None
+    mcp_allowed_origins: str | None
 
     @property
     def state_db_path(self) -> Path:
@@ -255,6 +257,42 @@ class Config:
         flag governs whether the origin *also* validates the signed assertion header).
         """
         return bool(self.mcp_cf_access_team_domain and self.mcp_cf_access_aud)
+
+    def mcp_allowed_hosts_list(self) -> tuple[str, ...]:
+        """Extra ``Host`` values to allow past FastMCP's DNS-rebinding guard (#103).
+
+        FastMCP's streamable-HTTP transport ships DNS-rebinding protection that by
+        default accepts only loopback ``Host`` headers. Behind the cloudflared tunnel
+        the inbound ``Host`` is the public hostname, so without these entries every real
+        connector request would 421. Set ``THOTH_MCP_ALLOWED_HOSTS`` to the public
+        host(s) (e.g. ``mcp.example.com``, comma-separated) -- or, equivalently, have
+        cloudflared rewrite the ``Host`` to loopback (``httpHostHeader``); see the
+        deploy how-to. The loopback defaults are always kept; these are appended.
+
+        Returns:
+            The extra allowed-host patterns (empty when unconfigured).
+        """
+        raw = self.mcp_allowed_hosts
+        if not raw:
+            return ()
+        return tuple(h.strip() for h in raw.split(",") if h.strip())
+
+    def mcp_allowed_origins_list(self) -> tuple[str, ...]:
+        """Extra ``Origin`` values to allow past the DNS-rebinding guard (#103).
+
+        Companion to :meth:`mcp_allowed_hosts_list` for the ``Origin`` header (checked
+        only when present). Set ``THOTH_MCP_ALLOWED_ORIGINS`` (comma-separated, with
+        scheme, e.g. ``https://mcp.example.com``) if a client sends an ``Origin`` the
+        loopback defaults reject. The loopback defaults are always kept; these are
+        appended.
+
+        Returns:
+            The extra allowed-origin patterns (empty when unconfigured).
+        """
+        raw = self.mcp_allowed_origins
+        if not raw:
+            return ()
+        return tuple(o.strip() for o in raw.split(",") if o.strip())
 
     def alert_target(self) -> str | None:
         """Resolve where unattended error/heartbeat alerts are posted (issue #15).
@@ -408,6 +446,8 @@ def load_config(
         mcp_api_keys=lookup("THOTH_MCP_API_KEYS"),
         mcp_cf_access_team_domain=lookup("THOTH_MCP_CF_ACCESS_TEAM_DOMAIN"),
         mcp_cf_access_aud=lookup("THOTH_MCP_CF_ACCESS_AUD"),
+        mcp_allowed_hosts=lookup("THOTH_MCP_ALLOWED_HOSTS"),
+        mcp_allowed_origins=lookup("THOTH_MCP_ALLOWED_ORIGINS"),
     )
 
 

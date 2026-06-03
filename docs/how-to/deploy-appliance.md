@@ -315,10 +315,31 @@ team, and tags; never commit the real values.
    ingress:
      - hostname: <public-hostname>          # e.g. mcp.example.com
        service: http://127.0.0.1:8765       # matches thoth-mcp.service ExecStart
+       originRequest:
+         httpHostHeader: localhost:8765     # see the DNS-rebinding note below
      - service: http_status:404
    ```
 
    Run it as a service: `cloudflared service install && systemctl enable --now cloudflared`.
+
+   **DNS-rebinding / `Host` header (don't skip this).** FastMCP's streamable-HTTP
+   transport ships DNS-rebinding protection that, by default, only accepts a **loopback**
+   `Host` header (`127.0.0.1:*` / `localhost:*`). The tunnel forwards your *public*
+   hostname, so without intervention every real request gets a `421 Misdirected Request`.
+   The `httpHostHeader: localhost:8765` line above rewrites the origin `Host` back to the
+   allowed loopback value — the simplest fix, and it keeps the guard meaningful.
+   *Alternatively* (or if a client also sends an `Origin` the guard rejects), allow the
+   public names explicitly in `~/.thoth/.env` — these **append to**, never replace, the
+   loopback defaults:
+
+   ```bash
+   # as pkm — only if you are NOT using httpHostHeader above
+   THOTH_MCP_ALLOWED_HOSTS=<public-hostname>
+   THOTH_MCP_ALLOWED_ORIGINS=https://<public-hostname>
+   ```
+
+   During the live verify, watch `journalctl -u thoth-mcp` for `421` and adjust whichever
+   knob your setup needs.
 
 3. **Create a Cloudflare Access application** for `<public-hostname>` (self-hosted),
    enable **Managed OAuth** in its Advanced settings, allow **localhost / loopback

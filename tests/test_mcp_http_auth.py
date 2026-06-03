@@ -94,7 +94,32 @@ def test_bearer_key_accepted_matches_one_of_the_keys() -> None:
     assert bearer_key_accepted("alpha", frozenset()) is False
 
 
+def test_bearer_key_accepted_non_ascii_token_is_rejected_not_error() -> None:
+    """A non-ASCII (attacker-controlled) token yields a clean False, never a TypeError.
+
+    hmac.compare_digest raises on non-ASCII *str* operands; the bytes comparison turns
+    such a token into a 401 instead of an unhandled 500 (issue #103 review).
+    """
+    assert bearer_key_accepted("café", frozenset({"secret"})) is False
+    # A non-ASCII token that genuinely matches a non-ASCII key still works.
+    assert bearer_key_accepted("clé-✓", frozenset({"clé-✓"})) is True
+
+
 # --- config parsing of the new env vars --------------------------------------------
+
+
+def test_config_parses_allowed_hosts_and_origins(tmp_path: Path) -> None:
+    """THOTH_MCP_ALLOWED_HOSTS/_ORIGINS split on commas, trim, and drop blanks."""
+    config = _config(
+        tmp_path,
+        THOTH_MCP_ALLOWED_HOSTS=" mcp.example.com , other:* ,, ",
+        THOTH_MCP_ALLOWED_ORIGINS=" https://mcp.example.com ,, ",
+    )
+    assert config.mcp_allowed_hosts_list() == ("mcp.example.com", "other:*")
+    assert config.mcp_allowed_origins_list() == ("https://mcp.example.com",)
+    # Unset -> empty tuples (loopback defaults are kept as-is downstream).
+    assert _config(tmp_path).mcp_allowed_hosts_list() == ()
+    assert _config(tmp_path).mcp_allowed_origins_list() == ()
 
 
 def test_config_parses_and_rotates_bearer_keys(tmp_path: Path) -> None:
@@ -246,6 +271,16 @@ class _FakeSettings:
     def __init__(self) -> None:
         self.host = ""
         self.port = 0
+        # Mirror FastMCP's real loopback DNS-rebinding defaults so the allowlist-
+        # extension wiring (issue #103) can be asserted against a faithful stand-in.
+        self.transport_security = types.SimpleNamespace(
+            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=[
+                "http://127.0.0.1:*",
+                "http://localhost:*",
+                "http://[::1]:*",
+            ],
+        )
 
 
 class _FakeApp:
@@ -383,6 +418,44 @@ def test_run_http_serves_with_auth_middleware_on_host_port(
     # The auth middleware was installed (exactly one), and stdio.run was NOT called.
     assert len(server.app.middlewares) == 1
     assert server.ran_with == []
+
+
+def test_run_http_extends_dns_rebinding_allowlists_when_configured(
+    tmp_path: Path, fake_mcp_and_uvicorn: dict[str, Any]
+) -> None:
+    """THOTH_MCP_ALLOWED_HOSTS/_ORIGINS append to (not replace) the loopback defaults.
+
+    Without this the public Host header forwarded by cloudflared would 421 against
+    FastMCP's DNS-rebinding guard (issue #103 / ADR 0011).
+    """
+    from thoth import mcp_server
+
+    config = _config(
+        tmp_path,
+        THOTH_MCP_API_KEYS="secret-key",
+        THOTH_MCP_ALLOWED_HOSTS="mcp.example.com",
+        THOTH_MCP_ALLOWED_ORIGINS="https://mcp.example.com",
+    )
+    mcp_server.run(config, _ctx(config), transport="http", port=9001)
+    server = fake_mcp_and_uvicorn["fastmcp"].instances[-1]
+    sec = server.settings.transport_security
+    assert "mcp.example.com" in sec.allowed_hosts
+    assert "https://mcp.example.com" in sec.allowed_origins
+    # Loopback defaults are preserved (append, not replace).
+    assert "localhost:*" in sec.allowed_hosts
+
+
+def test_run_http_leaves_allowlists_at_defaults_when_unset(
+    tmp_path: Path, fake_mcp_and_uvicorn: dict[str, Any]
+) -> None:
+    """With no allowlist env, the transport-security defaults are left untouched."""
+    from thoth import mcp_server
+
+    config = _config(tmp_path, THOTH_MCP_API_KEYS="secret-key")
+    mcp_server.run(config, _ctx(config), transport="http", port=9002)
+    server = fake_mcp_and_uvicorn["fastmcp"].instances[-1]
+    sec = server.settings.transport_security
+    assert sec.allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 
 
 def test_run_http_registers_all_seven_tools(
