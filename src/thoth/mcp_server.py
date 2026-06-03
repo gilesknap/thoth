@@ -366,7 +366,9 @@ def pkm_search(
     Delegates to :meth:`thoth.query.QueryEngine.answer`, rendering the composed answer
     plus its harness-built citations in MCP Markdown style. A
     :class:`~thoth.query.QueryError` (for example no matching page) is surfaced as
-    ``ToolResult(ok=False, ...)``.
+    ``ToolResult(ok=False, ...)``. The structured ``data`` also carries ``provenance``
+    (issue #143): one ``{path, methods, rank}`` entry per consulted page recording which
+    retrieval method(s) -- grep / wikilink / recall -- surfaced it in the RRF blend.
 
     Args:
         ctx: The injected collaborator bundle.
@@ -393,6 +395,13 @@ def pkm_search(
             "answer": result.answer,
             "citations": [c.path for c in result.citations],
             "used_recall": result.used_recall,
+            # Per-page retrieval provenance from the RRF blend (issue #143): which
+            # method(s) surfaced each consulted page and its final rank, so a
+            # programmatic caller sees the grep ∪ recall attribution behind the answer.
+            "provenance": [
+                {"path": p.path, "methods": list(p.methods), "rank": p.rank}
+                for p in result.provenance
+            ],
         },
     )
 

@@ -1,19 +1,29 @@
 """Cost-ordered, vault-only retrieval with harness-built (unfabricable) citations.
 
-This is the read side of the appliance (SPEC section 7). A query is answered by
-walking progressively more expensive retrieval passes and stopping as soon as the
-vault has yielded enough pages:
+This is the read side of the appliance (SPEC section 7). A query is answered by blending
+two retrieval *sources* and letting both vote on the cited set (issue #143):
 
-1. a lexical scan (grep) over the curated knowledge folders
-   (:meth:`QueryEngine.grep`). grep scans the whole file including frontmatter, so a
-   reference page's one-line ``summary:`` gloss (issue #72 / ADR 0008) is matched here
-   -- transparently absorbing what the old ``index.md`` catalog pass used to do.
-2. ``[[wikilink]]`` graph navigation from the pages already found
-   (:meth:`QueryEngine.follow_wikilinks`).
-3. semantic recall via Hindsight (:meth:`QueryEngine.recall_paths`), run as the last
-   pass when the cheaper structural passes returned fewer than ``max_pages`` candidates
-   (thin results), topping up the candidate set; a query whose cheap passes already
-   filled ``max_pages`` never burns a recall call.
+1. a STRUCTURAL source -- a lexical scan (grep) over the curated knowledge folders
+   (:meth:`QueryEngine.grep`) followed by ``[[wikilink]]`` graph navigation from the
+   pages it found (:meth:`QueryEngine.follow_wikilinks`). grep scans the whole file
+   including frontmatter, so a reference page's one-line ``summary:`` gloss (issue #72 /
+   ADR 0008) is matched here -- transparently absorbing what the old ``index.md``
+   catalog pass used to do.
+2. a RECALL source -- semantic recall via Hindsight
+   (:meth:`QueryEngine.recall_paths`). Recall is the expensive, subprocess-backed pass,
+   so it is run **concurrently** with the cheap structural pass (its latency overlaps
+   grep rather than serialising after it) and it ALWAYS gets a vote when ``use_recall``
+   is true -- no "only when results are thin" gate.
+
+The two ranked source lists are merged by **Reciprocal Rank Fusion** (RRF, see
+:data:`RRF_K`): each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it
+appears in, paths sort by that fused score (structural order breaking ties so a
+structural hit leads a recall hit on a tie), and the top ``max_pages`` become the cited
+set. So a strong recall-only hit earns a slot even when grep already filled the page
+budget, a page found by both sources floats to the top, and empty/stale recall collapses
+to pure structural order. Each cited page also carries its retrieval *provenance* -- the
+set of methods (:data:`METHOD_GREP` / :data:`METHOD_WIKILINK` / :data:`METHOD_RECALL`)
+that surfaced it -- exposed on :class:`QueryResult` and logged at ``DEBUG``.
 
 The composed prose is optional (an injected :class:`~thoth.llm.LLM` may write it,
 otherwise a deterministic excerpt of the top page is used), but **the citation block is
@@ -34,6 +44,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -43,8 +54,13 @@ from thoth.llm import LLM, Message, extract_text
 from thoth.vault import REFERENCE_TYPES, Vault, VaultError
 
 __all__ = [
+    "METHOD_GREP",
+    "METHOD_RECALL",
+    "METHOD_WIKILINK",
+    "RRF_K",
     "SEARCHED_DIRS",
     "Citation",
+    "PageProvenance",
     "QueryEngine",
     "QueryError",
     "QueryResult",
@@ -85,6 +101,31 @@ SEARCHED_DIRS: tuple[str, ...] = ("entities", "notes", "memories", "actions")
 # dashboard path and any explicit-typed caller keep their existing scope.
 RECALL_QA_TYPES: frozenset[str] = REFERENCE_TYPES | frozenset({"action"})
 """Page-type scope for the knowledge-Q&A recall pass (reference types + ``action``)."""
+
+# Retrieval-method tags carried in a page's provenance (issue #143). A page can be
+# surfaced by more than one method (e.g. found by grep AND recall), so provenance holds
+# the *set* of methods that produced it; the order they are reported in is fixed below.
+METHOD_GREP: str = "grep"
+"""Provenance tag: the page was surfaced by the lexical grep pass."""
+METHOD_WIKILINK: str = "wikilink"
+"""Provenance tag: the page was surfaced by ``[[wikilink]]`` graph navigation."""
+METHOD_RECALL: str = "recall"
+"""Provenance tag: the page was surfaced by the semantic Hindsight recall pass."""
+
+# Stable display/report order for the provenance method tags (issue #143): grep first,
+# then wikilink, then recall (cheapest-discovered first), so a page's methods tuple
+# reads the same regardless of the set's iteration order.
+_METHOD_ORDER: tuple[str, ...] = (METHOD_GREP, METHOD_WIKILINK, METHOD_RECALL)
+
+# The standard Reciprocal Rank Fusion damping constant (issue #143). RRF fuses several
+# ranked lists by scoring each item ``Σ 1 / (RRF_K + rank)`` over the lists it appears
+# in (rank 0-based); the large constant (60 is the value from the original
+# Cormack/Clarke/Buettcher RRF paper) keeps the score gap between adjacent ranks gentle,
+# so a page that appears in *both* sources reliably outscores one that tops only a
+# single source. A recall-only hit at rank 0 still scores ``1 / RRF_K`` -- enough to
+# earn a cited slot even when the structural source already filled ``max_pages``.
+RRF_K: int = 60
+"""Reciprocal Rank Fusion damping constant (the standard 60); see the blend in ``answer``."""  # noqa: E501
 
 # Cap on bytes read per page during grep so a pathological file cannot blow up a scan.
 _MAX_GREP_BYTES: int = 1_000_000
@@ -130,8 +171,27 @@ class Citation:
 
 
 @dataclass(frozen=True, slots=True)
+class PageProvenance:
+    """How one cited page was surfaced: its retrieval methods + final rank (issue #143).
+
+    A page can be produced by more than one retrieval source (e.g. grep AND recall both
+    name it), so ``methods`` is the full set of tags that surfaced it, reported in the
+    fixed :data:`_METHOD_ORDER` (grep, wikilink, recall). ``rank`` is the page's 1-based
+    position in the cited (consulted) set after the RRF blend -- so a list of
+    ``PageProvenance`` reads as the final retrieval order with its attribution attached.
+    """
+
+    path: str
+    """The vault-relative, confined path of the cited page (e.g. ``entities/x.md``)."""
+    methods: tuple[str, ...]
+    """The retrieval methods that surfaced this page, in :data:`_METHOD_ORDER`."""
+    rank: int
+    """The page's 1-based rank in the cited (consulted) set after the blend."""
+
+
+@dataclass(frozen=True, slots=True)
 class QueryResult:
-    """A composed answer plus its harness-attached citations.
+    """A composed answer plus its harness-attached citations and per-page provenance.
 
     ``citations`` is the **used** subset: when an LLM composes the prose it ends its
     reply with a ``USED: 1, 3`` line naming the candidate pages that directly supported
@@ -140,12 +200,18 @@ class QueryResult:
     missing/garbled ``USED:`` line falls back to keeping every consulted page (the
     pre-#34 behaviour), and the deterministic (no-LLM) path keeps its single top page.
 
+    ``provenance`` (issue #143) records, for **every consulted (cited) page** in final
+    rank order, which retrieval methods surfaced it (a :class:`PageProvenance` per
+    page). The two retrieval sources -- structural (grep + wikilinks) and semantic
+    recall -- are blended by Reciprocal Rank Fusion (:data:`RRF_K`), so a page may carry
+    more than one method, and provenance is the record of that blend: it covers the
+    consulted set (which may be a superset of the ``USED:`` ``citations``).
+
     ``consulted_count`` records how many candidate pages were retrieved and offered to
     the model *before* the ``USED:`` filter, so an operator log (issue #52) can compare
     consulted-vs-used recall. ``used_recall`` records whether the (more expensive)
-    Hindsight semantic pass was needed: it is ``False`` when the cheap structural passes
-    (index/grep/wikilinks) already produced the citations, and ``True`` when recall
-    contributed.
+    Hindsight semantic pass contributed to the answer: it is ``True`` when a
+    recall-surfaced page lands in the ``USED:`` subset, ``False`` otherwise.
     """
 
     answer: str
@@ -156,6 +222,8 @@ class QueryResult:
     """Whether the semantic Hindsight recall pass contributed to the result."""
     consulted_count: int = 0
     """How many candidate pages were offered to the model before the ``USED`` filter."""
+    provenance: list[PageProvenance] = field(default_factory=list)
+    """Per consulted (cited) page, the methods that surfaced it, in final rank order."""
 
 
 class QueryEngine:
@@ -199,19 +267,38 @@ class QueryEngine:
         use_recall: bool = True,
         search_terms: list[str] | None = None,
     ) -> QueryResult:
-        """Run the full cost-ordered retrieval and compose an answer with citations.
+        """Blend structural + semantic retrieval (RRF), compose an answer (issue #143).
 
-        The passes run cheapest-first and short-circuit: a grep hit seeds the
-        candidate set (grep scans frontmatter too, so a page's ``summary:`` gloss is
-        matched there), ``[[wikilink]]`` navigation expands it, and Hindsight recall is
-        consulted when ``use_recall`` is true *and* the cheap structural passes
-        returned fewer than ``max_pages`` candidates (thin results), topping up the set
-        (so a query the grep/wikilinks already filled to ``max_pages`` never burns a
-        recall call). The prose is written by the injected LLM if present, else taken
-        as a deterministic excerpt of the top page; either way the citation block is
+        Two retrieval *sources* both vote on the cited set:
+
+        * the STRUCTURAL source -- a grep hit list (grep scans frontmatter too, so a
+          page's ``summary:`` gloss is matched there) followed by ``[[wikilink]]``
+          navigation from those hits, deduped and existence-checked into one ordered
+          list;
+        * the RECALL source -- semantic Hindsight recall, which **always** gets a vote
+          when ``use_recall`` is true (there is no "only when results are thin" gate).
+
+        Because recall is the expensive, subprocess-backed pass, it is submitted to a
+        worker thread FIRST and the cheap structural pass runs on the calling thread
+        while recall is in flight, so recall's latency overlaps grep instead of
+        serialising after it (``subprocess.run`` releases the GIL while it waits). The
+        recall worker is pure -- it returns its path list and mutates no shared state;
+        all dedup/merge happens single-threaded after the join.
+
+        The two ranked lists are merged by **Reciprocal Rank Fusion** (:data:`RRF_K`):
+        each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in,
+        and paths sort by that fused score descending, structural discovery order
+        breaking ties (so a structural hit leads a recall hit on a score tie). The top
+        ``max_pages`` paths become the cited set. A page found by both sources floats
+        up, a strong recall-only hit earns a slot even when grep already filled the
+        budget, and empty recall collapses to pure structural order.
+
+        The prose is written by the injected LLM if present, else taken as a
+        deterministic excerpt of the top page; either way the citation block is
         harness-built from confined, real paths. With an LLM the result's citations are
-        the **used** subset the model named on its ``USED:`` line (issue #34), and
-        ``consulted_count`` records how many candidates were offered before that filter.
+        the **used** subset the model named on its ``USED:`` line (issue #34),
+        ``consulted_count`` records how many candidates were offered before that filter,
+        and ``provenance`` records the methods that surfaced each cited page.
 
         ``search_terms`` (issue #102) seed the lexical passes: when the Slack intent
         gate extracts de-pluralised, stop-word-stripped keywords from a natural-language
@@ -225,8 +312,8 @@ class QueryEngine:
         Args:
             query: The natural-language query.
             max_pages: The maximum number of candidate pages to consult and cite.
-            use_recall: When false, the semantic Hindsight pass is skipped entirely
-                (the cheap, structural-only path).
+            use_recall: When false, the semantic Hindsight pass is skipped entirely (no
+                worker thread is spawned) -- the cheap, structural-only path.
             search_terms: Optional lexical keywords (from the intent gate) to grep
                 instead of the raw ``query``; empty/``None`` greps ``query``.
 
@@ -243,55 +330,57 @@ class QueryEngine:
         grep_term = " ".join(search_terms) if search_terms else query
 
         started = time.monotonic()
-        ordered: list[str] = []
-        seen: set[str] = set()
-        recall_only: set[str] = set()
 
-        def add(paths: list[str], *, from_recall: bool = False) -> None:
-            """Append new, unseen, real vault paths preserving discovery order."""
-            for path in paths:
-                if path not in seen and self._vault.page_exists(path):
-                    seen.add(path)
-                    ordered.append(path)
-                    if from_recall:
-                        recall_only.add(path)
-
-        # 1) grep over the reference folders -- lexical and cheap. grep scans the whole
-        # file including frontmatter, so a page's one-line summary: gloss matches here
-        # (ADR 0008), transparently covering what the old index.md catalog pass did.
-        add(self.grep(grep_term, limit=max_pages * 4))
-
-        # 2) graph navigation from what we already found (bounded).
-        for path in list(ordered):
-            if len(ordered) >= max_pages:
-                break
-            add(self.follow_wikilinks(path, limit=max_pages))
-
-        # 3) semantic recall -- the expensive pass. Cost-ordered (SPEC section 7): it
-        # stays the last, most expensive pass and runs only when the cheap structural
-        # passes returned THIN results (fewer than max_pages candidates), topping up
-        # the set rather than being all-or-nothing (issue #107). A query whose cheap
-        # passes already filled max_pages never burns a recall call. add() dedupes and
-        # preserves discovery order, so grep/wikilink hits keep their leading rank and
-        # recall merely appends to fill up. The Q&A recall scope adds actions (#106).
-        if use_recall and len(ordered) < max_pages:
-            add(
-                self.recall_paths(query, limit=max_pages * 2, types=RECALL_QA_TYPES),
-                from_recall=True,
+        # Submit the expensive recall pass to a worker thread FIRST so its latency
+        # overlaps the cheap structural pass below (issue #143 criterion D). The worker
+        # is PURE: it only reads the vault (page_exists/is_inside) and returns a list,
+        # mutating no shared accumulator -- all dedup/merge happens single-threaded
+        # after the join. When use_recall is false no thread is spawned at all.
+        recall_ms = 0.0
+        recall_ran = use_recall
+        recall_paths: list[str] = []
+        if use_recall:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    self.recall_paths,
+                    query,
+                    limit=max_pages * 2,
+                    types=RECALL_QA_TYPES,
+                )
+                structural, grep_hits = self._structural_paths(
+                    grep_term, max_pages=max_pages
+                )
+                # Time spent WAITING on recall (grep already ran concurrently above), so
+                # the logged figure is recall's marginal wall-clock contribution (C/D).
+                recall_started = time.monotonic()
+                recall_paths = future.result()
+                recall_ms = (time.monotonic() - recall_started) * 1000
+        else:
+            structural, grep_hits = self._structural_paths(
+                grep_term, max_pages=max_pages
             )
+
+        # Merge the two ranked sources by Reciprocal Rank Fusion (issue #143). The merge
+        # is single-threaded: by here both lists are fully materialised and confined.
+        ordered, methods = self._fuse(
+            structural, recall_paths, grep_hits=grep_hits, max_pages=max_pages
+        )
 
         if not ordered:
             raise QueryError(f"no vault page found for query: {query!r}")
 
-        cited_paths = ordered[:max_pages]
-        consulted = [self.build_citation(path) for path in cited_paths]
+        consulted = [self.build_citation(path) for path in ordered]
+        provenance = [
+            PageProvenance(path=path, methods=methods[path], rank=rank)
+            for rank, path in enumerate(ordered, start=1)
+        ]
         answer, used = self._compose(query, consulted)
-        # Recall "contributed" only if a recall-only page is in the *used* subset (so a
-        # consulted-but-unused recall page no longer counts as recall having helped).
-        used_recall = any(c.path in recall_only for c in used)
+        # Recall "contributed" only if a recall-surfaced page is in the *used* subset
+        # (a consulted-but-unused recall page no longer counts as recall having helped).
+        used_recall = any(METHOD_RECALL in methods[c.path] for c in used)
         # Concise operator-readable success line (issue #52): grep-friendly "query
         # answered:" with the consulted/cited counts, whether the recall pass helped,
-        # and the wall-clock duration so the happy path is no longer silent.
+        # and the wall-clock duration so the happy path is no longer silent. UNCHANGED.
         logger.info(
             "query answered: consulted=%d cited=%d recall=%s in %.0fms",
             len(consulted),
@@ -299,12 +388,139 @@ class QueryEngine:
             used_recall,
             (time.monotonic() - started) * 1000,
         )
+        # DEBUG-only blend breakdown (issue #143 criterion C/D): per-page method
+        # attribution + the semantic pass's marginal wall-clock, guarded so the happy
+        # INFO path stays quiet and pays no formatting cost.
+        if logger.isEnabledFor(logging.DEBUG):
+            lines = [
+                f"  #{p.rank} {p.path} via {','.join(p.methods)}" for p in provenance
+            ]
+            logger.debug(
+                "query blend: semantic recall %s (%.0fms)\n%s",
+                "ran" if recall_ran else "skipped",
+                recall_ms,
+                "\n".join(lines),
+            )
         return QueryResult(
             answer=answer,
             citations=used,
             used_recall=used_recall,
             consulted_count=len(consulted),
+            provenance=provenance,
         )
+
+    # ---- the blend: structural pass + RRF fusion --------------------------------
+
+    def _structural_paths(
+        self, grep_term: str, *, max_pages: int
+    ) -> tuple[list[str], set[str]]:
+        """Build the structural source: grep hits then their wikilink hops, deduped.
+
+        Runs the two cheap, lexical passes on the calling thread and threads them into a
+        single ordered list of real, confined paths (issue #143). grep over the curated
+        folders comes first (it scans frontmatter, so a page's ``summary:`` gloss
+        matches here -- ADR 0008), then ``[[wikilink]]`` navigation expands from those
+        hits (bounded, so a giant link farm cannot blow up the pass). Each path is
+        existence-checked via :meth:`~thoth.vault.Vault.page_exists` and recorded once,
+        in discovery order -- the same structural ordering the pre-blend code produced,
+        now isolated so RRF can fuse it with the recall source.
+
+        Args:
+            grep_term: The (keyword-seeded) text to grep.
+            max_pages: The page budget, used to bound the grep/wikilink fan-out.
+
+        Returns:
+            A ``(ordered, grep_hits)`` pair: the deduped, existence-checked structural
+            paths in discovery order, and the subset that came from grep (the rest are
+            wikilink hops) so the caller can attribute each path's provenance method.
+        """
+        ordered: list[str] = []
+        seen: set[str] = set()
+        grep_hits: set[str] = set()
+
+        def add(paths: list[str], *, from_grep: bool = False) -> None:
+            for path in paths:
+                if path not in seen and self._vault.page_exists(path):
+                    seen.add(path)
+                    ordered.append(path)
+                    if from_grep:
+                        grep_hits.add(path)
+
+        add(self.grep(grep_term, limit=max_pages * 4), from_grep=True)
+        for path in list(ordered):
+            if len(ordered) >= max_pages:
+                break
+            add(self.follow_wikilinks(path, limit=max_pages))
+        return ordered, grep_hits
+
+    def _fuse(
+        self,
+        structural: list[str],
+        recall: list[str],
+        *,
+        grep_hits: set[str],
+        max_pages: int,
+    ) -> tuple[list[str], dict[str, tuple[str, ...]]]:
+        """Merge the structural + recall sources by Reciprocal Rank Fusion (issue #143).
+
+        Each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in
+        (``rank`` 0-based), so a page in both sources outscores one topping only a
+        single source, and a strong recall-only hit (recall rank 0) still scores
+        ``1 / RRF_K`` -- enough to earn a cited slot even when the structural source
+        already filled the budget. Paths sort by fused score **descending**, with
+        structural discovery order as a stable tie-break (a structural/grep hit leads a
+        recall hit on a score tie, and an exact-token grep #1 stays #1). The top
+        ``max_pages`` are returned.
+
+        Each returned path also carries the set of methods that surfaced it, in
+        :data:`_METHOD_ORDER`: a structural path is tagged :data:`METHOD_GREP` when it
+        came from grep, else :data:`METHOD_WIKILINK` (the structural list is grep hits
+        first, then wikilink hops -- :meth:`_structural_paths`), and a recall path is
+        tagged :data:`METHOD_RECALL`; a page in both carries both tags.
+
+        Args:
+            structural: The deduped structural paths in discovery order (grep hits, then
+                wikilink hops).
+            recall: The existence-filtered recall paths in recall-rank order.
+            grep_hits: The subset of ``structural`` that came from grep (the rest are
+                wikilink hops), used to tag each structural path's provenance method.
+            max_pages: The cap on the returned cited set.
+
+        Returns:
+            A ``(ordered_paths, methods)`` pair: the fused, capped path list in final
+            rank order, and a path -> methods-tuple map covering those paths.
+        """
+        method_sets: dict[str, set[str]] = {}
+        scores: dict[str, float] = {}
+        order_index: dict[str, int] = {}
+
+        # Structural discovery order is the stable tie-break key; record it first so a
+        # recall-only path (absent from structural) sorts AFTER any structural path with
+        # the same fused score (structural leads on a tie). Tag each structural path
+        # grep vs wikilink from the caller's grep set.
+        for rank, path in enumerate(structural):
+            order_index[path] = rank
+            scores[path] = scores.get(path, 0.0) + 1.0 / (RRF_K + rank)
+            tag = METHOD_GREP if path in grep_hits else METHOD_WIKILINK
+            method_sets.setdefault(path, set()).add(tag)
+        next_index = len(structural)
+        for rank, path in enumerate(recall):
+            if path not in order_index:
+                order_index[path] = next_index
+                next_index += 1
+            scores[path] = scores.get(path, 0.0) + 1.0 / (RRF_K + rank)
+            method_sets.setdefault(path, set()).add(METHOD_RECALL)
+
+        # Stable sort by descending fused score; Python's sort is stable, so feeding the
+        # paths in structural-then-recall discovery order makes that the tie-break.
+        candidates = sorted(order_index, key=lambda p: order_index[p])
+        candidates.sort(key=lambda p: scores[p], reverse=True)
+        ordered = candidates[:max_pages]
+        methods = {
+            path: tuple(m for m in _METHOD_ORDER if m in method_sets[path])
+            for path in ordered
+        }
+        return ordered, methods
 
     # ---- pass 1: lexical scan over the curated folders --------------------------
 
