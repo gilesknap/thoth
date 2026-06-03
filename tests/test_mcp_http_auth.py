@@ -460,3 +460,95 @@ def test_auth_middleware_accepts_valid_bearer_and_dispatches(tmp_path: Path) -> 
         )  # type: ignore[arg-type]
     )
     assert out == "dispatched"
+
+
+def _cf_config(tmp_path: Path) -> Config:
+    """A config with bearer keys AND Cf-Access enabled (both team domain + aud set)."""
+    return _config(
+        tmp_path,
+        THOTH_MCP_API_KEYS="good-key",
+        THOTH_MCP_CF_ACCESS_TEAM_DOMAIN=TEAM_DOMAIN,
+        THOTH_MCP_CF_ACCESS_AUD=AUD,
+    )
+
+
+def test_auth_middleware_rejects_invalid_cf_assertion_with_valid_bearer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With Cf-Access enabled, a valid bearer but bad assertion is 401'd pre-dispatch.
+
+    This exercises the ``cf_enabled`` branch of the gate -- the wiring that reads the
+    ``Cf-Access-Jwt-Assertion`` header, calls ``verify_cf_access_jwt`` with the
+    configured team domain / audience, and converts an ``AuthError`` into a 401 -- which
+    the bearer-only dispatch tests never reach.
+    """
+    import thoth.mcp_auth as mcp_auth
+
+    seen: dict[str, Any] = {}
+
+    def _fake_verify(token: Any, *, team_domain: str, audience: str, **_: Any) -> Any:
+        seen["token"] = token
+        seen["team_domain"] = team_domain
+        seen["audience"] = audience
+        raise AuthError("bad assertion")
+
+    monkeypatch.setattr(mcp_auth, "verify_cf_access_jwt", _fake_verify)
+
+    gate = build_auth_middleware(_cf_config(tmp_path))(app=lambda *a, **k: None)  # type: ignore[arg-type]
+    response = _run_async(
+        gate.dispatch(
+            _FakeRequest({"Authorization": "Bearer good-key"}),
+            _call_next_marker,
+        )  # type: ignore[arg-type]
+    )
+    assert response.status_code == 401
+    # The gate passed the configured team domain / audience through to the verifier.
+    assert seen["team_domain"] == TEAM_DOMAIN
+    assert seen["audience"] == AUD
+
+
+def test_auth_middleware_rejects_bad_bearer_before_checking_cf_assertion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ordering: a wrong bearer is 401'd before the Cf-Access verifier runs at all."""
+    import thoth.mcp_auth as mcp_auth
+
+    def _exploding_verify(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("bearer must be checked before the Cf-Access assertion")
+
+    monkeypatch.setattr(mcp_auth, "verify_cf_access_jwt", _exploding_verify)
+
+    gate = build_auth_middleware(_cf_config(tmp_path))(app=lambda *a, **k: None)  # type: ignore[arg-type]
+    response = _run_async(
+        gate.dispatch(
+            _FakeRequest({"Authorization": "Bearer wrong-key"}),
+            _call_next_marker,
+        )  # type: ignore[arg-type]
+    )
+    assert response.status_code == 401
+
+
+def test_auth_middleware_accepts_valid_bearer_and_cf_assertion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid bearer AND a valid Cf-Access assertion reach the downstream handler."""
+    import thoth.mcp_auth as mcp_auth
+
+    def _fake_verify(token: Any, **_: Any) -> dict[str, Any]:
+        return {"email": "owner@example.com", "assertion": token}
+
+    monkeypatch.setattr(mcp_auth, "verify_cf_access_jwt", _fake_verify)
+
+    gate = build_auth_middleware(_cf_config(tmp_path))(app=lambda *a, **k: None)  # type: ignore[arg-type]
+    out = _run_async(
+        gate.dispatch(
+            _FakeRequest(
+                {
+                    "Authorization": "Bearer good-key",
+                    "Cf-Access-Jwt-Assertion": "a.valid.jwt",
+                }
+            ),
+            _call_next_marker,
+        )  # type: ignore[arg-type]
+    )
+    assert out == "dispatched"
