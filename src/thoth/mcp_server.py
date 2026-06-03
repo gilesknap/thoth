@@ -742,6 +742,10 @@ def build_server(ctx: ToolContext) -> Any:
         synonyms (dog -> Labradoodle, pet). The grep matches on whole words, so
         an un-singularised plural will miss singular page content. Omit it only
         when the query is already a single bare keyword.
+
+        When relaying the result, preserve each source's clickable
+        `obsidian://open?...` link verbatim -- present citations as those links,
+        never flattened to bare `path/to/page.md` text.
         """
         return pkm_search(
             ctx, query=query, max_pages=max_pages, search_keywords=search_keywords
@@ -760,6 +764,10 @@ def build_server(ctx: ToolContext) -> Any:
         (dogs -> dog; dog -> Labradoodle, pet). Whole-word grep means an
         un-singularised plural misses singular page content. Omit only for a
         single bare keyword.
+
+        When relaying the result, preserve each source's clickable
+        `obsidian://open?...` link verbatim -- present citations as those links,
+        never flattened to bare `path/to/page.md` text.
         """
         return pkm_ask(
             ctx,
@@ -793,7 +801,11 @@ def build_server(ctx: ToolContext) -> Any:
 
     @server.tool(name="pkm_recent")
     def _recent(days: int = 7, limit: int = 20) -> ToolResult:
-        """List recently created/updated curated pages from their frontmatter dates."""
+        """List recently created/updated curated pages from their frontmatter dates.
+
+        When relaying the result, preserve each page's clickable
+        `obsidian://open?...` link verbatim -- never flatten it to a bare path.
+        """
         return pkm_recent(ctx, days=days, limit=limit)
 
     @server.tool(name="pkm_write_page")
