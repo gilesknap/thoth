@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 
 from thoth.config import Config, load_config
-from thoth.hindsight import Hindsight, RecallHit
+from thoth.hindsight import Hindsight, HindsightError, RecallHit
 from thoth.llm import LLM
 from thoth.query import (
     METHOD_GREP,
@@ -694,6 +694,42 @@ def test_answer_full_grep_still_consults_recall_but_structural_leads(
     # Empty recall ⇒ pure structural order: the grep #1 (PMC) still leads.
     assert result.provenance[0].path == "entities/program-motion-controller.md"
     assert result.provenance[0].methods == ("grep",)
+
+
+class _FailingHindsight(_FakeHindsight):
+    """A :class:`_FakeHindsight` whose recall always raises, like a downed daemon."""
+
+    def recall(
+        self, query: str, *, limit: int = 10, types: frozenset[str] | None = None
+    ) -> list[RecallHit]:
+        """Record the call, then fail as the real CLI would on a daemon outage."""
+        self.recall_calls.append((query, limit))
+        raise HindsightError("hindsight daemon unavailable")
+
+
+def test_answer_falls_back_to_structural_when_recall_raises(
+    config: Config, vault: Vault, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A HindsightError from the recall worker degrades to structural-only, not a crash.
+
+    Recall now ALWAYS runs when use_recall is true (#143), so the
+    ``future.result()`` join is the integration point where a worker-thread exception
+    surfaces. The contract is that a recall failure is a DEGRADATION: answer() catches
+    it, falls back to the structural pass (which already ran concurrently), and still
+    returns a real cited page rather than propagating the error.
+    """
+    hindsight = _FailingHindsight(config)
+    engine = QueryEngine(config, vault, hindsight)
+    with caplog.at_level("WARNING", logger="thoth.query"):
+        result = engine.answer("CAP", max_pages=3)
+    # The query still resolves structurally and cites a real, confined page.
+    assert isinstance(result, QueryResult)
+    assert "notes/distributed-systems.md" in {c.path for c in result.citations}
+    # Recall was attempted (the worker ran) but contributed nothing on failure.
+    assert hindsight.recall_calls
+    assert result.used_recall is False
+    # The degradation is surfaced to operators, not swallowed silently.
+    assert any("recall failed" in r.getMessage() for r in caplog.records)
 
 
 def test_answer_use_recall_false_never_calls_hindsight(

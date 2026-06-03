@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from thoth.config import Config
-from thoth.hindsight import Hindsight
+from thoth.hindsight import Hindsight, HindsightError
 from thoth.llm import LLM, Message, extract_text
 from thoth.vault import REFERENCE_TYPES, Vault, VaultError
 
@@ -338,8 +338,12 @@ class QueryEngine:
         # after the join. When use_recall is false no thread is spawned at all.
         recall_ms = 0.0
         recall_ran = use_recall
+        recall_failed = False
         recall_paths: list[str] = []
         if use_recall:
+            # If future.result() raises, the context manager __exit__ (via
+            # shutdown(wait=True)) joins the worker thread before the exception leaves
+            # this block, so the pool is never leaked on the error path.
             with ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
                     self.recall_paths,
@@ -353,7 +357,19 @@ class QueryEngine:
                 # Time spent WAITING on recall (grep already ran concurrently above), so
                 # the logged figure is recall's marginal wall-clock contribution (C/D).
                 recall_started = time.monotonic()
-                recall_paths = future.result()
+                try:
+                    recall_paths = future.result()
+                except HindsightError:
+                    # A recall failure (daemon down, CLI timeout, subprocess error) is a
+                    # DEGRADATION, not a query failure: fall back to the structural-only
+                    # results rather than crashing answer(). The structural pass already
+                    # ran concurrently above, so its hits are intact.
+                    recall_failed = True
+                    recall_paths = []
+                    logger.warning(
+                        "semantic recall failed; falling back to structural-only "
+                        "results"
+                    )
                 recall_ms = (time.monotonic() - recall_started) * 1000
         else:
             structural, grep_hits = self._structural_paths(
@@ -395,9 +411,15 @@ class QueryEngine:
             lines = [
                 f"  #{p.rank} {p.path} via {','.join(p.methods)}" for p in provenance
             ]
+            if not recall_ran:
+                recall_state = "skipped"
+            elif recall_failed:
+                recall_state = "FAILED (fell back to structural)"
+            else:
+                recall_state = "ran"
             logger.debug(
                 "query blend: semantic recall %s (%.0fms)\n%s",
-                "ran" if recall_ran else "skipped",
+                recall_state,
                 recall_ms,
                 "\n".join(lines),
             )
