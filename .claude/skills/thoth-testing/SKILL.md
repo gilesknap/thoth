@@ -185,3 +185,51 @@ Some checks don't need a real Slack message:
 
 There is **no CLI capture path** — the full ingest pipeline only runs through
 Slack, so end-to-end capture verification needs a real posted message.
+
+There is **no `query`/`ask` CLI** either — those run only via MCP or Slack. To drive
+`QueryEngine.answer` / `ResearchEngine.ask` live against the real vault + real Hindsight,
+run a `python -` snippet on the appliance with the env sourced and the systemd vars set:
+
+```bash
+cd /opt/thoth
+set -a; . ~/.thoth/.env; set +a
+export PKM_VAULT=/opt/pkm-vault THOTH_HOME=$HOME/.thoth OBSIDIAN_VAULT_NAME=pkm-vault
+uv run python - <<'PY'
+import logging, sys; logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
+from thoth.config import load_config; from thoth.hindsight import Hindsight
+from thoth.vault import Vault; from thoth.query import QueryEngine
+cfg = load_config(); qe = QueryEngine(cfg, Vault(cfg), Hindsight(cfg))
+r = qe.answer("<query>", max_pages=12)
+for p in r.provenance: print(p.rank, p.path, p.methods)
+PY
+```
+
+`QueryResult.provenance` (each `PageProvenance(path, methods, rank)`) tells you which
+source — `grep` / `wikilink` / `recall` — surfaced each cited page; the DEBUG `query
+blend:` line adds the semantic pass's wall-clock. This is the fastest way to see *what
+the blend actually did* without a real Slack message or the MCP bearer key.
+
+## Verifying retrieval / recall changes
+
+Two non-obvious traps when verifying a semantic-retrieval change live:
+
+- **Test the DENSE, on-topic domain that dominates the bank — not sparse one-off topics.**
+  Hindsight recall on the live bank is **low-resolution**: it tends to return the bank's
+  dominant content cluster largely regardless of the query. The effect is *asymmetric* —
+  an on-topic query in a dense domain gets genuinely relevant, grep-missed pages (a real
+  win), while an off-topic/sparse query (a single photo, a one-off entity) collapses into
+  that same cluster as **tail-rank noise** the answer LLM ignores. So judging a recall/blend
+  change on a sparse worst-case query (e.g. "what pets do I have" when there's one dog photo)
+  will read as "no gain / pure noise" and is **misleading**. Probe a topic the vault has lots
+  of, compare candidate counts/relevance there, and treat sparse-topic noise as a known tail
+  effect, not a verdict. (This nearly sank a good PR — #143/#144 — until a dense-domain query
+  showed the real improvement.) A `reindex --full-rebuild` does **not** change this — it's
+  embedding *resolution*, not staleness.
+
+- **`thoth reindex --full-rebuild` is silent per-page at INFO — poll the process, not the log.**
+  A full rebuild re-retains every live page (one Gemini fact-extraction each; 225 pages ≈ 30
+  min) and logs nothing until a single final summary: `reindex: changed=N skipped=N pruned=N
+  live=N full_rebuild=True aborted=False`. Don't read the quiet log as "stuck" — confirm
+  forward progress with `pgrep -af 'memory retain'` (the page currently being retained) and
+  the process being alive. Run it detached (`nohup … &`) and poll. Use `--budget 0` to make
+  the rebuild ignore the daily LLM cap so it can't be throttled mid-run.
