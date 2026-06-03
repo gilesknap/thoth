@@ -220,15 +220,38 @@ def test_build_graph_wires_schema_md_into_ingestor(tmp_path: Path) -> None:
 def test_run_mcp_calls_mcp_server_run(
     monkeypatch: pytest.MonkeyPatch, stub_config: Config
 ) -> None:
-    """``thoth mcp`` delegates to mcp_server.run(config)."""
-    seen: list[Config] = []
+    """``thoth mcp`` delegates to mcp_server.run with the stdio defaults (#103)."""
+    seen: list[tuple[Config, str, str, int]] = []
     import thoth.mcp_server as mcp_server
 
-    monkeypatch.setattr(mcp_server, "run", lambda cfg: seen.append(cfg))
+    def _fake_run(cfg: Config, *, transport: str, host: str, port: int) -> None:
+        seen.append((cfg, transport, host, port))
+
+    monkeypatch.setattr(mcp_server, "run", _fake_run)
 
     namespace = __main__.build_parser().parse_args(["mcp"])
     __main__.run_mcp(namespace, stub_config)
-    assert seen == [stub_config]
+    # Default transport is stdio (byte-for-byte unchanged spawn-as-child behaviour).
+    assert seen == [(stub_config, "stdio", "127.0.0.1", 8765)]
+
+
+def test_run_mcp_forwards_http_transport_args(
+    monkeypatch: pytest.MonkeyPatch, stub_config: Config
+) -> None:
+    """``thoth mcp --transport http --host ... --port ...`` forwards every arg."""
+    seen: list[tuple[Config, str, str, int]] = []
+    import thoth.mcp_server as mcp_server
+
+    def _fake_run(cfg: Config, *, transport: str, host: str, port: int) -> None:
+        seen.append((cfg, transport, host, port))
+
+    monkeypatch.setattr(mcp_server, "run", _fake_run)
+
+    namespace = __main__.build_parser().parse_args(
+        ["mcp", "--transport", "http", "--host", "127.0.0.1", "--port", "9000"]
+    )
+    __main__.run_mcp(namespace, stub_config)
+    assert seen == [(stub_config, "http", "127.0.0.1", 9000)]
 
 
 # --- run_reindex (fake Reindexer) --------------------------------------------------

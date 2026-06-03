@@ -36,6 +36,7 @@ at module level. Each ``pkm_*`` function catches the relevant typed errors and r
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -47,6 +48,8 @@ from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
 from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
 from thoth.vault import SchemaError, SlugError, Vault, VaultError
+
+logger = logging.getLogger("thoth")
 
 __all__ = [
     "SERVER_NAME",
@@ -67,6 +70,17 @@ __all__ = [
 
 SERVER_NAME: str = "thoth"
 """The MCP server name advertised to the host (``FastMCP(SERVER_NAME)``)."""
+
+DEFAULT_MCP_HOST: str = "127.0.0.1"
+"""Default HTTP bind address: loopback only (issue #103).
+
+The HTTP transport binds loopback by design -- network exposure is delegated to a
+cloudflared tunnel + Cloudflare Access in front of it (ADR 0011), never a raw
+``0.0.0.0`` socket. Override with ``--host`` only when you understand the consequence.
+"""
+
+DEFAULT_MCP_PORT: int = 8765
+"""Default HTTP listen port for ``thoth mcp --transport http`` (issue #103)."""
 
 TOOL_NAMES: tuple[str, ...] = (
     "pkm_ingest",
@@ -740,8 +754,15 @@ def build_server(ctx: ToolContext) -> Any:
     return server
 
 
-def run(config: Config, ctx: ToolContext | None = None) -> None:
-    """Wire a real :class:`ToolContext` (if needed) and serve over MCP stdio.
+def run(
+    config: Config,
+    ctx: ToolContext | None = None,
+    *,
+    transport: str = "stdio",
+    host: str = DEFAULT_MCP_HOST,
+    port: int = DEFAULT_MCP_PORT,
+) -> None:
+    """Wire a real :class:`ToolContext` (if needed) and serve over the chosen transport.
 
     This is the production entry point (``thoth mcp``). When ``ctx`` is ``None`` it
     wires the full collaborator graph -- a :class:`~thoth.vault.Vault`, an
@@ -749,15 +770,45 @@ def run(config: Config, ctx: ToolContext | None = None) -> None:
     :class:`~thoth.hindsight.Hindsight`, a :class:`~thoth.git_sync.GitSync`, an
     :class:`~thoth.ingest.Ingestor`, a :class:`~thoth.query.QueryEngine`, and a
     :class:`~thoth.research.ResearchEngine` (the graph ``slack_app.run`` builds, plus
-    research) -- then builds the server via :func:`build_server` and calls its stdio run
-    loop. The collaborator construction and the lazy ``mcp`` import happen only here, so
-    importing this module stays light. This is never unit-tested live (CI has no stdio).
+    research) -- then builds the server via :func:`build_server` and runs it.
+
+    The ``transport`` selects how the server is exposed (issue #103):
+
+    * ``"stdio"`` (the default) -- the byte-for-byte-unchanged spawn-as-a-child model
+      Claude Code uses locally: ``host``/``port`` are ignored and no socket is bound.
+    * ``"http"`` -- the streamable-HTTP transport bound to ``host``:``port``
+      (loopback by default; network exposure is delegated to cloudflared + Cloudflare
+      Access, ADR 0011). Tier-1 bearer auth is mandatory: the server **fails fast** at
+      startup if ``THOTH_MCP_API_KEYS`` is unset (never binding an unauthenticated
+      socket), and -- when ``THOTH_MCP_CF_ACCESS_*`` are set -- also enforces the
+      Cf-Access JWT. See :func:`_run_http`.
+
+    The collaborator construction and the lazy ``mcp`` import happen only here, so
+    importing this module stays light. This is never unit-tested live (CI has no stdio
+    and no ``mcp`` package).
 
     Args:
         config: The frozen runtime config.
         ctx: An already-wired context (for tests/embedding); built from ``config`` when
             ``None``.
+        transport: ``"stdio"`` (default) or ``"http"``.
+        host: HTTP bind address (ignored for stdio).
+        port: HTTP listen port (ignored for stdio).
+
+    Raises:
+        ValueError: if ``transport`` is not ``"stdio"`` or ``"http"``.
+        ConfigError: (HTTP only) if ``THOTH_MCP_API_KEYS`` is unset/empty -- refusing to
+            bind an unauthenticated socket.
     """
+    if transport not in ("stdio", "http"):
+        raise ValueError(
+            f"unknown MCP transport {transport!r}; expected 'stdio' or 'http'"
+        )
+    # Fail fast BEFORE wiring the graph or binding a socket: an HTTP transport with no
+    # bearer keys must never start (#103). require_mcp_api_keys raises ConfigError.
+    if transport == "http":
+        config.require_mcp_api_keys()
+
     if ctx is None:
         from thoth.budget import make_budget_guard
         from thoth.extract import Extractor
@@ -790,4 +841,62 @@ def run(config: Config, ctx: ToolContext | None = None) -> None:
         )
 
     server = build_server(ctx)
-    server.run(transport="stdio")
+    if transport == "http":
+        _run_http(server, config, host=host, port=port)
+    else:
+        server.run(transport="stdio")
+
+
+def _run_http(server: Any, config: Config, *, host: str, port: int) -> None:
+    """Serve a built FastMCP over streamable-HTTP with the two-tier auth gate.
+
+    Points the FastMCP settings at ``host``:``port``, wraps the streamable-HTTP ASGI app
+    with the bearer (+ optional Cf-Access JWT) middleware
+    (:func:`thoth.mcp_auth.build_auth_middleware`) so every request is authenticated
+    BEFORE any tool dispatch, and serves it with uvicorn. All web-stack imports
+    (``uvicorn``, ``starlette`` via the middleware) happen here, never at module top
+    level, so importing this module stays CI-safe. This is exercised live, not in CI
+    (the suite has no ``mcp``/``uvicorn``).
+
+    Args:
+        server: The built FastMCP instance.
+        config: The frozen runtime config (bearer keys + optional Cf-Access settings).
+        host: The bind address (loopback by default).
+        port: The listen port.
+    """
+    import uvicorn
+
+    from thoth.mcp_auth import build_auth_middleware
+
+    # FastMCP reads host/port from its settings; set them before building the ASGI app.
+    server.settings.host = host
+    server.settings.port = port
+    # FastMCP's streamable-HTTP transport enables DNS-rebinding protection that, by
+    # default, only accepts loopback Host/Origin headers. Behind the cloudflared tunnel
+    # the inbound Host is the public hostname, so without this every real connector
+    # request 421s. Append any operator-configured public host(s)/origin(s) to the
+    # loopback defaults (ADR 0011); the alternative is a cloudflared httpHostHeader
+    # rewrite, documented in the deploy how-to.
+    extra_hosts = config.mcp_allowed_hosts_list()
+    extra_origins = config.mcp_allowed_origins_list()
+    if extra_hosts or extra_origins:
+        sec = server.settings.transport_security
+        if sec is None:  # pragma: no cover - FastMCP always provides defaults
+            from mcp.server.transport_security import TransportSecuritySettings
+
+            sec = TransportSecuritySettings()
+            server.settings.transport_security = sec
+        sec.allowed_hosts = [*sec.allowed_hosts, *extra_hosts]
+        sec.allowed_origins = [*sec.allowed_origins, *extra_origins]
+    app = server.streamable_http_app()
+    # The auth gate runs ahead of the MCP routes: a missing/invalid bearer (or, when
+    # Cf-Access is configured, a missing/invalid assertion) yields 401 and the request
+    # never reaches a pkm_* tool (issue #103).
+    app.add_middleware(build_auth_middleware(config))
+    logger.info(
+        "thoth MCP serving streamable-HTTP on http://%s:%d (bearer auth%s)",
+        host,
+        port,
+        ", + Cf-Access JWT" if config.mcp_cf_access_enabled() else "",
+    )
+    uvicorn.run(app, host=host, port=port, log_level="info")

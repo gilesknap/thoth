@@ -2491,7 +2491,10 @@ runtime = [
     { name = "firecrawl-py" },
     { name = "mcp" },
     { name = "pillow" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "slack-bolt" },
+    { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -2501,6 +2504,7 @@ dev = [
     { name = "pillow" },
     { name = "pre-commit" },
     { name = "pydata-sphinx-theme" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2509,6 +2513,7 @@ dev = [
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
     { name = "sphinxcontrib-mermaid" },
+    { name = "starlette" },
     { name = "tox-uv" },
     { name = "types-mock" },
 ]
@@ -2521,13 +2526,16 @@ requires-dist = [
     { name = "httpx" },
     { name = "mcp", marker = "extra == 'runtime'" },
     { name = "pillow", marker = "extra == 'runtime'" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'runtime'" },
     { name = "python-dotenv" },
     { name = "python-frontmatter" },
     { name = "python-slugify" },
     { name = "pyyaml" },
     { name = "slack-bolt", marker = "extra == 'runtime'" },
+    { name = "starlette", marker = "extra == 'runtime'" },
     { name = "tenacity" },
     { name = "tzdata" },
+    { name = "uvicorn", marker = "extra == 'runtime'" },
 ]
 provides-extras = ["runtime"]
 
@@ -2538,6 +2546,7 @@ dev = [
     { name = "pillow" },
     { name = "pre-commit" },
     { name = "pydata-sphinx-theme", specifier = ">=0.12" },
+    { name = "pyjwt", extras = ["crypto"] },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2546,6 +2555,7 @@ dev = [
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
     { name = "sphinxcontrib-mermaid" },
+    { name = "starlette" },
     { name = "tox-uv" },
     { name = "types-mock" },
 ]

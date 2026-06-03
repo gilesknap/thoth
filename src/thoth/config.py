@@ -136,6 +136,11 @@ class Config:
     daily_llm_budget: int
     image_resize_threshold_bytes: int
     max_analyse_images: int
+    mcp_api_keys: str | None
+    mcp_cf_access_team_domain: str | None
+    mcp_cf_access_aud: str | None
+    mcp_allowed_hosts: str | None
+    mcp_allowed_origins: str | None
 
     @property
     def state_db_path(self) -> Path:
@@ -207,6 +212,87 @@ class Config:
                 "SLACK_CAPTURE_CHANNEL is required to run the Slack daemon but is unset"
             )
         return self.slack_capture_channel
+
+    def mcp_api_key_set(self) -> frozenset[str]:
+        """Parse ``THOTH_MCP_API_KEYS`` into the accepted bearer-key set (issue #103).
+
+        The HTTP transport (``thoth mcp --transport http``) authenticates every request
+        with a static ``Authorization: Bearer <key>`` (Tier 1). Multiple keys are
+        comma-separated so a key can be rotated without downtime (add the new one, let
+        clients cut over, then drop the old one). Surrounding whitespace and blank
+        entries are dropped; an unset/empty var yields the empty set, which the caller
+        treats as "fail fast, never bind an unauthenticated socket".
+
+        Returns:
+            The frozenset of non-empty bearer keys (empty when unconfigured).
+        """
+        raw = self.mcp_api_keys
+        if not raw:
+            return frozenset()
+        return frozenset(key.strip() for key in raw.split(",") if key.strip())
+
+    def require_mcp_api_keys(self) -> frozenset[str]:
+        """Return the bearer-key set or raise :class:`ConfigError` if none are set.
+
+        Called when starting the HTTP transport: an unauthenticated network socket must
+        never bind (issue #103), so an unset/empty ``THOTH_MCP_API_KEYS`` is a fail-fast
+        startup error rather than a silently-open server.
+        """
+        keys = self.mcp_api_key_set()
+        if not keys:
+            raise ConfigError(
+                "THOTH_MCP_API_KEYS is required for the MCP HTTP transport (at least "
+                "one bearer key) but is unset; refusing to bind an unauthenticated "
+                "socket"
+            )
+        return keys
+
+    def mcp_cf_access_enabled(self) -> bool:
+        """Return ``True`` when Cloudflare-Access JWT enforcement is configured.
+
+        The Cf-Access second factor (Tier 2 defense-in-depth, issue #103) is *opt-in*:
+        it is enabled only when BOTH ``THOTH_MCP_CF_ACCESS_TEAM_DOMAIN`` and
+        ``THOTH_MCP_CF_ACCESS_AUD`` are set. With either unset the HTTP transport is
+        bearer-only (the cloudflared tunnel + Access still front it in production; this
+        flag governs whether the origin *also* validates the signed assertion header).
+        """
+        return bool(self.mcp_cf_access_team_domain and self.mcp_cf_access_aud)
+
+    def mcp_allowed_hosts_list(self) -> tuple[str, ...]:
+        """Extra ``Host`` values to allow past FastMCP's DNS-rebinding guard (#103).
+
+        FastMCP's streamable-HTTP transport ships DNS-rebinding protection that by
+        default accepts only loopback ``Host`` headers. Behind the cloudflared tunnel
+        the inbound ``Host`` is the public hostname, so without these entries every real
+        connector request would 421. Set ``THOTH_MCP_ALLOWED_HOSTS`` to the public
+        host(s) (e.g. ``mcp.example.com``, comma-separated) -- or, equivalently, have
+        cloudflared rewrite the ``Host`` to loopback (``httpHostHeader``); see the
+        deploy how-to. The loopback defaults are always kept; these are appended.
+
+        Returns:
+            The extra allowed-host patterns (empty when unconfigured).
+        """
+        raw = self.mcp_allowed_hosts
+        if not raw:
+            return ()
+        return tuple(h.strip() for h in raw.split(",") if h.strip())
+
+    def mcp_allowed_origins_list(self) -> tuple[str, ...]:
+        """Extra ``Origin`` values to allow past the DNS-rebinding guard (#103).
+
+        Companion to :meth:`mcp_allowed_hosts_list` for the ``Origin`` header (checked
+        only when present). Set ``THOTH_MCP_ALLOWED_ORIGINS`` (comma-separated, with
+        scheme, e.g. ``https://mcp.example.com``) if a client sends an ``Origin`` the
+        loopback defaults reject. The loopback defaults are always kept; these are
+        appended.
+
+        Returns:
+            The extra allowed-origin patterns (empty when unconfigured).
+        """
+        raw = self.mcp_allowed_origins
+        if not raw:
+            return ()
+        return tuple(o.strip() for o in raw.split(",") if o.strip())
 
     def alert_target(self) -> str | None:
         """Resolve where unattended error/heartbeat alerts are posted (issue #15).
@@ -357,6 +443,11 @@ def load_config(
             default=DEFAULT_MAX_ANALYSE_IMAGES,
             name="THOTH_MAX_ANALYSE_IMAGES",
         ),
+        mcp_api_keys=lookup("THOTH_MCP_API_KEYS"),
+        mcp_cf_access_team_domain=lookup("THOTH_MCP_CF_ACCESS_TEAM_DOMAIN"),
+        mcp_cf_access_aud=lookup("THOTH_MCP_CF_ACCESS_AUD"),
+        mcp_allowed_hosts=lookup("THOTH_MCP_ALLOWED_HOSTS"),
+        mcp_allowed_origins=lookup("THOTH_MCP_ALLOWED_ORIGINS"),
     )
 
 
