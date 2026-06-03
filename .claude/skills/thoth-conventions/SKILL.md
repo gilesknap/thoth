@@ -62,6 +62,23 @@ changes, document only the new way and assume a clean slate. The vault itself is
 disposable test data during this phase — never write backfill/migration code for
 existing vault content.
 
+## The MCP surface must stand alone — never use the vault as a retrieval backdoor
+
+thoth is partly a **prototype for an organizational-memory system** where, in the
+target deployment, the backing store (the vault) is **never** available to the
+agent — only the MCP tools (`pkm_search` / `pkm_ask` / `pkm_recent` / …). A local
+vault checkout is a development convenience, **not** part of the product.
+
+So when demonstrating, testing, or answering with PKM capability, work **through
+the MCP tools only**. Do **not** `grep`/read vault files to answer a question or to
+"get a definitive list" — that crutch makes the agent look capable while leaving
+the actual product unable to do the same job for a real deployment. Treat any case
+where you *needed* the filesystem as a **product gap to fix in the MCP** (recall
+completeness, enumeration/pagination, match-count + truncation signalling), and
+file it per *Findings → issues → docs* below. Editing vault files directly is fine
+as an **authoring/admin** action (e.g. a dedupe); the rule is specifically about
+not back-dooring *retrieval* the MCP is supposed to provide.
+
 ## Findings → issues → docs
 
 When a review or investigation surfaces problems, record them as **GitHub issues**
