@@ -340,7 +340,13 @@ def pkm_ingest(
     )
 
 
-def pkm_search(ctx: ToolContext, *, query: str, max_pages: int = 5) -> ToolResult:
+def pkm_search(
+    ctx: ToolContext,
+    *,
+    query: str,
+    max_pages: int = 5,
+    search_keywords: list[str] | None = None,
+) -> ToolResult:
     """Run a fast, vault-only lookup and return the answer with vault citations.
 
     Delegates to :meth:`thoth.query.QueryEngine.answer`, rendering the composed answer
@@ -352,12 +358,18 @@ def pkm_search(ctx: ToolContext, *, query: str, max_pages: int = 5) -> ToolResul
         ctx: The injected collaborator bundle.
         query: The natural-language query.
         max_pages: The maximum number of vault pages to cite.
+        search_keywords: De-pluralised, synonym-expanded keywords that seed the vault's
+            lexical grep (forwarded as ``search_terms``). The grep matches whole words,
+            so a plural query misses singular page content unless the calling model
+            supplies the singular keyword here.
 
     Returns:
         A :class:`ToolResult` with the rendered answer or the error message.
     """
     try:
-        result = ctx.query_engine.answer(query, max_pages=max_pages)
+        result = ctx.query_engine.answer(
+            query, max_pages=max_pages, search_terms=search_keywords
+        )
     except QueryError as exc:
         return ToolResult(ok=False, text=f"Could not answer that: {exc}", data={})
     return ToolResult(
@@ -371,7 +383,13 @@ def pkm_search(ctx: ToolContext, *, query: str, max_pages: int = 5) -> ToolResul
     )
 
 
-def pkm_ask(ctx: ToolContext, *, question: str, force_web: bool = False) -> ToolResult:
+def pkm_ask(
+    ctx: ToolContext,
+    *,
+    question: str,
+    force_web: bool = False,
+    search_keywords: list[str] | None = None,
+) -> ToolResult:
     """Answer a question by blending the vault with the web (when the model chooses to).
 
     Delegates to :meth:`thoth.research.ResearchEngine.ask`, forwarding ``force_web``,
@@ -384,12 +402,18 @@ def pkm_ask(ctx: ToolContext, *, question: str, force_web: bool = False) -> Tool
         question: The natural-language question.
         force_web: When true, the web is consulted even for a vault-answerable question
             (a leading ``research:`` marker in ``question`` has the same effect).
+        search_keywords: De-pluralised, synonym-expanded keywords that seed the vault's
+            lexical grep (forwarded as ``search_terms``). The grep matches whole words,
+            so a plural question misses singular page content unless the calling model
+            supplies the singular keyword here.
 
     Returns:
         A :class:`ToolResult` with the rendered blended answer or the error message.
     """
     try:
-        result = ctx.research.ask(question, force_web=force_web)
+        result = ctx.research.ask(
+            question, force_web=force_web, search_terms=search_keywords
+        )
     except ResearchError as exc:
         return ToolResult(ok=False, text=f"Could not answer that: {exc}", data={})
     return ToolResult(
@@ -691,14 +715,44 @@ def build_server(ctx: ToolContext) -> Any:
         return pkm_ingest(ctx, text=text, url=url, path=path)
 
     @server.tool(name="pkm_search")
-    def _search(query: str, max_pages: int = 5) -> ToolResult:
-        """Run a fast, vault-only lookup and return the answer with citations."""
-        return pkm_search(ctx, query=query, max_pages=max_pages)
+    def _search(
+        query: str,
+        max_pages: int = 5,
+        search_keywords: list[str] | None = None,
+    ) -> ToolResult:
+        """Run a fast, vault-only lookup and return the answer with citations.
+
+        Pass `search_keywords` to seed the vault's lexical search: extract them
+        from the user's request, de-pluralise to the singular (dogs -> dog),
+        drop stop words (list, me, the, about, what, show), and expand obvious
+        synonyms (dog -> Labradoodle, pet). The grep matches on whole words, so
+        an un-singularised plural will miss singular page content. Omit it only
+        when the query is already a single bare keyword.
+        """
+        return pkm_search(
+            ctx, query=query, max_pages=max_pages, search_keywords=search_keywords
+        )
 
     @server.tool(name="pkm_ask")
-    def _ask(question: str, force_web: bool = False) -> ToolResult:
-        """Answer a question by blending the vault with the web when chosen."""
-        return pkm_ask(ctx, question=question, force_web=force_web)
+    def _ask(
+        question: str,
+        force_web: bool = False,
+        search_keywords: list[str] | None = None,
+    ) -> ToolResult:
+        """Answer a question by blending the vault with the web when chosen.
+
+        Pass `search_keywords` to seed the vault search: de-pluralised,
+        stop-word-stripped, synonym-expanded keywords drawn from the question
+        (dogs -> dog; dog -> Labradoodle, pet). Whole-word grep means an
+        un-singularised plural misses singular page content. Omit only for a
+        single bare keyword.
+        """
+        return pkm_ask(
+            ctx,
+            question=question,
+            force_web=force_web,
+            search_keywords=search_keywords,
+        )
 
     @server.tool(name="pkm_save_answer")
     def _save_answer(

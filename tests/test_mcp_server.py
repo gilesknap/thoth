@@ -175,14 +175,21 @@ class FakeQueryEngine:
         self, result: QueryResult | None = None, error: Exception | None = None
     ) -> None:
         self.queries: list[tuple[str, int]] = []
+        self.last_search_terms: list[str] | None = None
         self._result = result if result is not None else _query_result()
         self._error = error
 
     def answer(
-        self, query: str, *, max_pages: int = 5, use_recall: bool = True
+        self,
+        query: str,
+        *,
+        max_pages: int = 5,
+        use_recall: bool = True,
+        search_terms: list[str] | None = None,
     ) -> QueryResult:
         """Record the query and return the canned result (or raise)."""
         self.queries.append((query, max_pages))
+        self.last_search_terms = search_terms
         if self._error is not None:
             raise self._error
         return self._result
@@ -205,6 +212,7 @@ class FakeResearch:
         save_error: Exception | None = None,
     ) -> None:
         self.asks: list[tuple[str, bool]] = []
+        self.last_search_terms: list[str] | None = None
         self.saves: list[tuple[str, AskResult, str | None]] = []
         self._result = result if result is not None else _ask_result()
         self._error = error
@@ -212,10 +220,16 @@ class FakeResearch:
         self._save_error = save_error
 
     def ask(
-        self, question: str, *, force_web: bool = False, max_pages: int = 5
+        self,
+        question: str,
+        *,
+        force_web: bool = False,
+        max_pages: int = 5,
+        search_terms: list[str] | None = None,
     ) -> AskResult:
         """Record the question and return the canned result (or raise)."""
         self.asks.append((question, force_web))
+        self.last_search_terms = search_terms
         if self._error is not None:
             raise self._error
         return self._result
@@ -413,14 +427,16 @@ def test_registered_tools_delegate_to_the_right_op(
     )
     server = build_server(ctx)
 
-    # pkm_search -> query_engine.answer
-    out = server.registered["pkm_search"](query="hello", max_pages=3)
+    # pkm_search -> query_engine.answer (search_keywords forwarded as search_terms)
+    out = server.registered["pkm_search"](query="hi", search_keywords=["hi"])
     assert isinstance(out, ToolResult)
-    assert query_engine.queries == [("hello", 3)]
+    assert query_engine.queries == [("hi", 5)]
+    assert query_engine.last_search_terms == ["hi"]
 
-    # pkm_ask -> research.ask (force_web forwarded)
-    server.registered["pkm_ask"](question="q", force_web=True)
+    # pkm_ask -> research.ask (force_web + search_keywords forwarded)
+    server.registered["pkm_ask"](question="q", force_web=True, search_keywords=["q"])
     assert research.asks == [("q", True)]
+    assert research.last_search_terms == ["q"]
 
     # pkm_save_answer -> research.save_answer
     server.registered["pkm_save_answer"](question="q", answer="an answer")
@@ -607,6 +623,24 @@ def test_pkm_search_query_error_is_ok_false(config: Config, vault: Vault) -> Non
     assert "no match" in result.text
 
 
+def test_pkm_search_forwards_search_keywords(config: Config, vault: Vault) -> None:
+    """search_keywords forwards to answer() as search_terms (de-pluralised seed)."""
+    query_engine = FakeQueryEngine()
+    ctx = _context(config, vault, query_engine=query_engine)
+    pkm_search(ctx, query="dogs", search_keywords=["dog", "pet"])
+    assert query_engine.last_search_terms == ["dog", "pet"]
+
+
+def test_pkm_search_without_keywords_forwards_none(
+    config: Config, vault: Vault
+) -> None:
+    """Omitting search_keywords forwards None, leaving the grep on the raw query."""
+    query_engine = FakeQueryEngine()
+    ctx = _context(config, vault, query_engine=query_engine)
+    pkm_search(ctx, query="dog")
+    assert query_engine.last_search_terms is None
+
+
 # --------------------------------------------------------------------------------------
 # pkm_ask
 # --------------------------------------------------------------------------------------
@@ -637,6 +671,14 @@ def test_pkm_ask_research_error_is_ok_false(config: Config, vault: Vault) -> Non
     result = pkm_ask(ctx, question="?")
     assert result.ok is False
     assert "empty answer" in result.text
+
+
+def test_pkm_ask_forwards_search_keywords(config: Config, vault: Vault) -> None:
+    """search_keywords forwards to ask() as search_terms (de-pluralised grep seed)."""
+    research = FakeResearch()
+    ctx = _context(config, vault, research=research)
+    pkm_ask(ctx, question="dogs", search_keywords=["dog", "pet"])
+    assert research.last_search_terms == ["dog", "pet"]
 
 
 # --------------------------------------------------------------------------------------
