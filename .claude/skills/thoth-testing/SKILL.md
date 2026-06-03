@@ -68,6 +68,16 @@ opt-in and quiet by default. Read the log to confirm *what fired* — it answers
 "did the downscale run?" / "which type did classify pick?" / "did this merge an
 existing page?" instantly, without an out-of-band probe.
 
+**Foot-gun — don't inspect vault git state mid-capture.** A capture writes its
+page + asset to the working tree *before* it commits, and the commit lands a few
+seconds *after* the `analyse done` line. A `git status` taken in that window shows
+the page and `raw/assets/<slug>` as `??` untracked — which looks *exactly* like an
+orphaned-asset bug. Always wait for the terminal `ingest filed: <paths>` log line
+(or a fresh `git log -1` showing the new commit) before concluding anything about
+atomicity or orphans. This bit a live #85 verification: a premature snapshot read
+as "nothing committed" when the captures committed cleanly seconds later. When
+verifying concurrency, gate every vault-state check on the `ingest filed:` line.
+
 ## Why CI is necessary but not sufficient
 
 Every external boundary (Slack, Anthropic, Hindsight, Exa, Firecrawl, the git
