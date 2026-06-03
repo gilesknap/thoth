@@ -22,9 +22,11 @@ from typing import Any
 import pytest
 
 from thoth.config import Config, load_config
-from thoth.hindsight import Hindsight, RecallHit
+from thoth.hindsight import Hindsight, HindsightError, RecallHit
 from thoth.llm import LLM
 from thoth.query import (
+    METHOD_GREP,
+    METHOD_RECALL,
     SEARCHED_DIRS,
     QueryEngine,
     QueryError,
@@ -673,18 +675,61 @@ def test_answer_logs_success_line(
     assert "ms" in msg
 
 
-def test_answer_structural_path_does_not_use_recall(
+def test_answer_full_grep_still_consults_recall_but_structural_leads(
     engine: QueryEngine, hindsight: _FakeHindsight
 ) -> None:
-    """When grep/index fill max_pages, used_recall is False and recall is not called.
+    """Recall ALWAYS votes (#143), but structural hits keep the lead on a score tie.
 
-    The PMC query reaches PMC + its two existing wikilink targets (drive-control-module,
-    distributed-systems) = 3 pages, so at max_pages=2 the cheap passes already fill the
-    set and the thin-results top-up (#107) never fires.
+    Rewritten for the RRF blend (#143): recall is no longer gated on thin results, so
+    it IS consulted even when grep + wikilinks already fill ``max_pages``. The fake here
+    has no canned hits, so recall contributes nothing -- ``used_recall`` stays False and
+    the structural order is preserved -- but the recall call must still have happened
+    (concurrent, always-runs). The PMC query reaches PMC + its two existing wikilink
+    targets, so the structural source alone fills max_pages=2.
     """
     result = engine.answer("program-motion-controller", max_pages=2)
     assert result.used_recall is False
-    assert hindsight.recall_calls == []
+    # Recall now always runs when use_recall is true (the thin-gate is gone, #143).
+    assert hindsight.recall_calls
+    # Empty recall ⇒ pure structural order: the grep #1 (PMC) still leads.
+    assert result.provenance[0].path == "entities/program-motion-controller.md"
+    assert result.provenance[0].methods == ("grep",)
+
+
+class _FailingHindsight(_FakeHindsight):
+    """A :class:`_FakeHindsight` whose recall always raises, like a downed daemon."""
+
+    def recall(
+        self, query: str, *, limit: int = 10, types: frozenset[str] | None = None
+    ) -> list[RecallHit]:
+        """Record the call, then fail as the real CLI would on a daemon outage."""
+        self.recall_calls.append((query, limit))
+        raise HindsightError("hindsight daemon unavailable")
+
+
+def test_answer_falls_back_to_structural_when_recall_raises(
+    config: Config, vault: Vault, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A HindsightError from the recall worker degrades to structural-only, not a crash.
+
+    Recall now ALWAYS runs when use_recall is true (#143), so the
+    ``future.result()`` join is the integration point where a worker-thread exception
+    surfaces. The contract is that a recall failure is a DEGRADATION: answer() catches
+    it, falls back to the structural pass (which already ran concurrently), and still
+    returns a real cited page rather than propagating the error.
+    """
+    hindsight = _FailingHindsight(config)
+    engine = QueryEngine(config, vault, hindsight)
+    with caplog.at_level("WARNING", logger="thoth.query"):
+        result = engine.answer("CAP", max_pages=3)
+    # The query still resolves structurally and cites a real, confined page.
+    assert isinstance(result, QueryResult)
+    assert "notes/distributed-systems.md" in {c.path for c in result.citations}
+    # Recall was attempted (the worker ran) but contributed nothing on failure.
+    assert hindsight.recall_calls
+    assert result.used_recall is False
+    # The degradation is surfaced to operators, not swallowed silently.
+    assert any("recall failed" in r.getMessage() for r in caplog.records)
 
 
 def test_answer_use_recall_false_never_calls_hindsight(
@@ -736,14 +781,177 @@ def test_answer_thin_grep_tops_up_with_recall(config: Config, vault: Vault) -> N
     assert hindsight.recall_calls  # recall fired despite a non-empty grep result
 
 
-def test_answer_full_grep_does_not_top_up(config: Config, vault: Vault) -> None:
-    """When grep alone fills max_pages, recall is not consulted (cost-ordering)."""
+def test_answer_full_grep_blends_recall_vote_structural_still_leads(
+    config: Config, vault: Vault
+) -> None:
+    """Even when grep fills max_pages, recall votes via RRF but a tie keeps grep #1.
+
+    Rewritten for the blend (#143): the thin-gate is gone, so recall is consulted (and
+    its hit votes in the RRF fusion) even at max_pages=1. With the grep #1 (PMC) and the
+    recall hit each at source rank 0, the fused scores tie and the structural tie-break
+    keeps the grep page as the single cited page; the recall hit is crowded out only by
+    the page budget, not by being ignored.
+    """
     hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
     hindsight = _FakeHindsight(config, hits=hits)
+    # An LLM whose USED line is absent ⇒ all (one) cited pages kept; we read provenance.
+    llm = LLM(config, client=_FakeClient("prose"))  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, hindsight, llm)
+    result = engine.answer("program-motion-controller", max_pages=1)
+    # Recall ran (no thin-gate), but grep #1 wins the score tie and is the sole cite.
+    assert hindsight.recall_calls
+    assert [p.path for p in result.provenance] == [
+        "entities/program-motion-controller.md"
+    ]
+    assert result.provenance[0].methods == ("grep",)
+
+
+# --- the RRF blend: recall always votes (issue #143) -------------------------------
+
+
+def test_answer_recall_only_hit_gets_a_slot_despite_full_grep(
+    config: Config, vault: Vault
+) -> None:
+    """Criterion A: a recall rank-0 hit is cited even when grep filled max_pages (#143).
+
+    grep for ``the`` matches several reference pages (filling max_pages with structural
+    hits), and a DISTINCT recall-only page (recall rank 0) is injected. Under the old
+    thin-gate that page would be crowded out; under RRF its ``1/RRF_K`` score earns it a
+    cited slot. The LLM's USED line names every candidate so all ride into citations.
+    """
+    recall_only = "memories/semantic-only.md"
+    (vault.root / "memories" / "semantic-only.md").write_text(
+        # No ``the`` token, so grep never finds it -- it can ONLY arrive via recall.
+        _page(title="Semantic Only", page_type="memory", body="Zylqx marker prose."),
+        encoding="utf-8",
+    )
+    hits = [RecallHit(path=recall_only, text="x", page_type="memory")]
+    hindsight = _FakeHindsight(config, hits=hits)
+    # USED names all candidates so the recall-only page survives into citations.
+    used_line = "USED: " + ", ".join(str(i) for i in range(1, 9))
+    llm = LLM(config, client=_FakeClient(f"prose\n{used_line}"))  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, hindsight, llm)
+    result = engine.answer("the", max_pages=3)
+    paths = {c.path for c in result.citations}
+    assert recall_only in paths  # not crowded out by the full grep result
+    assert result.used_recall is True
+    prov = {p.path: p.methods for p in result.provenance}
+    assert prov[recall_only] == (METHOD_RECALL,)
+
+
+def test_answer_empty_recall_returns_grep_only_page(
+    config: Config, vault: Vault
+) -> None:
+    """Criterion B: empty recall ⇒ a grep-only page (zero semantic units) still returns.
+
+    The regression guard for the blend: a page that grep finds but recall (empty bank)
+    never surfaces must still be cited, in pure structural order. The fake Hindsight has
+    no canned hits, modelling a page with zero semantic units / an empty index.
+    """
+    (vault.root / "memories" / "lonely.md").write_text(
+        _page(
+            title="Lonely", page_type="memory", body="Contains the wibbleword token."
+        ),
+        encoding="utf-8",
+    )
+    hindsight = _FakeHindsight(config)  # empty bank: recall yields nothing
     engine = QueryEngine(config, vault, hindsight)
-    # PMC + drive-control-module + distributed-systems >= max_pages=1.
-    engine.answer("program-motion-controller", max_pages=1)
-    assert hindsight.recall_calls == []
+    result = engine.answer("wibbleword", max_pages=3)
+    assert [c.path for c in result.citations] == ["memories/lonely.md"]
+    assert hindsight.recall_calls  # recall ran, just returned nothing
+    assert result.used_recall is False
+    assert result.provenance[0].methods == (METHOD_GREP,)
+
+
+def test_answer_provenance_records_methods_per_cited_page(
+    config: Config, vault: Vault
+) -> None:
+    """Provenance tags each cited page grep-only / recall-only / both; ranks 1-based.
+
+    jane-doe is a grep-only hit (summary match on ``kinematics``); recall-island is a
+    recall-only hit; program-motion-controller is surfaced by BOTH (grep on its slug
+    AND a recall hit), so it must carry both methods.
+    """
+    both = "entities/program-motion-controller.md"
+    recall_only = "memories/recall-island.md"
+    # A page no structural pass reaches (no query token, not wikilinked): recall-only.
+    (vault.root / "memories" / "recall-island.md").write_text(
+        _page(title="Recall Island", page_type="memory", body="Isolated qwzx body."),
+        encoding="utf-8",
+    )
+    hits = [
+        RecallHit(path=both, text="x", page_type="entity"),
+        RecallHit(path=recall_only, text="y", page_type="memory"),
+    ]
+    hindsight = _FakeHindsight(config, hits=hits)
+    # grep "kinematics program-motion-controller" hits jane-doe (summary) + PMC (slug).
+    used_line = "USED: 1, 2, 3, 4, 5"
+    llm = LLM(config, client=_FakeClient(f"prose\n{used_line}"))  # type: ignore[arg-type]
+    engine = QueryEngine(config, vault, hindsight, llm)
+    result = engine.answer(
+        "kinematics",
+        search_terms=["kinematics", "program-motion-controller"],
+        max_pages=5,
+    )
+    prov = {p.path: p for p in result.provenance}
+    assert prov["entities/jane-doe.md"].methods == (METHOD_GREP,)
+    assert prov[recall_only].methods == (METHOD_RECALL,)
+    assert prov[both].methods == (METHOD_GREP, METHOD_RECALL)
+    # Ranks are 1-based and contiguous over the cited set.
+    ranks = sorted(p.rank for p in result.provenance)
+    assert ranks == list(range(1, len(result.provenance) + 1))
+
+
+def test_answer_page_found_by_both_sources_floats_to_top(
+    config: Config, vault: Vault
+) -> None:
+    """A page voted by BOTH grep and recall outscores a single-source page (#143)."""
+    # drive-control-module: grep hit (its slug) AND recall hit ⇒ two RRF votes.
+    both = "entities/drive-control-module.md"
+    recall_only = "notes/distributed-systems.md"
+    hits = [
+        RecallHit(path=recall_only, text="x", page_type="note"),  # recall rank 0
+        RecallHit(path=both, text="y", page_type="entity"),  # recall rank 1
+    ]
+    hindsight = _FakeHindsight(config, hits=hits)
+    engine = QueryEngine(config, vault, hindsight)
+    # grep finds only drive-control-module (rank 0); it also has a recall vote, so its
+    # fused score (1/RRF_K + 1/(RRF_K+1)) beats the recall-only page (1/RRF_K).
+    result = engine.answer("drive-control-module", max_pages=3)
+    assert result.provenance[0].path == both
+    assert result.provenance[0].methods == (METHOD_GREP, METHOD_RECALL)
+
+
+def test_answer_debug_logs_per_page_methods_and_recall_wallclock(
+    config: Config, vault: Vault, caplog: pytest.LogCaptureFixture
+) -> None:
+    """At DEBUG the blend breakdown (per-page methods + recall ms) is emitted (#143).
+
+    At INFO only the existing one-liner appears; the DEBUG breakdown stays absent.
+    """
+    hits = [RecallHit(path="notes/distributed-systems.md", text="x", page_type="note")]
+    engine = QueryEngine(config, vault, _FakeHindsight(config, hits=hits))
+
+    # INFO level: only the unchanged one-liner, no blend breakdown.
+    with caplog.at_level("INFO", logger="thoth.query"):
+        engine.answer("program-motion-controller", max_pages=2)
+    info_msgs = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("query answered:") for m in info_msgs)
+    assert not any("query blend:" in m for m in info_msgs)
+    caplog.clear()
+
+    # DEBUG level: the per-page method breakdown + the semantic-pass wall-clock appear.
+    with caplog.at_level("DEBUG", logger="thoth.query"):
+        engine.answer("program-motion-controller", max_pages=2)
+    debug_msgs = [r.getMessage() for r in caplog.records]
+    blend = [m for m in debug_msgs if "query blend:" in m]
+    assert len(blend) == 1
+    assert "semantic recall ran" in blend[0]
+    assert "ms" in blend[0]
+    # A per-page line names a cited path and the method(s) that surfaced it.
+    assert "entities/program-motion-controller.md via grep" in blend[0]
+    # The INFO one-liner is still emitted unchanged alongside the DEBUG breakdown.
+    assert any(m.startswith("query answered:") for m in debug_msgs)
 
 
 def test_answer_topup_recall_flag_only_when_used(config: Config, vault: Vault) -> None:

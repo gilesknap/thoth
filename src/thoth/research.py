@@ -455,6 +455,8 @@ class ResearchEngine:
         if max_pages < 1:
             return []
         try:
+            # answer() runs the RRF grep ∪ recall blend (issue #143), so pkm_ask's
+            # candidate set inherits the blended retrieval for free -- no change here.
             vault_result = self._query.answer(
                 question, max_pages=max_pages, search_terms=search_terms
             )

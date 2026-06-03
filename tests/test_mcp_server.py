@@ -39,7 +39,13 @@ from thoth.mcp_server import (
     pkm_todos,
     pkm_write_page,
 )
-from thoth.query import Citation, QueryEngine, QueryError, QueryResult
+from thoth.query import (
+    Citation,
+    PageProvenance,
+    QueryEngine,
+    QueryError,
+    QueryResult,
+)
 from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
 from thoth.vault import Vault
 
@@ -279,11 +285,14 @@ def _citation(
 
 
 def _query_result(**overrides: Any) -> QueryResult:
-    """Build a QueryResult with one citation by default."""
+    """Build a QueryResult with one citation + matching provenance by default."""
     base: dict[str, Any] = {
         "answer": "Exa is a semantic search engine.",
         "citations": [_citation()],
         "used_recall": False,
+        "provenance": [
+            PageProvenance(path="concepts/exa-search.md", methods=("grep",), rank=1)
+        ],
     }
     base.update(overrides)
     return QueryResult(**base)
@@ -612,6 +621,27 @@ def test_pkm_search_renders_answer_and_citations(config: Config, vault: Vault) -
     assert "`concepts/exa-search.md`" in result.text
     assert "[[exa-search]]" in result.text
     assert result.data["citations"] == ["concepts/exa-search.md"]
+
+
+def test_pkm_search_data_carries_provenance(config: Config, vault: Vault) -> None:
+    """pkm_search's ToolResult.data carries per-page provenance with method tags."""
+    result_obj = _query_result(
+        provenance=[
+            PageProvenance(
+                path="concepts/exa-search.md",
+                methods=("grep", "recall"),
+                rank=1,
+            ),
+            PageProvenance(path="notes/semantic.md", methods=("recall",), rank=2),
+        ],
+    )
+    query_engine = FakeQueryEngine(result=result_obj)
+    ctx = _context(config, vault, query_engine=query_engine)
+    result = pkm_search(ctx, query="what is exa")
+    assert result.data["provenance"] == [
+        {"path": "concepts/exa-search.md", "methods": ["grep", "recall"], "rank": 1},
+        {"path": "notes/semantic.md", "methods": ["recall"], "rank": 2},
+    ]
 
 
 def test_pkm_search_query_error_is_ok_false(config: Config, vault: Vault) -> None:
