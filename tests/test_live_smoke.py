@@ -250,7 +250,7 @@ def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> N
     Issue #40 indexes all content and partitions recall **by the page-type tag at
     query time**. CI mocks the boundary, so the live risk is whether the real
     ``hindsight-api`` server round-trips that tag back in the recall JSON (as
-    ``document_tags`` on
+    ``tags`` on
     retain, recovered by :func:`thoth.hindsight.parse_recall`). This retains a
     uniquely-tagged ``entity`` probe, recalls it, and asserts the recovered
     :attr:`~thoth.hindsight.RecallHit.page_type` is ``entity`` -- then that a

@@ -14,20 +14,24 @@ is a path segment** (env ``THOTH_HINDSIGHT_BANK``, default :data:`DEFAULT_BANK`)
 
 * ``retain`` -> ``POST .../memories`` with ``{"items": [...], "async": false}``; each
   item carries the curated facts as ``content`` plus the vault path as ``document_id``
-  and ``context``, and the page type as ``document_tags``.
+  and ``context``, and the page type as ``tags``. (``async: false`` extracts facts
+  synchronously, so a 2xx means the page is indexed.)
 * ``recall`` -> ``POST .../memories/recall`` with ``{"query": ...}``; recall is sent
-  **unfiltered** (no tags filter) and the page-type / path scope is applied client-side.
+  **unfiltered** (no tags filter -- a tag filter would *suppress* untagged hits) and the
+  page-type / path scope is applied client-side.
 * ``forget`` -> ``DELETE .../documents/{document_id}`` (a real per-document delete).
 * ``reset_bank`` -> ``DELETE .../{bank}`` (a full wipe for ``reindex --full-rebuild``).
 
 Provenance survives Hindsight's **LLM fact-extraction** (SPEC section 8): a whole-page
-``retain`` may be split into several atomic facts, so the vault path is carried on
-several channels and :func:`parse_recall` recovers it from the first that yields a path,
-in preference order: the hit's echoed ``document_id``; the hit's ``chunk_id`` resolved
-through the top-level ``chunks{}`` map; the hit's echoed ``context``; and finally the
-in-band ``SOURCE: <rel-path>`` sentinel (:func:`retain_text`) surviving inside the hit
-text. The page type round-trips the same way -- as ``document_tags`` on the hit or its
-``chunks{}`` entry -- and recall is scoped by it client-side (ADR 0004).
+``retain`` may be split into several atomic facts, each surfacing as its own recall hit,
+so the vault path is carried on every hit and :func:`parse_recall` recovers it from the
+first channel that yields a path, in preference order: the hit's echoed ``document_id``
+(the item's ``document_id``, also the :meth:`Hindsight.forget` target); the hit's echoed
+``context``; and finally the in-band ``SOURCE: <rel-path>`` sentinel
+(:func:`retain_text`) surviving inside the hit text. The page type round-trips as the
+hit's ``tags`` and recall is scoped by it client-side (ADR 0004). The item's ``tags``
+are echoed onto every extracted fact and do **not** gate recall, so a page type carried
+there stays fully recallable.
 
 The seam for tests is an injectable :class:`httpx.BaseTransport`: tests pass an
 :class:`httpx.MockTransport` that records each :class:`httpx.Request` and returns a
@@ -103,9 +107,8 @@ class RecallHit:
 
     Attributes:
         path: The vault-relative path recovered for the hit, via the first provenance
-            channel that yielded one (echoed ``document_id``; ``chunk_id`` resolved
-            through the ``chunks{}`` map; echoed ``context``; or a ``SOURCE:`` line in
-            the text). See :func:`parse_recall`.
+            channel that yielded one (echoed ``document_id``; echoed ``context``; or a
+            ``SOURCE:`` line in the text). See :func:`parse_recall`.
         text: The raw fact text the hit carried (provenance for callers).
         page_type: The page-type tag recovered for the hit (``entity``/``concept``/
             ``memory``/...), or ``""`` when none was carried. Recall is scoped by this
@@ -138,11 +141,6 @@ def retain_text(rel_path: str, facts: str) -> str:
     return f"{SOURCE_SENTINEL} {rel_path}\n\n{facts}"
 
 
-def _as_dict(value: object) -> dict[str, object]:
-    """Return ``value`` when it is a dict, else an empty dict."""
-    return value if isinstance(value, dict) else {}
-
-
 def _str_field(record: dict[str, object], *keys: str) -> str | None:
     """Return the first ``record[key]`` that is a non-empty string, else ``None``."""
     for key in keys:
@@ -172,37 +170,19 @@ def _hit_text(record: dict[str, object]) -> str:
     return _str_field(record, "text", "content") or ""
 
 
-def _chunk_entry(chunks: dict[str, object], chunk_id: str | None) -> dict[str, object]:
-    """Return the ``chunks[chunk_id]`` record as a dict (empty when not resolvable)."""
-    if chunk_id is None:
-        return {}
-    return _as_dict(chunks.get(chunk_id))
+def _path_for_hit(record: dict[str, object]) -> str | None:
+    """Recover a vault path for one hit via the three provenance channels, in order.
 
-
-def _path_for_hit(record: dict[str, object], chunks: dict[str, object]) -> str | None:
-    """Recover a vault path for one hit via the four provenance channels, in order.
-
-    1. ``document_id`` echoed on the hit (PRIMARY -- also the ``forget`` target).
-    2. the hit's ``chunk_id`` resolved through the top-level ``chunks{}`` map: the
-       chunk entry's ``document_id`` (or, failing that, the entry treated as the path).
-    3. ``context`` echoed on the hit.
-    4. a ``SOURCE: <rel-path>`` line surviving inside the hit text (final fallback).
+    1. ``document_id`` echoed on the hit (PRIMARY -- the item's ``document_id``, which
+       is the vault-relative path, and also the :meth:`Hindsight.forget` target).
+    2. ``context`` echoed on the hit (the item's ``context``, also the path).
+    3. a ``SOURCE: <rel-path>`` line surviving inside the hit text (final fallback).
 
     Returns the first path found, or ``None`` when no channel yields one.
     """
-    document_id = _str_field(record, "document_id")
-    if document_id is not None:
-        return document_id
-
-    chunk_id = _str_field(record, "chunk_id")
-    chunk = _chunk_entry(chunks, chunk_id)
-    chunk_path = _str_field(chunk, "document_id", "context")
-    if chunk_path is not None:
-        return chunk_path
-
-    context = _str_field(record, "context")
-    if context is not None:
-        return context
+    path = _str_field(record, "document_id", "context")
+    if path is not None:
+        return path
 
     sentinel = _SOURCE_LINE_RE.search(_hit_text(record))
     if sentinel is not None:
@@ -210,39 +190,37 @@ def _path_for_hit(record: dict[str, object], chunks: dict[str, object]) -> str |
     return None
 
 
-def _first_tag(tags: object) -> str:
-    """Return the first non-empty string in a ``document_tags`` list, else ``""``."""
+def _page_type_for_hit(record: dict[str, object]) -> str:
+    """Recover the page-type tag for one hit from its echoed ``tags``.
+
+    The retain item carries the page type in ``tags`` (the field Hindsight echoes onto
+    every extracted fact). Returns the first tag token that is **not** a vault path (a
+    path-shaped ``a/b.md`` tag is skipped so a belt-and-braces path tag never
+    masquerades as the page type), or ``""`` when none was carried.
+    """
+    tags = record.get("tags")
     if isinstance(tags, (list, tuple)):
         for item in tags:
-            if isinstance(item, str) and item:
+            if isinstance(item, str) and item and not _is_path_tag(item):
                 return item
     return ""
 
 
-def _page_type_for_hit(record: dict[str, object], chunks: dict[str, object]) -> str:
-    """Recover the page-type tag for one hit from ``document_tags``.
-
-    Tries the hit's own ``document_tags`` first, then the hit's ``chunks{}`` entry.
-    Returns the first tag token, or ``""`` when none was carried.
-    """
-    page_type = _first_tag(record.get("document_tags"))
-    if page_type:
-        return page_type
-    chunk = _chunk_entry(chunks, _str_field(record, "chunk_id"))
-    return _first_tag(chunk.get("document_tags"))
+def _is_path_tag(tag: str) -> bool:
+    """Return ``True`` when ``tag`` looks like a vault path (``a/b.md``), not a type."""
+    return "/" in tag and tag.endswith(".md")
 
 
 def parse_recall(payload: dict[str, object]) -> list[RecallHit]:
     """Parse a recall response payload into ordered, de-duped :class:`RecallHit` values.
 
     ``payload`` is the **parsed JSON dict** of a ``memories/recall`` response: a
-    ``results`` list of hits plus a top-level ``chunks{}`` map keyed by ``chunk_id``.
-    Each hit's vault path is recovered via :func:`_path_for_hit` (echoed
-    ``document_id`` -> ``chunk_id`` through ``chunks{}`` -> echoed ``context`` ->
-    ``SOURCE:`` sentinel, in that order), and its page type via
-    :func:`_page_type_for_hit` (the hit's ``document_tags`` or its ``chunks{}`` entry).
-    The first occurrence of each distinct path wins and later duplicates are dropped,
-    preserving first-seen order. Hits with no recoverable path are skipped.
+    ``results`` list of hits. Each hit's vault path is recovered via
+    :func:`_path_for_hit` (echoed ``document_id`` -> echoed ``context`` -> ``SOURCE:``
+    sentinel, in that order), and its page type via :func:`_page_type_for_hit` (the
+    hit's ``tags``). The first occurrence of each distinct path wins and later
+    duplicates are dropped, preserving first-seen order. Hits with no recoverable path
+    are skipped.
 
     Args:
         payload: The parsed JSON dict of a recall response.
@@ -251,11 +229,10 @@ def parse_recall(payload: dict[str, object]) -> list[RecallHit]:
         The de-duplicated :class:`RecallHit` list in first-seen order (``[]`` when no
         path could be recovered).
     """
-    chunks = _as_dict(payload.get("chunks"))
     hits: list[RecallHit] = []
     seen: set[str] = set()
     for record in _iter_recall_records(payload):
-        path = _path_for_hit(record, chunks)
+        path = _path_for_hit(record)
         if path is None or path in seen:
             continue
         seen.add(path)
@@ -264,7 +241,7 @@ def parse_recall(payload: dict[str, object]) -> list[RecallHit]:
             RecallHit(
                 path=path,
                 text=text or f"{SOURCE_SENTINEL} {path}",
-                page_type=_page_type_for_hit(record, chunks),
+                page_type=_page_type_for_hit(record),
             )
         )
     return hits
@@ -377,19 +354,18 @@ class Hindsight:
         POSTs one item to ``.../memories``: ``content`` is :func:`retain_text` (facts
         with the ``SOURCE:`` sentinel prepended for the fallback channel),
         ``document_id`` and ``context`` both carry ``rel_path`` (the primary provenance
-        channels, and ``document_id`` is the :meth:`forget` target), and
-        ``document_tags`` carries the **page type only** -- never the path. ``async`` is
-        ``false`` so the call blocks until the facts are extracted and indexed. A
-        non-2xx is a hard failure so the ingest pass can surface that the page did not
-        land.
+        channels, and ``document_id`` is the :meth:`forget` target), and ``tags``
+        carries the **page type only** -- never the path. ``async`` is ``false`` so the
+        call blocks until the facts are extracted and indexed. A non-2xx is a hard
+        failure so the ingest pass can surface that the page did not land.
 
         Args:
             rel_path: The vault-relative path of the page being retained.
             facts: The curated fact text (the ``SOURCE:`` line is prepended for you).
             tags: Page-type token(s) (typically ``[page_type]``). ``rel_path`` is
-                stripped out if present -- ``document_tags`` is the page-type axis only;
-                the path travels via ``document_id``/``context``. When no page-type
-                token remains, no ``document_tags`` key is sent.
+                stripped out if present -- ``tags`` is the page-type axis only; the
+                path travels via ``document_id``/``context``. When no page-type token
+                remains, no ``tags`` key is sent.
 
         Raises:
             HindsightError: on a non-2xx response (HTTP 4xx fails fast; transient
@@ -408,9 +384,9 @@ class Hindsight:
             "document_id": rel_path,
             "context": rel_path,
         }
-        document_tags = [tag for tag in tags if tag and tag != rel_path]
-        if document_tags:
-            item["document_tags"] = document_tags
+        page_tags = [tag for tag in tags if tag and tag != rel_path]
+        if page_tags:
+            item["tags"] = page_tags
         body = {"items": [item], "async": False}
         self._request_checked("retain", rel_path, "POST", "/memories", json=body)
 

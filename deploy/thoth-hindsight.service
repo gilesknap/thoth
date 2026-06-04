@@ -10,9 +10,11 @@
 # It binds loopback only (--host 127.0.0.1); nothing external should reach it.
 #
 # Runs as the unprivileged `pkm` service user — like every thoth unit, it never touches
-# root. The server's LLM/embedding config and DATABASE_URL are HINDSIGHT_API_* vars loaded
-# from the shared EnvironmentFile (the same .env the other units use); no secret is inlined
-# here. `<owner>` finalises the exact install paths during deployment.
+# root. The server's config (Anthropic LLM provider/model/key for fact-extraction, local
+# embeddings, and the embedded-Postgres `pg0://` DATABASE_URL) are HINDSIGHT_API_* vars
+# loaded from a DEDICATED env file (see deploy/hindsight-api.env.example) — kept separate
+# from thoth's own ~/.thoth/.env so the server never sees thoth's Slack/MCP secrets; no
+# secret is inlined here. `<owner>` finalises the exact install paths during deployment.
 
 [Unit]
 Description=thoth hindsight-api semantic-index server (127.0.0.1:8888)
@@ -28,9 +30,9 @@ Group=pkm
 Environment=HOME=/home/pkm
 Environment=PATH=/home/pkm/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/home/pkm
-# HINDSIGHT_API_* (LLM provider/model/key, DATABASE_URL, WORKER_ID) come from the shared
-# .env — see deploy/.env.example. No secret is inlined in this unit.
-EnvironmentFile=/home/pkm/.thoth/.env
+# HINDSIGHT_API_* (Anthropic LLM provider/model/key, pg0 DATABASE_URL, local embeddings)
+# come from a dedicated file — see deploy/hindsight-api.env.example. No secret inlined here.
+EnvironmentFile=/home/pkm/.thoth/hindsight-api.env
 ExecStart=/home/pkm/.local/bin/hindsight-api --host 127.0.0.1 --port 8888
 Restart=on-failure
 RestartSec=5

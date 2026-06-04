@@ -237,26 +237,8 @@ def test_parse_recall_recovers_path_from_document_id() -> None:
     assert all(isinstance(h, RecallHit) for h in hits)
 
 
-def test_parse_recall_recovers_path_from_chunk_map() -> None:
-    """Channel 2: the hit's ``chunk_id`` resolves through the top-level ``chunks{}``."""
-    payload: dict[str, object] = {
-        "results": [{"text": "atomic fact", "chunk_id": "c1"}],
-        "chunks": {"c1": {"document_id": "entities/foo.md"}},
-    }
-    assert [h.path for h in parse_recall(payload)] == ["entities/foo.md"]
-
-
-def test_parse_recall_chunk_map_falls_back_to_context() -> None:
-    """The chunk entry's ``context`` resolves the path absent a ``document_id``."""
-    payload: dict[str, object] = {
-        "results": [{"text": "fact", "chunk_id": "c1"}],
-        "chunks": {"c1": {"context": "concepts/bar.md"}},
-    }
-    assert [h.path for h in parse_recall(payload)] == ["concepts/bar.md"]
-
-
 def test_parse_recall_recovers_path_from_context() -> None:
-    """Channel 3: the hit's echoed ``context`` yields the vault path."""
+    """Channel 2: the hit's echoed ``context`` yields the vault path."""
     payload: dict[str, object] = {
         "results": [{"text": "fact", "context": "memories/wifi.md"}],
     }
@@ -264,7 +246,7 @@ def test_parse_recall_recovers_path_from_context() -> None:
 
 
 def test_parse_recall_falls_back_to_sentinel_in_text() -> None:
-    """Channel 4: the ``SOURCE:`` line surviving in the hit text recovers the path."""
+    """Channel 3: the ``SOURCE:`` line surviving in the hit text recovers the path."""
     payload: dict[str, object] = {
         "results": [
             {"text": "SOURCE: entities/foo.md\n\nFoo is a thing."},
@@ -275,27 +257,25 @@ def test_parse_recall_falls_back_to_sentinel_in_text() -> None:
 
 
 def test_parse_recall_channel_preference_order() -> None:
-    """``document_id`` wins over chunk-map, context, and the sentinel on one hit."""
+    """``document_id`` wins over context and the sentinel on one hit."""
     payload: dict[str, object] = {
         "results": [
             {
                 "text": "SOURCE: from/text.md\n\nfact",
                 "document_id": "from/docid.md",
                 "context": "from/context.md",
-                "chunk_id": "c1",
             }
         ],
-        "chunks": {"c1": {"document_id": "from/chunk.md"}},
     }
     assert [h.path for h in parse_recall(payload)] == ["from/docid.md"]
 
 
 def test_parse_recall_recovers_page_type_from_hit_tags() -> None:
-    """The page type round-trips on the hit's ``document_tags`` (first token wins)."""
+    """The page type round-trips on the hit's ``tags`` (first token wins)."""
     payload: dict[str, object] = {
         "results": [
-            {"document_id": "entities/foo.md", "document_tags": ["entity"]},
-            {"document_id": "memories/wifi.md", "document_tags": ["memory"]},
+            {"document_id": "entities/foo.md", "tags": ["entity"]},
+            {"document_id": "memories/wifi.md", "tags": ["memory"]},
         ]
     }
     hits = parse_recall(payload)
@@ -305,20 +285,26 @@ def test_parse_recall_recovers_page_type_from_hit_tags() -> None:
     ]
 
 
-def test_parse_recall_recovers_page_type_from_chunk_entry() -> None:
-    """The page type falls back to the hit's ``chunks{}`` entry ``document_tags``."""
+def test_parse_recall_page_type_skips_path_shaped_tag() -> None:
+    """A path-shaped ``a/b.md`` tag is skipped; the first non-path tag wins."""
     payload: dict[str, object] = {
-        "results": [{"chunk_id": "c1"}],
-        "chunks": {
-            "c1": {"document_id": "entities/foo.md", "document_tags": ["entity"]}
-        },
+        "results": [
+            {"document_id": "entities/foo.md", "tags": ["entities/foo.md", "entity"]},
+        ]
     }
-    hits = parse_recall(payload)
-    assert [(h.path, h.page_type) for h in hits] == [("entities/foo.md", "entity")]
+    assert parse_recall(payload)[0].page_type == "entity"
+
+
+def test_parse_recall_page_type_empty_when_only_path_shaped_tag() -> None:
+    """When every tag is path-shaped, no page type is recovered."""
+    payload: dict[str, object] = {
+        "results": [{"document_id": "entities/foo.md", "tags": ["entities/foo.md"]}]
+    }
+    assert parse_recall(payload)[0].page_type == ""
 
 
 def test_parse_recall_page_type_empty_when_no_tags() -> None:
-    """A hit with no ``document_tags`` anywhere leaves ``page_type`` empty."""
+    """A hit with no ``tags`` leaves ``page_type`` empty."""
     payload: dict[str, object] = {"results": [{"document_id": "entities/foo.md"}]}
     assert parse_recall(payload)[0].page_type == ""
 
@@ -386,27 +372,27 @@ def test_retain_posts_to_memories_with_expected_body(config: Config) -> None:
     assert item["context"] == "entities/foo.md"
     assert item["content"].startswith(f"{SOURCE_SENTINEL} entities/foo.md")
     assert "Foo facts." in item["content"]
-    assert item["document_tags"] == ["entity"]
+    assert item["tags"] == ["entity"]
 
 
-def test_retain_document_tags_excludes_rel_path(config: Config) -> None:
-    """The vault path is never put into ``document_tags`` (page-type axis only)."""
+def test_retain_tags_excludes_rel_path(config: Config) -> None:
+    """The vault path is never put into ``tags`` (page-type axis only)."""
     hs, recorder = _make(config, _ok())
     hs.retain("entities/foo.md", "facts", tags=["entity", "entities/foo.md"])
     item = recorder.last_json["items"][0]  # type: ignore[index]
-    assert item["document_tags"] == ["entity"]
+    assert item["tags"] == ["entity"]
 
 
-def test_retain_omits_document_tags_when_empty(config: Config) -> None:
-    """No ``document_tags`` key is sent when only the rel path / blanks were passed."""
+def test_retain_omits_tags_when_empty(config: Config) -> None:
+    """No ``tags`` key is sent when only the rel path / blanks were passed."""
     hs, recorder = _make(config, _ok())
     hs.retain("concepts/bar.md", "facts", tags=["", "concepts/bar.md"])
     item = recorder.last_json["items"][0]  # type: ignore[index]
-    assert "document_tags" not in item
+    assert "tags" not in item
 
     hs.retain("concepts/baz.md", "facts")
     item = recorder.last_json["items"][0]  # type: ignore[index]
-    assert "document_tags" not in item
+    assert "tags" not in item
 
 
 def test_retain_raises_on_permanent_4xx_without_retry(config: Config) -> None:
@@ -441,12 +427,12 @@ def test_recall_posts_query_and_parses_document_id_paths(config: Config) -> None
             {
                 "text": "fact",
                 "document_id": "entities/foo.md",
-                "document_tags": ["entity"],
+                "tags": ["entity"],
             },
             {
                 "text": "fact2",
                 "document_id": "concepts/bar.md",
-                "document_tags": ["concept"],
+                "tags": ["concept"],
             },
         ]
     }
@@ -478,9 +464,9 @@ def test_recall_scopes_by_page_type_when_types_given(config: Config) -> None:
     """``types`` keeps only hits whose page_type tag is in the set (ADR 0004, #40)."""
     payload = {
         "results": [
-            {"text": "a", "document_id": "entities/a.md", "document_tags": ["entity"]},
-            {"text": "m", "document_id": "memories/m.md", "document_tags": ["memory"]},
-            {"text": "c", "document_id": "concepts/c.md", "document_tags": ["concept"]},
+            {"text": "a", "document_id": "entities/a.md", "tags": ["entity"]},
+            {"text": "m", "document_id": "memories/m.md", "tags": ["memory"]},
+            {"text": "c", "document_id": "concepts/c.md", "tags": ["concept"]},
         ]
     }
     hs, _ = _make(config, _ok(payload))
@@ -505,13 +491,13 @@ def test_recall_filters_by_type_before_the_limit_cap(config: Config) -> None:
             {
                 "text": "m1",
                 "document_id": "memories/m1.md",
-                "document_tags": ["memory"],
+                "tags": ["memory"],
             },
-            {"text": "e", "document_id": "entities/e.md", "document_tags": ["entity"]},
+            {"text": "e", "document_id": "entities/e.md", "tags": ["entity"]},
             {
                 "text": "m2",
                 "document_id": "memories/m2.md",
-                "document_tags": ["memory"],
+                "tags": ["memory"],
             },
         ]
     }

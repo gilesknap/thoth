@@ -95,7 +95,7 @@ class _RecordingTransport:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         """Record the request and answer with an empty-results 200."""
         self.calls.append(request)
-        return httpx.Response(200, json={"results": [], "chunks": {}})
+        return httpx.Response(200, json={"results": []})
 
 
 def _store(tmp_path: Path) -> BudgetStore:
