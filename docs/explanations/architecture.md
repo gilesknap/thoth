@@ -62,17 +62,35 @@ document gets a faithful structured-markdown transcription in its body. The
 original is always kept and a derivation failure never defers the capture
 (ADR-0009). See [Models](models) for the per-call model strategy.
 
+### What you can capture
+
+A single Slack message (or `thoth capture <path>`) accepts any of:
+
+| Input | Handling |
+|---|---|
+| **Text** | Filed as a note; the intent gate routes bare free-text to capture / query / ask. |
+| **URL** | Fetched server-side and extracted to clean Markdown (Exa search + Firecrawl), SSRF-guarded. |
+| **Image** (PNG/JPG/…) | One vision call: OCR text, routing hint, entities, and an image *kind*. Images over 2 MB are downscaled first ([`THOTH_IMAGE_RESIZE_THRESHOLD_BYTES`](../reference/configuration.md)). |
+| **PDF** | Vision analysis → text + a structured-Markdown transcription in the page body. |
+| **Audio / voice** | Transcribed locally via the Whisper CLI, then filed as text (the title comes from the speech). |
+| **Hand-drawn diagram** | Reconstructed into an editable `.excalidraw.md` scene alongside the original (ADR-0009). |
+| **Multi-image batch** | All images in one message → one curated page, shared summary/tags, every image embedded (capped per call by [`THOTH_MAX_ANALYSE_IMAGES`](../reference/configuration.md)). |
+
 ## MCP query/research pipeline
 
 Claude Code and claude.ai reach the vault through seven `pkm_*` tools served
-over FastMCP (stdio). The same path-confinement and schema-validation rules
-apply here as in ingest — the MCP surface cannot escape the vault either.
+over a bearer-authenticated FastMCP HTTP socket (`thoth-mcp.service`, loopback
+`127.0.0.1:8765`, fronted by a cloudflared tunnel — see
+{doc}`../how-to/mcp-server-setup` and ADR
+{doc}`decisions/0011-mcp-http-transport-and-tiered-auth`). The same
+path-confinement and schema-validation rules apply here as in ingest — the MCP
+surface cannot escape the vault either.
 
 ```{mermaid}
 flowchart TB
     cc(["Claude Code<br>or claude.ai"])
     cc --> mcp["mcp_server.py<br>FastMCP · 7 pkm_* tools"]
-    mcp --> qry["query.py<br>vault-only retrieval<br>cost-ordered search"]
+    mcp --> qry["query.py<br>vault-only retrieval<br>grep ∪ recall · RRF blend"]
     mcp --> res["research.py<br>blended web+vault Q&A"]
     qry --> va["vault.py<br>read-only"]
     qry --> hs["hindsight.py<br>Hindsight CLI recall"]
@@ -82,14 +100,23 @@ flowchart TB
     hs -.-> ov
 ```
 
-`query.py` uses a cost-ordered search strategy: grep → wikilink traversal →
-Hindsight semantic recall — cheapest first, LLM only as a last resort. grep
-scans the whole file including frontmatter, so a reference page's one-line
-`summary:` gloss is matched there; `index.md` is a static set of Bases
-dashboards that retrieval never reads. `research.py` (the `pkm_ask` tool) runs Claude Sonnet with
-read-only vault tools and optional live web calls; the model decides when to
-reach for the web and can offer to save the composed answer back to the vault
-as a `notes/` page.
+`query.py` blends **two retrieval sources** and fuses them with **Reciprocal
+Rank Fusion** (RRF, `K=60`): a *structural* pass (grep + wikilink traversal) and
+a *semantic* pass (Hindsight recall). The semantic pass **always gets a vote**
+when enabled — there is no "only when results look thin" gate — and runs
+**concurrently** in a worker thread so its latency overlaps grep rather than
+serialising after it. Each unique page scores `Σ 1/(60+rank)` across the sources
+that surfaced it; the top `max_pages` are cited, each tagged with its
+*provenance* (which method — grep / wikilink / recall — found it). A Hindsight
+failure degrades gracefully to structural-only. grep scans the whole file
+including frontmatter, so a page's one-line `summary:` gloss is matched there,
+and a caller can pass `search_keywords` to seed the whole-word grep with
+de-pluralised/synonym terms; `index.md` is a static set of Bases dashboards that
+retrieval never reads. See ADR
+{doc}`decisions/0012-blend-grep-and-semantic-retrieval-rrf`. `research.py` (the
+`pkm_ask` tool) runs Claude Sonnet with read-only vault tools and optional live
+web calls; the model decides when to reach for the web and can offer to save the
+composed answer back to the vault as a `notes/` page.
 
 (models)=
 ## Models

@@ -69,7 +69,7 @@ authorization server (discovery, DCR, PKCE), not thoth. Cloudflare authenticates
 human; the Cf-Access JWT (Tier 2) lets the origin verify the request really transited
 Access; the static bearer (Tier 1) is the always-on baseline that also serves the
 non-browser Claude Code path. The Tier-2 wiring is documented as a how-to
-(`docs/how-to/deploy-appliance.md`, placeholders only); thoth ships the *enforcement
+(`docs/how-to/mcp-server-setup.md`, placeholders only); thoth ships the *enforcement
 hook* (env-gated) but no live Cloudflare configuration.
 
 ## Consequences
