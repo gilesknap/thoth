@@ -1,6 +1,6 @@
 """Tests for :mod:`thoth.mcp_server` -- the FastMCP stdio server's pure tool bodies.
 
-The seven ``pkm_*`` functions are exercised directly with a :class:`~thoth.mcp_server.
+The nine ``pkm_*`` functions are exercised directly with a :class:`~thoth.mcp_server.
 ToolContext` whose ``ingestor``/``query_engine``/``research`` are recording fakes (they
 capture the delegated call and return a canned report/result) and whose ``vault`` is a
 **real** :class:`~thoth.vault.Vault` over a ``tmp_path`` vault -- so ``pkm_write_page``,
@@ -24,6 +24,7 @@ from typing import Any, cast
 import pytest
 
 from thoth.config import Config, load_config
+from thoth.git_sync import GitResult, GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.mcp_server import (
     SERVER_NAME,
@@ -32,7 +33,9 @@ from thoth.mcp_server import (
     ToolResult,
     build_server,
     pkm_ask,
+    pkm_edit_page,
     pkm_ingest,
+    pkm_read_page,
     pkm_recent,
     pkm_save_answer,
     pkm_search,
@@ -255,6 +258,56 @@ class FakeResearch:
         return self._saved_path
 
 
+class FakeGit:
+    """Records commit calls under a re-entrant capture lock; configurable to raise.
+
+    Mirrors the slice of :class:`~thoth.git_sync.GitSync` the write tools touch: a
+    re-entrant ``capture_lock`` context manager and a ``commit(message, *, paths,
+    timeout)`` that records the call and returns a :class:`~thoth.git_sync.GitResult`.
+    Set ``committed`` to control the result's ``committed`` flag, or ``error`` to make
+    ``commit`` raise (used to exercise the conflict / sync-failure mapping).
+    """
+
+    def __init__(
+        self,
+        *,
+        committed: bool = True,
+        error: Exception | None = None,
+    ) -> None:
+        self.commits: list[tuple[str, list[str]]] = []
+        self.lock_depth = 0
+        self.max_lock_depth = 0
+        self._committed = committed
+        self._error = error
+
+    @property
+    def capture_lock(self) -> FakeGit:
+        """A re-entrant context manager (mirrors ``GitSync.capture_lock``)."""
+        return self
+
+    def __enter__(self) -> FakeGit:
+        self.lock_depth += 1
+        self.max_lock_depth = max(self.max_lock_depth, self.lock_depth)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.lock_depth -= 1
+
+    def commit(
+        self,
+        message: str,
+        *,
+        paths: list[str],
+        timeout: float = 120.0,
+    ) -> GitResult:
+        """Record the commit (asserting it ran under the lock) and return a result."""
+        assert self.lock_depth > 0, "commit must run under capture_lock"
+        self.commits.append((message, list(paths)))
+        if self._error is not None:
+            raise self._error
+        return GitResult(returncode=0, stdout="", stderr="", committed=self._committed)
+
+
 # --- canned builders ---------------------------------------------------------------
 
 
@@ -335,6 +388,7 @@ def _context(
     ingestor: FakeIngestor | None = None,
     query_engine: FakeQueryEngine | None = None,
     research: FakeResearch | None = None,
+    git: FakeGit | None = None,
 ) -> ToolContext:
     """Build a ToolContext wired to a real vault and (fake) collaborators."""
     return ToolContext(
@@ -347,6 +401,7 @@ def _context(
         research=cast(
             ResearchEngine, research if research is not None else FakeResearch()
         ),
+        git=cast(GitSync, git if git is not None else FakeGit()),
     )
 
 
@@ -421,7 +476,7 @@ def test_build_server_registers_exactly_tool_names(
     assert isinstance(server, _FakeFastMCP)
     assert server.name == SERVER_NAME == "thoth"
     assert set(server.registered) == set(TOOL_NAMES)
-    assert len(TOOL_NAMES) == 7
+    assert len(TOOL_NAMES) == 9
 
 
 def test_registered_tools_delegate_to_the_right_op(
@@ -721,7 +776,8 @@ def test_pkm_save_answer_delegates_and_returns_path(
 ) -> None:
     """pkm_save_answer reconstructs an AskResult and delegates to save_answer."""
     research = FakeResearch(saved_path="queries/how-x-works.md")
-    ctx = _context(config, vault, research=research)
+    git = FakeGit()
+    ctx = _context(config, vault, research=research, git=git)
 
     result = pkm_save_answer(
         ctx,
@@ -733,6 +789,12 @@ def test_pkm_save_answer_delegates_and_returns_path(
 
     assert result.ok is True
     assert result.data["path"] == "queries/how-x-works.md"
+    assert result.data["committed"] is True
+    # Exactly the one saved path was staged, under the lock.
+    assert len(git.commits) == 1
+    _msg, staged = git.commits[0]
+    assert staged == ["queries/how-x-works.md"]
+    assert git.max_lock_depth >= 1
     # The reconstructed result carried the supplied web + vault citations.
     assert len(research.saves) == 1
     saved_question, saved_result, saved_slug = research.saves[0]
@@ -747,21 +809,49 @@ def test_pkm_save_answer_delegates_and_returns_path(
 def test_pkm_save_answer_empty_answer_is_ok_false(config: Config, vault: Vault) -> None:
     """An empty answer is refused before any vault write."""
     research = FakeResearch()
-    ctx = _context(config, vault, research=research)
+    git = FakeGit()
+    ctx = _context(config, vault, research=research, git=git)
     result = pkm_save_answer(ctx, question="q", answer="   ")
     assert result.ok is False
     assert research.saves == []
+    assert git.commits == []
 
 
 def test_pkm_save_answer_vault_rejection_is_ok_false(
     config: Config, vault: Vault
 ) -> None:
-    """A ResearchError from save_answer surfaces as ToolResult(ok=False)."""
+    """A ResearchError from save_answer surfaces as ToolResult(ok=False); no commit."""
     research = FakeResearch(save_error=ResearchError("invalid slug"))
-    ctx = _context(config, vault, research=research)
+    git = FakeGit()
+    ctx = _context(config, vault, research=research, git=git)
     result = pkm_save_answer(ctx, question="q", answer="an answer", slug="Bad Slug")
     assert result.ok is False
     assert "invalid slug" in result.text
+    # A rejected save never reaches the committer.
+    assert git.commits == []
+
+
+def test_pkm_save_answer_conflict_is_ok_false_with_conflict_flag(
+    config: Config, vault: Vault
+) -> None:
+    """VaultConflictError on commit maps to ok=False with conflict=True; no raise."""
+    research = FakeResearch(saved_path="queries/saved.md")
+    git = FakeGit(error=VaultConflictError("rebase conflict"))
+    ctx = _context(config, vault, research=research, git=git)
+    result = pkm_save_answer(ctx, question="q", answer="an answer")
+    assert result.ok is False
+    assert result.data["conflict"] is True
+    assert result.data["path"] == "queries/saved.md"
+
+
+def test_pkm_save_answer_git_failure_is_ok_false(config: Config, vault: Vault) -> None:
+    """A generic GitSyncError on commit maps to ok=False; nothing raises."""
+    research = FakeResearch(saved_path="queries/saved.md")
+    git = FakeGit(error=GitSyncError("push rejected"))
+    ctx = _context(config, vault, research=research, git=git)
+    result = pkm_save_answer(ctx, question="q", answer="an answer")
+    assert result.ok is False
+    assert "push rejected" in result.text
 
 
 # --------------------------------------------------------------------------------------
@@ -888,7 +978,8 @@ def test_pkm_recent_respects_limit(config: Config, vault: Vault) -> None:
 
 def test_pkm_write_page_writes_and_returns_path(config: Config, vault: Vault) -> None:
     """pkm_write_page delegates to Vault.write_page and returns the path + link."""
-    ctx = _context(config, vault)
+    git = FakeGit()
+    ctx = _context(config, vault, git=git)
     result = pkm_write_page(
         ctx,
         folder="entities",
@@ -903,6 +994,7 @@ def test_pkm_write_page_writes_and_returns_path(config: Config, vault: Vault) ->
     )
     assert result.ok is True
     assert result.data["path"] == "entities/my-entity.md"
+    assert result.data["committed"] is True
     assert (vault.root / "entities" / "my-entity.md").is_file()
     # The reply carries the harness-built obsidian link + wikilink.
     assert "[[my-entity]]" in result.text
@@ -911,11 +1003,72 @@ def test_pkm_write_page_writes_and_returns_path(config: Config, vault: Vault) ->
     # And the page round-trips through the vault reader.
     page = vault.read_page("entities/my-entity.md")
     assert page.frontmatter["title"] == "My Entity"
+    # The write was committed: exactly the one written path was staged, under the lock.
+    assert len(git.commits) == 1
+    _msg, staged = git.commits[0]
+    assert staged == ["entities/my-entity.md"]
+    assert git.max_lock_depth >= 1
+
+
+def test_pkm_write_page_not_yet_committed_when_nothing_staged(
+    config: Config, vault: Vault
+) -> None:
+    """A commit that stages nothing reports committed=False + the not-yet note."""
+    git = FakeGit(committed=False)
+    ctx = _context(config, vault, git=git)
+    result = pkm_write_page(
+        ctx,
+        folder="entities",
+        slug="my-entity",
+        frontmatter={"title": "X", "type": "entity", "source": "mcp", "tags": ["x"]},
+        body="# X",
+    )
+    assert result.ok is True
+    assert result.data["committed"] is False
+    assert "(not yet committed)" in result.text
+
+
+def test_pkm_write_page_conflict_is_ok_false_with_conflict_flag(
+    config: Config, vault: Vault
+) -> None:
+    """VaultConflictError on commit maps to ok=False with conflict=True; no raise."""
+    git = FakeGit(error=VaultConflictError("rebase conflict"))
+    ctx = _context(config, vault, git=git)
+    result = pkm_write_page(
+        ctx,
+        folder="entities",
+        slug="my-entity",
+        frontmatter={"title": "X", "type": "entity", "source": "mcp", "tags": ["x"]},
+        body="# X",
+    )
+    assert result.ok is False
+    assert result.data["conflict"] is True
+    assert result.data["path"] == "entities/my-entity.md"
+    # The page is still on disk locally -- only the sync failed.
+    assert (vault.root / "entities" / "my-entity.md").is_file()
+
+
+def test_pkm_write_page_git_failure_is_ok_false(config: Config, vault: Vault) -> None:
+    """A generic GitSyncError on commit maps to ok=False; nothing raises."""
+    git = FakeGit(error=GitSyncError("push rejected"))
+    ctx = _context(config, vault, git=git)
+    result = pkm_write_page(
+        ctx,
+        folder="entities",
+        slug="my-entity",
+        frontmatter={"title": "X", "type": "entity", "source": "mcp", "tags": ["x"]},
+        body="# X",
+    )
+    assert result.ok is False
+    assert result.data.get("conflict") is None
+    assert "push rejected" in result.text
+    assert (vault.root / "entities" / "my-entity.md").is_file()
 
 
 def test_pkm_write_page_rejects_bad_folder_type(config: Config, vault: Vault) -> None:
     """A folder/type mismatch yields ok=False (SchemaError caught); writes nothing."""
-    ctx = _context(config, vault)
+    git = FakeGit()
+    ctx = _context(config, vault, git=git)
     result = pkm_write_page(
         ctx,
         folder="entities",
@@ -931,11 +1084,14 @@ def test_pkm_write_page_rejects_bad_folder_type(config: Config, vault: Vault) ->
     assert result.ok is False
     assert "Vault rejected" in result.text
     assert not (vault.root / "entities" / "wrong.md").exists()
+    # A rejected write never reaches the committer.
+    assert git.commits == []
 
 
 def test_pkm_write_page_rejects_bad_slug(config: Config, vault: Vault) -> None:
     """An invalid slug yields ok=False (SlugError caught) and writes nothing."""
-    ctx = _context(config, vault)
+    git = FakeGit()
+    ctx = _context(config, vault, git=git)
     result = pkm_write_page(
         ctx,
         folder="entities",
@@ -952,3 +1108,185 @@ def test_pkm_write_page_rejects_bad_slug(config: Config, vault: Vault) -> None:
     assert "Vault rejected" in result.text
     # No file with that (invalid) name leaked into the vault.
     assert list((vault.root / "entities").glob("*.md")) == []
+    # A rejected write never reaches the committer.
+    assert git.commits == []
+
+
+# --------------------------------------------------------------------------------------
+# pkm_read_page
+# --------------------------------------------------------------------------------------
+
+
+def test_pkm_read_page_round_trips_a_seeded_page(config: Config, vault: Vault) -> None:
+    """pkm_read_page returns the frontmatter + body verbatim, usable to write back."""
+    rel = vault.write_page(
+        "notes",
+        "my-note",
+        {"title": "My Note", "type": "note", "source": "mcp", "tags": ["x"]},
+        "# My Note\n\nThe body.",
+    )
+    ctx = _context(config, vault)
+    result = pkm_read_page(ctx, path=rel)
+    assert result.ok is True
+    assert result.data["path"] == "notes/my-note.md"
+    assert result.data["frontmatter"]["title"] == "My Note"
+    assert result.data["body"] == "# My Note\n\nThe body."
+    # The returned structured page round-trips back through the validated write surface.
+    write_back = pkm_write_page(
+        ctx,
+        folder="notes",
+        slug="my-note",
+        frontmatter=result.data["frontmatter"],
+        body=result.data["body"],
+    )
+    assert write_back.ok is True
+
+
+def test_pkm_read_page_rejects_outside_path(config: Config, vault: Vault) -> None:
+    """A path escaping the vault root is rejected ok=False before any read."""
+    ctx = _context(config, vault)
+    result = pkm_read_page(ctx, path="../escape.md")
+    assert result.ok is False
+    assert result.data["rejected"] == "path_confinement"
+
+
+def test_pkm_read_page_resolves_bare_slug(config: Config, vault: Vault) -> None:
+    """A bare slug resolves to a unique <slug>.md anywhere in the vault."""
+    vault.write_page(
+        "notes",
+        "unique-note",
+        {"title": "Unique", "type": "note", "source": "mcp", "tags": ["x"]},
+        "# Unique\n\nbody",
+    )
+    ctx = _context(config, vault)
+    result = pkm_read_page(ctx, path="unique-note")
+    assert result.ok is True
+    assert result.data["path"] == "notes/unique-note.md"
+
+
+def test_pkm_read_page_missing_slug_is_ok_false(config: Config, vault: Vault) -> None:
+    """A slug that matches no page yields ok=False with a clear message."""
+    ctx = _context(config, vault)
+    result = pkm_read_page(ctx, path="nope")
+    assert result.ok is False
+    assert "No page found" in result.text
+
+
+def test_pkm_read_page_ambiguous_slug_is_ok_false(config: Config, vault: Vault) -> None:
+    """A slug matching more than one page yields ok=False asking for the full path."""
+    vault.write_page(
+        "notes",
+        "dup",
+        {"title": "Dup N", "type": "note", "source": "mcp", "tags": ["x"]},
+        "# Dup",
+    )
+    vault.write_page(
+        "entities",
+        "dup",
+        {"title": "Dup E", "type": "entity", "source": "mcp", "tags": ["x"]},
+        "# Dup",
+    )
+    ctx = _context(config, vault)
+    result = pkm_read_page(ctx, path="dup")
+    assert result.ok is False
+    assert "ambiguous" in result.text
+    assert sorted(result.data["matches"]) == ["entities/dup.md", "notes/dup.md"]
+
+
+# --------------------------------------------------------------------------------------
+# pkm_edit_page
+# --------------------------------------------------------------------------------------
+
+
+def _seed_editable_note(vault: Vault) -> str:
+    """Write a notes/ page with a known body and return its vault-relative path."""
+    return vault.write_page(
+        "notes",
+        "editable",
+        {"title": "Editable", "type": "note", "source": "mcp", "tags": ["x"]},
+        "# Editable\n\nHello world.",
+    )
+
+
+def test_pkm_edit_page_unique_replace_writes_and_commits(
+    config: Config, vault: Vault
+) -> None:
+    """A single-occurrence replace edits the body and commits exactly the page path."""
+    rel = _seed_editable_note(vault)
+    git = FakeGit()
+    ctx = _context(config, vault, git=git)
+    result = pkm_edit_page(
+        ctx, path=rel, old_string="Hello world.", new_string="Goodbye world."
+    )
+    assert result.ok is True
+    assert result.data["path"] == "notes/editable.md"
+    # The body was edited through the validated write surface.
+    page = vault.read_page("notes/editable.md")
+    assert page.body == "# Editable\n\nGoodbye world."
+    # Exactly the one page path was staged, under the lock.
+    assert len(git.commits) == 1
+    _msg, staged = git.commits[0]
+    assert staged == ["notes/editable.md"]
+    assert git.max_lock_depth >= 1
+
+
+def test_pkm_edit_page_resolves_bare_slug(config: Config, vault: Vault) -> None:
+    """pkm_edit_page resolves a bare slug like pkm_read_page does."""
+    _seed_editable_note(vault)
+    ctx = _context(config, vault)
+    result = pkm_edit_page(
+        ctx, path="editable", old_string="Hello world.", new_string="Edited."
+    )
+    assert result.ok is True
+    assert vault.read_page("notes/editable.md").body == "# Editable\n\nEdited."
+
+
+def test_pkm_edit_page_not_found_is_ok_false(config: Config, vault: Vault) -> None:
+    """An old_string absent from the body yields ok=False; nothing is written."""
+    rel = _seed_editable_note(vault)
+    git = FakeGit()
+    ctx = _context(config, vault, git=git)
+    result = pkm_edit_page(ctx, path=rel, old_string="not present", new_string="x")
+    assert result.ok is False
+    assert "not found" in result.text
+    assert git.commits == []
+
+
+def test_pkm_edit_page_ambiguous_old_string_is_ok_false(
+    config: Config, vault: Vault
+) -> None:
+    """An old_string occurring more than once yields ok=False; nothing is written."""
+    rel = vault.write_page(
+        "notes",
+        "twice",
+        {"title": "Twice", "type": "note", "source": "mcp", "tags": ["x"]},
+        "# Twice\n\nfoo and foo again.",
+    )
+    git = FakeGit()
+    ctx = _context(config, vault, git=git)
+    result = pkm_edit_page(ctx, path=rel, old_string="foo", new_string="bar")
+    assert result.ok is False
+    assert "not unique" in result.text
+    assert result.data["occurrences"] == 2
+    assert git.commits == []
+
+
+def test_pkm_edit_page_no_op_is_ok_false(config: Config, vault: Vault) -> None:
+    """old_string == new_string is refused before any read/write."""
+    rel = _seed_editable_note(vault)
+    ctx = _context(config, vault)
+    result = pkm_edit_page(ctx, path=rel, old_string="Hello", new_string="Hello")
+    assert result.ok is False
+
+
+def test_pkm_edit_page_conflict_is_ok_false(config: Config, vault: Vault) -> None:
+    """A VaultConflictError from the underlying write routes to ok=False (via write)."""
+    rel = _seed_editable_note(vault)
+    git = FakeGit(error=VaultConflictError("rebase conflict"))
+    ctx = _context(config, vault, git=git)
+    result = pkm_edit_page(
+        ctx, path=rel, old_string="Hello world.", new_string="Edited."
+    )
+    assert result.ok is False
+    assert result.data["conflict"] is True
+    assert result.data["path"] == "notes/editable.md"

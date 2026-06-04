@@ -541,6 +541,7 @@ def _real_tool_context(config: Config) -> ToolContext:
     ingestor/query/research seams need not be real for the tools/list smoke. The vault
     is the real one over the seeded tmp vault.
     """
+    from thoth.git_sync import GitSync
     from thoth.ingest import Ingestor
     from thoth.mcp_server import ToolContext
     from thoth.query import QueryEngine
@@ -553,6 +554,7 @@ def _real_tool_context(config: Config) -> ToolContext:
         ingestor=cast(Ingestor, _unused("ingestor")),
         query_engine=cast(QueryEngine, _unused("query_engine")),
         research=cast(ResearchEngine, _unused("research")),
+        git=cast(GitSync, _unused("git")),
     )
 
 
