@@ -94,7 +94,7 @@ verifying concurrency, gate every vault-state check on the `ingest filed:` line.
 
 ## Why CI is necessary but not sufficient
 
-Every external boundary (Slack, Anthropic, Hindsight, Exa, Firecrawl, the git
+Every external boundary (Slack, Anthropic, Hindsight, Firecrawl, the git
 remote, Postgres) is exercised in tests against an **injected fake** (see SPEC
 section 12). That makes the suite fast and deterministic — but it means **green CI
 cannot catch SDK/boundary drift**. A dependency that changes its real API surface
@@ -200,8 +200,8 @@ Some checks don't need a real Slack message:
 There is **no CLI capture path** — the full ingest pipeline only runs through
 Slack, so end-to-end capture verification needs a real posted message.
 
-There is **no `query`/`ask` CLI** either — those run only via MCP or Slack. To drive
-`QueryEngine.answer` / `ResearchEngine.ask` live against the real vault + real Hindsight,
+There is **no `query` CLI** either — it runs only via MCP or Slack. To drive
+`QueryEngine.answer` live against the real vault + real Hindsight,
 run a `python -` snippet on the appliance with the env sourced and the systemd vars set:
 
 ```bash
@@ -251,10 +251,11 @@ Two non-obvious traps when verifying a semantic-retrieval change live:
 - **Control for CLIENT tool-selection — most "retrieval got worse/better" reports are measuring
   the client, not thoth.** thoth does not decide the output; the *calling* Claude session does.
   Three independent variables masquerade as a retrieval-quality change:
-  1. **Which tool.** `pkm_search` (`QueryEngine.answer`, vault-only, citation-forward) and
-     `pkm_ask` (`ResearchEngine.ask`, vault **+ web** synthesis, prose-forward) are different
-     *engines* — comparing one to the other tells you nothing about a retrieval change. Compare
-     `pkm_search` to `pkm_search`.
+  1. **Whether `pkm_search` ran at all.** `pkm_search` (`QueryEngine.answer`, vault-only,
+     citation-forward) is the retrieval engine — but a session may answer from training/web
+     without calling it, or fall back to file tools (below). An answer that never went through
+     `pkm_search` tells you nothing about a retrieval change. Confirm the tool actually ran and
+     compare `pkm_search` to `pkm_search`.
   2. **File-grep cheating.** A session whose working directory **is** the `pkm-vault` checkout
      has the notes as local `.md` and will read them directly via `Grep`/`Read` — even when told
      "use the MCP only." Claude Code does **not** disable its built-in file tools on a soft

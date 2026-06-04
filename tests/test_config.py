@@ -56,7 +56,6 @@ def test_happy_path_minimal() -> None:
     assert cfg.slack_alert_channel is None
     assert cfg.slack_allowed_users is None
     assert cfg.slack_capture_channel is None
-    assert cfg.exa_api_key is None
     assert cfg.firecrawl_api_key is None
     assert cfg.gemini_api_key is None
     assert cfg.daily_llm_budget == DEFAULT_DAILY_LLM_BUDGET == 200
@@ -80,7 +79,6 @@ def test_all_fields_populated() -> None:
         "SLACK_ALERT_CHANNEL": "C-ALERTS",
         "SLACK_ALLOWED_USERS": "U1 U2",
         "SLACK_CAPTURE_CHANNEL": "C-CAPTURE",
-        "EXA_API_KEY": FAKE_TOKEN,
         "FIRECRAWL_API_KEY": FAKE_TOKEN,
         "GEMINI_API_KEY": FAKE_TOKEN,
         "THOTH_DAILY_LLM_BUDGET": "50",
@@ -102,7 +100,6 @@ def test_all_fields_populated() -> None:
     assert cfg.slack_alert_channel == "C-ALERTS"
     assert cfg.slack_allowed_users == "U1 U2"
     assert cfg.slack_capture_channel == "C-CAPTURE"
-    assert cfg.exa_api_key == FAKE_TOKEN
     assert cfg.firecrawl_api_key == FAKE_TOKEN
     assert cfg.gemini_api_key == FAKE_TOKEN
     assert cfg.daily_llm_budget == 50
@@ -243,10 +240,10 @@ def test_no_mutation_of_input_and_environ() -> None:
 def test_env_file_seeding(tmp_path: Path) -> None:
     """A .env file fills gaps the env mapping leaves empty."""
     env_file = tmp_path / ".env"
-    env_file.write_text("PKM_VAULT=/opt/pkm-vault\nEXA_API_KEY=test-token\n")
+    env_file.write_text("PKM_VAULT=/opt/pkm-vault\nFIRECRAWL_API_KEY=test-token\n")
     cfg = load_config({}, env_file=env_file)
     assert cfg.vault_path == Path("/opt/pkm-vault")
-    assert cfg.exa_api_key == "test-token"
+    assert cfg.firecrawl_api_key == "test-token"
 
 
 @requires_dotenv
@@ -264,28 +261,28 @@ def test_use_dotenv_false_ignores_default_env_file(
 ) -> None:
     """With use_dotenv=False the default <THOTH_HOME>/.env is not read."""
     env_file = tmp_path / ".env"
-    env_file.write_text("EXA_API_KEY=test-token\n")
+    env_file.write_text("FIRECRAWL_API_KEY=test-token\n")
     cfg = load_config(
         {"PKM_VAULT": "/x", "THOTH_HOME": str(tmp_path)},
         use_dotenv=False,
     )
-    assert cfg.exa_api_key is None
+    assert cfg.firecrawl_api_key is None
 
 
 @requires_dotenv
 def test_default_env_file_is_read_from_thoth_home(tmp_path: Path) -> None:
     """When use_dotenv and <THOTH_HOME>/.env exists, it seeds config."""
     env_file = tmp_path / ".env"
-    env_file.write_text("EXA_API_KEY=test-token\n")
+    env_file.write_text("FIRECRAWL_API_KEY=test-token\n")
     cfg = load_config({"PKM_VAULT": "/x", "THOTH_HOME": str(tmp_path)})
-    assert cfg.exa_api_key == "test-token"
+    assert cfg.firecrawl_api_key == "test-token"
 
 
 def test_missing_env_file_is_silent(tmp_path: Path) -> None:
     """A non-existent explicit env_file does not raise; falls through to env."""
     cfg = load_config({"PKM_VAULT": "/opt/pkm-vault"}, env_file=tmp_path / "nope.env")
     assert cfg.vault_path == Path("/opt/pkm-vault")
-    assert cfg.exa_api_key is None
+    assert cfg.firecrawl_api_key is None
 
 
 def test_path_resolution_tilde(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -419,8 +416,8 @@ def test_config_is_frozen() -> None:
 
 def test_empty_optional_treated_as_unset() -> None:
     """An empty-string optional var is treated as unset (blank == absent)."""
-    cfg = load_config({"PKM_VAULT": "/x", "EXA_API_KEY": ""})
-    assert cfg.exa_api_key is None
+    cfg = load_config({"PKM_VAULT": "/x", "FIRECRAWL_API_KEY": ""})
+    assert cfg.firecrawl_api_key is None
 
 
 def test_empty_optional_falls_back_to_default() -> None:

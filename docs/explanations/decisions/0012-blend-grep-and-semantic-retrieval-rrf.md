@@ -8,7 +8,7 @@ Accepted
 
 ## Context
 
-`query.py` powers `pkm_search` (and the vault half of `pkm_ask`): given a query, it
+`query.py` powers `pkm_search`: given a query, it
 selects which vault pages to cite. It has two retrieval sources available:
 
 - **Structural** — a lexical grep over the curated folders plus wikilink traversal.

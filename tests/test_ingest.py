@@ -624,7 +624,7 @@ def test_module_import_is_light() -> None:
 
     import thoth.ingest  # noqa: F401  (import for the side effect of collection)
 
-    for heavy in ("anthropic", "exa_py", "firecrawl", "slack_bolt", "whisper"):
+    for heavy in ("anthropic", "firecrawl", "slack_bolt", "whisper"):
         assert heavy not in sys.modules
 
 

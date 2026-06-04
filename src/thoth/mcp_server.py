@@ -1,17 +1,13 @@
 """FastMCP stdio server exposing the ``pkm_*`` tools over the closed vault surface.
 
 This is the appliance's Model-Context-Protocol entry point (SPEC sections 2, 3 and 6).
-It publishes nine tools -- :func:`pkm_ingest`, :func:`pkm_search`, :func:`pkm_ask`,
-:func:`pkm_save_answer`, :func:`pkm_todos`, :func:`pkm_recent`, :func:`pkm_write_page`,
-:func:`pkm_read_page` and :func:`pkm_edit_page` -- each of which is a *pure delegation*
-to an already-validated Phase 0-3 collaborator:
+It publishes seven tools -- :func:`pkm_ingest`, :func:`pkm_search`, :func:`pkm_todos`,
+:func:`pkm_recent`, :func:`pkm_write_page`, :func:`pkm_read_page` and
+:func:`pkm_edit_page` -- each of which is a *pure delegation* to an already-validated
+Phase 0-3 collaborator:
 
 * ``pkm_ingest``   -> :meth:`thoth.ingest.Ingestor.ingest`
 * ``pkm_search``   -> :meth:`thoth.query.QueryEngine.answer`
-* ``pkm_ask``      -> :meth:`thoth.research.ResearchEngine.ask` (its reply surfaces the
-  offer-to-save affordance)
-* ``pkm_save_answer`` -> :meth:`thoth.research.ResearchEngine.save_answer` (the
-  user-confirmed "save this answer" write, closing the section 7.1 loop)
 * ``pkm_todos``    -> the canonical action scans on :class:`thoth.summary.SummaryEngine`
 * ``pkm_recent``   -> :meth:`thoth.summary.SummaryEngine.recent_pages`
 * ``pkm_write_page`` -> :meth:`thoth.vault.Vault.write_page`
@@ -51,7 +47,6 @@ from thoth.config import Config
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
-from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
 from thoth.vault import SchemaError, SlugError, Vault, VaultError
 
 logger = logging.getLogger("thoth")
@@ -64,8 +59,6 @@ __all__ = [
     "McpServerError",
     "pkm_ingest",
     "pkm_search",
-    "pkm_ask",
-    "pkm_save_answer",
     "pkm_todos",
     "pkm_recent",
     "pkm_write_page",
@@ -92,8 +85,6 @@ DEFAULT_MCP_PORT: int = 8765
 TOOL_NAMES: tuple[str, ...] = (
     "pkm_ingest",
     "pkm_search",
-    "pkm_ask",
-    "pkm_save_answer",
     "pkm_todos",
     "pkm_recent",
     "pkm_write_page",
@@ -101,13 +92,6 @@ TOOL_NAMES: tuple[str, ...] = (
     "pkm_edit_page",
 )
 """The exact tools :func:`build_server` registers (one per ``pkm_*`` function)."""
-
-# The offer-to-save affordance appended to a blended answer (SPEC section 7.1 step 4):
-# the model/host can call pkm_save_answer to file the answer as a notes/ page.
-_SAVE_OFFER_TEXT: str = (
-    "_To keep this, call pkm_save_answer with the question and this answer "
-    "(plus any web source URLs)._"
-)
 
 # A base64/data-URI argument is refused by pkm_ingest: the closed surface accepts text,
 # a URL, or a server-resolvable in-vault path only -- never inline binary (SPEC section
@@ -153,17 +137,15 @@ class ToolContext:
         vault: The path-confined read/write vault facade (the only disk surface).
         ingestor: The constructed ingest pipeline (``pkm_ingest``).
         query_engine: The vault-only retrieval engine (``pkm_search``).
-        research: The blended web+vault Q&A engine (``pkm_ask``).
         git: The vault git two-way sync used to commit+push the disk writes the
-            write tools make (``pkm_write_page``, ``pkm_save_answer``), staging exactly
-            the path each wrote (mirrors ``pkm_ingest``'s commit discipline, issue #85).
+            write tools make (``pkm_write_page``), staging exactly the path each
+            wrote (mirrors ``pkm_ingest``'s commit discipline, issue #85).
     """
 
     config: Config
     vault: Vault
     ingestor: Ingestor
     query_engine: QueryEngine
-    research: ResearchEngine
     git: GitSync
 
 
@@ -193,30 +175,6 @@ def _render_query_result(result: QueryResult) -> str:
     else:
         lines.append("")
         lines.append("_No vault sources cited._")
-    return "\n".join(lines)
-
-
-def _render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
-    """Render a blended Q&A answer with both vault and web citations in Markdown.
-
-    When ``offer_save`` is set (and the answer is non-empty) the offer-to-save line is
-    appended, surfacing the :func:`pkm_save_answer` affordance (SPEC section 7.1 step 4)
-    so the host can file the answer as a ``notes/`` page on confirmation.
-    """
-    lines = [result.answer.strip()]
-    if result.vault_citations or result.web_citations:
-        lines.append("")
-        lines.append("**Sources:**")
-        lines.extend(f"- {_render_citation(c)}" for c in result.vault_citations)
-        for web in result.web_citations:
-            label = web.title or web.url
-            lines.append(f"- [{label}]({web.url}) - {web.url}")
-    else:
-        lines.append("")
-        lines.append("_No sources cited._")
-    if offer_save and result.answer.strip():
-        lines.append("")
-        lines.append(_SAVE_OFFER_TEXT)
     return "\n".join(lines)
 
 
@@ -417,114 +375,6 @@ def pkm_search(
             ],
         },
     )
-
-
-def pkm_ask(
-    ctx: ToolContext,
-    *,
-    question: str,
-    force_web: bool = False,
-    search_keywords: list[str] | None = None,
-) -> ToolResult:
-    """Answer a question by blending the vault with the web (when the model chooses to).
-
-    Delegates to :meth:`thoth.research.ResearchEngine.ask`, forwarding ``force_web``,
-    and renders the harness-built vault citations plus the web URLs the model actually
-    read. ``used_web`` and the web sources surface in the result data. A
-    :class:`~thoth.research.ResearchError` is surfaced as ``ToolResult(ok=False, ...)``.
-
-    Args:
-        ctx: The injected collaborator bundle.
-        question: The natural-language question.
-        force_web: When true, the web is consulted even for a vault-answerable question
-            (a leading ``research:`` marker in ``question`` has the same effect).
-        search_keywords: De-pluralised, synonym-expanded keywords that seed the vault's
-            lexical grep (forwarded as ``search_terms``). The grep matches whole words,
-            so a plural question misses singular page content unless the calling model
-            supplies the singular keyword here.
-
-    Returns:
-        A :class:`ToolResult` with the rendered blended answer or the error message.
-    """
-    try:
-        result = ctx.research.ask(
-            question, force_web=force_web, search_terms=search_keywords
-        )
-    except ResearchError as exc:
-        return ToolResult(ok=False, text=f"Could not answer that: {exc}", data={})
-    return ToolResult(
-        ok=True,
-        text=_render_ask_result(result),
-        data={
-            "answer": result.answer,
-            "vault_citations": [c.path for c in result.vault_citations],
-            "web_citations": [w.url for w in result.web_citations],
-            "used_web": result.used_web,
-        },
-    )
-
-
-def pkm_save_answer(
-    ctx: ToolContext,
-    *,
-    question: str,
-    answer: str,
-    web_sources: list[str] | None = None,
-    vault_paths: list[str] | None = None,
-    slug: str | None = None,
-) -> ToolResult:
-    """File a previously-given blended answer as a ``notes/<slug>.md`` page.
-
-    This closes the offer-to-save loop (SPEC section 7.1 step 4): the host calls it
-    after a :func:`pkm_ask` answer the user wants to keep. It reconstructs an
-    :class:`~thoth.research.AskResult` from the supplied ``answer`` plus any
-    ``web_sources`` URLs and ``vault_paths`` (each rebuilt into an unfabricable
-    :class:`~thoth.query.Citation` via the query engine -- a path that does not resolve
-    is silently dropped, never fabricated), then writes the page through the validated
-    :meth:`~thoth.research.ResearchEngine.save_answer` (which confines the path to
-    ``notes/`` and validates the slug), then commits+pushes exactly that path via
-    :func:`_commit_written_page`. A :class:`~thoth.research.ResearchError` (bad slug or
-    vault rejection) is surfaced as ``ToolResult(ok=False, ...)`` and nothing is written
-    (no commit is attempted); a vault git conflict/sync failure after the disk write is
-    likewise surfaced ``ok=False`` (the answer stays on disk locally).
-
-    Args:
-        ctx: The injected collaborator bundle.
-        question: The original question (used for the title and default slug).
-        answer: The answer prose to persist.
-        web_sources: The web source URLs to record (``sources`` frontmatter + bullets).
-        vault_paths: Vault-relative page paths to cite as ``[[wikilinks]]``; each is
-            re-validated through the query engine and dropped if it does not resolve.
-        slug: An explicit slug; defaults to a slugified ``question``.
-
-    Returns:
-        A :class:`ToolResult` with the written path on success, else the rejection.
-    """
-    if not answer.strip():
-        return ToolResult(ok=False, text="Refusing to save an empty answer.", data={})
-    web_citations = [
-        WebCitation(url=url, title="") for url in (web_sources or []) if url
-    ]
-    vault_citations: list[Citation] = []
-    for path in vault_paths or []:
-        try:
-            vault_citations.append(ctx.query_engine.build_citation(path))
-        except VaultError:
-            continue
-    result = AskResult(
-        answer=answer,
-        vault_citations=vault_citations,
-        web_citations=web_citations,
-        used_web=bool(web_citations),
-    )
-    try:
-        rel = ctx.research.save_answer(question, result, slug=slug)
-    except ResearchError as exc:
-        return ToolResult(ok=False, text=f"Could not save that: {exc}", data={})
-
-    uri = ctx.vault.obsidian_uri(rel)
-    wikilink = f"[[{PurePosixPath(rel).stem}]]"
-    return _commit_written_page(ctx, rel, action="Saved", uri=uri, wikilink=wikilink)
 
 
 def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
@@ -1030,49 +880,6 @@ def build_server(ctx: ToolContext) -> Any:
             ctx, query=query, max_pages=max_pages, search_keywords=search_keywords
         )
 
-    @server.tool(name="pkm_ask")
-    def _ask(
-        question: str,
-        force_web: bool = False,
-        search_keywords: list[str] | None = None,
-    ) -> ToolResult:
-        """Answer a question by blending the vault with the web when chosen.
-
-        Pass `search_keywords` to seed the vault search: de-pluralised,
-        stop-word-stripped, synonym-expanded keywords drawn from the question
-        (dogs -> dog; dog -> Labradoodle, pet). Whole-word grep means an
-        un-singularised plural misses singular page content. Omit only for a
-        single bare keyword.
-
-        When relaying the result, preserve each source's clickable
-        `obsidian://open?...` link verbatim -- present citations as those links,
-        never flattened to bare `path/to/page.md` text.
-        """
-        return pkm_ask(
-            ctx,
-            question=question,
-            force_web=force_web,
-            search_keywords=search_keywords,
-        )
-
-    @server.tool(name="pkm_save_answer")
-    def _save_answer(
-        question: str,
-        answer: str,
-        web_sources: list[str] | None = None,
-        vault_paths: list[str] | None = None,
-        slug: str | None = None,
-    ) -> ToolResult:
-        """File a previously-given blended answer as a notes/ page."""
-        return pkm_save_answer(
-            ctx,
-            question=question,
-            answer=answer,
-            web_sources=web_sources,
-            vault_paths=vault_paths,
-            slug=slug,
-        )
-
     @server.tool(name="pkm_todos")
     def _todos(include_done: bool = False) -> ToolResult:
         """List open (and optionally done) actions from the vault frontmatter."""
@@ -1137,9 +944,9 @@ def run(
     wires the full collaborator graph -- a :class:`~thoth.vault.Vault`, an
     :class:`~thoth.llm.LLM`, an :class:`~thoth.extract.Extractor`, a
     :class:`~thoth.hindsight.Hindsight`, a :class:`~thoth.git_sync.GitSync`, an
-    :class:`~thoth.ingest.Ingestor`, a :class:`~thoth.query.QueryEngine`, and a
-    :class:`~thoth.research.ResearchEngine` (the graph ``slack_app.run`` builds, plus
-    research) -- then builds the server via :func:`build_server` and runs it.
+    :class:`~thoth.ingest.Ingestor` and a :class:`~thoth.query.QueryEngine` (the graph
+    ``slack_app.run`` builds) -- then builds the server via :func:`build_server` and
+    runs it.
 
     The ``transport`` selects how the server is exposed (issue #103):
 
@@ -1199,13 +1006,11 @@ def run(
             config, vault, llm, extractor, hindsight, git, schema_md=vault.schema_md()
         )
         query_engine = QueryEngine(config, vault, hindsight, llm)
-        research = ResearchEngine(config, vault, query_engine, extractor, llm)
         ctx = ToolContext(
             config=config,
             vault=vault,
             ingestor=ingestor,
             query_engine=query_engine,
-            research=research,
             git=git,
         )
 

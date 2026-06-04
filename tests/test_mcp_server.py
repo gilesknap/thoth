@@ -1,7 +1,7 @@
 """Tests for :mod:`thoth.mcp_server` -- the FastMCP stdio server's pure tool bodies.
 
-The nine ``pkm_*`` functions are exercised directly with a :class:`~thoth.mcp_server.
-ToolContext` whose ``ingestor``/``query_engine``/``research`` are recording fakes (they
+The seven ``pkm_*`` functions are exercised directly with a :class:`~thoth.mcp_server.
+ToolContext` whose ``ingestor``/``query_engine`` are recording fakes (they
 capture the delegated call and return a canned report/result) and whose ``vault`` is a
 **real** :class:`~thoth.vault.Vault` over a ``tmp_path`` vault -- so ``pkm_write_page``,
 ``pkm_todos`` and ``pkm_recent`` hit real path confinement and real frontmatter parsing,
@@ -32,12 +32,10 @@ from thoth.mcp_server import (
     ToolContext,
     ToolResult,
     build_server,
-    pkm_ask,
     pkm_edit_page,
     pkm_ingest,
     pkm_read_page,
     pkm_recent,
-    pkm_save_answer,
     pkm_search,
     pkm_todos,
     pkm_write_page,
@@ -49,7 +47,6 @@ from thoth.query import (
     QueryError,
     QueryResult,
 )
-from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
 from thoth.vault import Vault
 
 # Obviously-fake placeholder only (gitleaks scans the commit).
@@ -203,60 +200,6 @@ class FakeQueryEngine:
             raise self._error
         return self._result
 
-    def build_citation(self, path: str) -> Citation:
-        """Build a canned citation for a path (used by pkm_save_answer)."""
-        slug = path.rsplit("/", 1)[-1].removesuffix(".md")
-        return _citation(path=path, title=slug, slug=slug)
-
-
-class FakeResearch:
-    """Records ask/save calls and returns canned results (or raises canned errors)."""
-
-    def __init__(
-        self,
-        result: AskResult | None = None,
-        error: Exception | None = None,
-        *,
-        saved_path: str = "queries/saved.md",
-        save_error: Exception | None = None,
-    ) -> None:
-        self.asks: list[tuple[str, bool]] = []
-        self.last_search_terms: list[str] | None = None
-        self.saves: list[tuple[str, AskResult, str | None]] = []
-        self._result = result if result is not None else _ask_result()
-        self._error = error
-        self._saved_path = saved_path
-        self._save_error = save_error
-
-    def ask(
-        self,
-        question: str,
-        *,
-        force_web: bool = False,
-        max_pages: int = 5,
-        search_terms: list[str] | None = None,
-    ) -> AskResult:
-        """Record the question and return the canned result (or raise)."""
-        self.asks.append((question, force_web))
-        self.last_search_terms = search_terms
-        if self._error is not None:
-            raise self._error
-        return self._result
-
-    def save_answer(
-        self,
-        question: str,
-        result: AskResult,
-        *,
-        slug: str | None = None,
-        today: Any = None,
-    ) -> str:
-        """Record the save and return the canned path (or raise)."""
-        self.saves.append((question, result, slug))
-        if self._save_error is not None:
-            raise self._save_error
-        return self._saved_path
-
 
 class FakeGit:
     """Records commit calls under a re-entrant capture lock; configurable to raise.
@@ -351,19 +294,6 @@ def _query_result(**overrides: Any) -> QueryResult:
     return QueryResult(**base)
 
 
-def _ask_result(**overrides: Any) -> AskResult:
-    """Build an AskResult with one vault citation and one web citation by default."""
-    base: dict[str, Any] = {
-        "answer": "Blended answer.",
-        "vault_citations": [_citation()],
-        "web_citations": [WebCitation(url="https://example.com/a", title="A")],
-        "used_web": True,
-        "saved_path": None,
-    }
-    base.update(overrides)
-    return AskResult(**base)
-
-
 # --- fixtures ----------------------------------------------------------------------
 
 
@@ -387,7 +317,6 @@ def _context(
     *,
     ingestor: FakeIngestor | None = None,
     query_engine: FakeQueryEngine | None = None,
-    research: FakeResearch | None = None,
     git: FakeGit | None = None,
 ) -> ToolContext:
     """Build a ToolContext wired to a real vault and (fake) collaborators."""
@@ -397,9 +326,6 @@ def _context(
         ingestor=cast(Ingestor, ingestor if ingestor is not None else FakeIngestor()),
         query_engine=cast(
             QueryEngine, query_engine if query_engine is not None else FakeQueryEngine()
-        ),
-        research=cast(
-            ResearchEngine, research if research is not None else FakeResearch()
         ),
         git=cast(GitSync, git if git is not None else FakeGit()),
     )
@@ -476,7 +402,7 @@ def test_build_server_registers_exactly_tool_names(
     assert isinstance(server, _FakeFastMCP)
     assert server.name == SERVER_NAME == "thoth"
     assert set(server.registered) == set(TOOL_NAMES)
-    assert len(TOOL_NAMES) == 9
+    assert len(TOOL_NAMES) == 7
 
 
 def test_registered_tools_delegate_to_the_right_op(
@@ -485,10 +411,7 @@ def test_registered_tools_delegate_to_the_right_op(
     """Each registered callable, when invoked, delegates to its matching context op."""
     ingestor = FakeIngestor()
     query_engine = FakeQueryEngine()
-    research = FakeResearch()
-    ctx = _context(
-        config, vault, ingestor=ingestor, query_engine=query_engine, research=research
-    )
+    ctx = _context(config, vault, ingestor=ingestor, query_engine=query_engine)
     server = build_server(ctx)
 
     # pkm_search -> query_engine.answer (search_keywords forwarded as search_terms)
@@ -496,16 +419,6 @@ def test_registered_tools_delegate_to_the_right_op(
     assert isinstance(out, ToolResult)
     assert query_engine.queries == [("hi", 5)]
     assert query_engine.last_search_terms == ["hi"]
-
-    # pkm_ask -> research.ask (force_web + search_keywords forwarded)
-    server.registered["pkm_ask"](question="q", force_web=True, search_keywords=["q"])
-    assert research.asks == [("q", True)]
-    assert research.last_search_terms == ["q"]
-
-    # pkm_save_answer -> research.save_answer
-    server.registered["pkm_save_answer"](question="q", answer="an answer")
-    assert len(research.saves) == 1
-    assert research.saves[0][0] == "q"
 
     # pkm_ingest -> ingestor.ingest (Capture with source='mcp')
     server.registered["pkm_ingest"](text="a note")
@@ -724,134 +637,6 @@ def test_pkm_search_without_keywords_forwards_none(
     ctx = _context(config, vault, query_engine=query_engine)
     pkm_search(ctx, query="dog")
     assert query_engine.last_search_terms is None
-
-
-# --------------------------------------------------------------------------------------
-# pkm_ask
-# --------------------------------------------------------------------------------------
-
-
-def test_pkm_ask_forwards_force_web_and_surfaces_web_sources(
-    config: Config, vault: Vault
-) -> None:
-    """pkm_ask forwards force_web; used_web + web sources surface in text and data."""
-    research = FakeResearch()
-    ctx = _context(config, vault, research=research)
-    result = pkm_ask(ctx, question="explain X", force_web=True)
-    assert result.ok is True
-    assert research.asks == [("explain X", True)]
-    assert result.data["used_web"] is True
-    assert result.data["web_citations"] == ["https://example.com/a"]
-    assert "https://example.com/a" in result.text
-    # The vault citation also renders.
-    assert "[[exa-search]]" in result.text
-    # The reply surfaces the offer-to-save affordance (SPEC section 7.1 step 4).
-    assert "pkm_save_answer" in result.text
-
-
-def test_pkm_ask_research_error_is_ok_false(config: Config, vault: Vault) -> None:
-    """A ResearchError is surfaced as ToolResult(ok=False), never raised."""
-    research = FakeResearch(error=ResearchError("empty answer"))
-    ctx = _context(config, vault, research=research)
-    result = pkm_ask(ctx, question="?")
-    assert result.ok is False
-    assert "empty answer" in result.text
-
-
-def test_pkm_ask_forwards_search_keywords(config: Config, vault: Vault) -> None:
-    """search_keywords forwards to ask() as search_terms (de-pluralised grep seed)."""
-    research = FakeResearch()
-    ctx = _context(config, vault, research=research)
-    pkm_ask(ctx, question="dogs", search_keywords=["dog", "pet"])
-    assert research.last_search_terms == ["dog", "pet"]
-
-
-# --------------------------------------------------------------------------------------
-# pkm_save_answer (the offer-to-save write, SPEC section 7.1 step 4)
-# --------------------------------------------------------------------------------------
-
-
-def test_pkm_save_answer_delegates_and_returns_path(
-    config: Config, vault: Vault
-) -> None:
-    """pkm_save_answer reconstructs an AskResult and delegates to save_answer."""
-    research = FakeResearch(saved_path="queries/how-x-works.md")
-    git = FakeGit()
-    ctx = _context(config, vault, research=research, git=git)
-
-    result = pkm_save_answer(
-        ctx,
-        question="how does X work",
-        answer="X works like so.",
-        web_sources=["https://example.com/x"],
-        vault_paths=["concepts/exa-search.md"],
-    )
-
-    assert result.ok is True
-    assert result.data["path"] == "queries/how-x-works.md"
-    assert result.data["committed"] is True
-    # Exactly the one saved path was staged, under the lock.
-    assert len(git.commits) == 1
-    _msg, staged = git.commits[0]
-    assert staged == ["queries/how-x-works.md"]
-    assert git.max_lock_depth >= 1
-    # The reconstructed result carried the supplied web + vault citations.
-    assert len(research.saves) == 1
-    saved_question, saved_result, saved_slug = research.saves[0]
-    assert saved_question == "how does X work"
-    assert saved_slug is None
-    assert saved_result.answer == "X works like so."
-    assert [w.url for w in saved_result.web_citations] == ["https://example.com/x"]
-    assert [c.path for c in saved_result.vault_citations] == ["concepts/exa-search.md"]
-    assert saved_result.used_web is True
-
-
-def test_pkm_save_answer_empty_answer_is_ok_false(config: Config, vault: Vault) -> None:
-    """An empty answer is refused before any vault write."""
-    research = FakeResearch()
-    git = FakeGit()
-    ctx = _context(config, vault, research=research, git=git)
-    result = pkm_save_answer(ctx, question="q", answer="   ")
-    assert result.ok is False
-    assert research.saves == []
-    assert git.commits == []
-
-
-def test_pkm_save_answer_vault_rejection_is_ok_false(
-    config: Config, vault: Vault
-) -> None:
-    """A ResearchError from save_answer surfaces as ToolResult(ok=False); no commit."""
-    research = FakeResearch(save_error=ResearchError("invalid slug"))
-    git = FakeGit()
-    ctx = _context(config, vault, research=research, git=git)
-    result = pkm_save_answer(ctx, question="q", answer="an answer", slug="Bad Slug")
-    assert result.ok is False
-    assert "invalid slug" in result.text
-    # A rejected save never reaches the committer.
-    assert git.commits == []
-
-
-def test_pkm_save_answer_conflict_is_ok_false_with_conflict_flag(
-    config: Config, vault: Vault
-) -> None:
-    """VaultConflictError on commit maps to ok=False with conflict=True; no raise."""
-    research = FakeResearch(saved_path="queries/saved.md")
-    git = FakeGit(error=VaultConflictError("rebase conflict"))
-    ctx = _context(config, vault, research=research, git=git)
-    result = pkm_save_answer(ctx, question="q", answer="an answer")
-    assert result.ok is False
-    assert result.data["conflict"] is True
-    assert result.data["path"] == "queries/saved.md"
-
-
-def test_pkm_save_answer_git_failure_is_ok_false(config: Config, vault: Vault) -> None:
-    """A generic GitSyncError on commit maps to ok=False; nothing raises."""
-    research = FakeResearch(saved_path="queries/saved.md")
-    git = FakeGit(error=GitSyncError("push rejected"))
-    ctx = _context(config, vault, research=research, git=git)
-    result = pkm_save_answer(ctx, question="q", answer="an answer")
-    assert result.ok is False
-    assert "push rejected" in result.text
 
 
 # --------------------------------------------------------------------------------------

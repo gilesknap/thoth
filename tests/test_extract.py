@@ -2,10 +2,10 @@
 
 Every external boundary is isolated: DNS resolution is replaced by monkeypatching
 the :func:`thoth.extract._resolve_ips` seam (no real lookups), ``httpx`` is driven by
-:class:`httpx.MockTransport` (no real network), Exa/Firecrawl are injected fakes, and
+:class:`httpx.MockTransport` (no real network), Firecrawl is an injected fake, and
 ``whisper`` is exercised by monkeypatching :func:`subprocess.run`. The SSRF guard is
-proven to run *before* any client/socket is touched. The ``exa_py``/``firecrawl``/
-``whisper`` packages are never imported (an import-safety test asserts this).
+proven to run *before* any client/socket is touched. The ``firecrawl``/``whisper``
+packages are never imported (an import-safety test asserts this).
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ from thoth.extract import (
     FetchError,
     SsrfError,
     TranscriptionError,
-    WebHit,
     assert_url_allowed,
     is_url_allowed,
 )
@@ -38,11 +37,10 @@ from thoth.extract import (
 
 @pytest.fixture
 def config() -> Config:
-    """A frozen Config with fake Exa/Firecrawl keys (no disk, no network)."""
+    """A frozen Config with a fake Firecrawl key (no disk, no network)."""
     return load_config(
         {
             "PKM_VAULT": "/x",
-            "EXA_API_KEY": "test-token",
             "FIRECRAWL_API_KEY": "test-token",
         }
     )
@@ -62,26 +60,6 @@ def _force_resolver(
 
 
 # --- injectable fakes -------------------------------------------------------- #
-
-
-class _ExaResponse:
-    """A minimal stand-in for an Exa response object exposing ``.results``."""
-
-    def __init__(self, results: list[Any]) -> None:
-        self.results = results
-
-
-class _FakeExa:
-    """Records the query and returns canned results for :meth:`search`."""
-
-    def __init__(self, results: list[Any]) -> None:
-        self.results_payload = results
-        self.calls: list[tuple[str, int]] = []
-
-    def search(self, query: str, *, num_results: int = 5) -> Any:
-        """Record the call and return an object exposing ``.results`` (exa_py 2.x)."""
-        self.calls.append((query, num_results))
-        return _ExaResponse(self.results_payload)
 
 
 class _FakeFirecrawl:
@@ -209,53 +187,6 @@ def test_resolve_ips_raises_ssrf_on_gaierror(
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     with pytest.raises(SsrfError):
         is_url_allowed("https://does-not-resolve.example")
-
-
-# --------------------------------------------------------------------------- #
-# web_search
-# --------------------------------------------------------------------------- #
-
-
-def test_web_search_maps_results_to_webhits(config: Config) -> None:
-    """Exa results (attribute objects) map into WebHit url/title/snippet."""
-
-    class _Item:
-        def __init__(self, url: str, title: str, text: str) -> None:
-            self.url = url
-            self.title = title
-            self.text = text
-
-    fake = _FakeExa(
-        [
-            _Item("https://a.example", "Alpha", "first snippet"),
-            _Item("https://b.example", "Beta", "second snippet"),
-        ]
-    )
-    extractor = Extractor(config, exa=fake)
-
-    hits = extractor.web_search("controllers", num_results=2)
-
-    assert hits == [
-        WebHit("https://a.example", "Alpha", "first snippet"),
-        WebHit("https://b.example", "Beta", "second snippet"),
-    ]
-    assert fake.calls == [("controllers", 2)]
-
-
-def test_web_search_tolerates_dict_results(config: Config) -> None:
-    """Exa results given as dicts are mapped just as well as objects."""
-    fake = _FakeExa([{"url": "https://c.example", "title": "Gamma"}])
-    extractor = Extractor(config, exa=fake)
-    hits = extractor.web_search("q")
-    assert hits == [WebHit("https://c.example", "Gamma", "")]
-
-
-def test_web_search_without_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no EXA_API_KEY and no injected client, accessing exa raises ExtractError."""
-    cfg = load_config({"PKM_VAULT": "/x"})  # no EXA_API_KEY
-    extractor = Extractor(cfg)
-    with pytest.raises(ExtractError):
-        extractor.web_search("q")
 
 
 # --------------------------------------------------------------------------- #
@@ -587,12 +518,12 @@ def test_transcribe_missing_binary_raises(
 
 
 def test_module_import_pulls_no_heavy_deps() -> None:
-    """Importing thoth.extract must not import exa_py/firecrawl/whisper.
+    """Importing thoth.extract must not import firecrawl/whisper.
 
     These packages are absent in CI; the module must only need stdlib + httpx +
     thoth.config at import time (lazy/subprocess for everything else).
     """
     import thoth.extract  # noqa: F401 - ensure it is imported
 
-    for forbidden in ("exa_py", "firecrawl", "whisper"):
+    for forbidden in ("firecrawl", "whisper"):
         assert forbidden not in sys.modules

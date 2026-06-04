@@ -17,7 +17,7 @@ true way to set it up — there is no migration path to preserve.
 Slack  <-----> | thoth-slack.service  --(127.0.0.1:9277)-->  thoth-hindsight    |
 (private       |   (capture / retrieve)                      (semantic index)   |
  channel)      |        |                                                       |
-               |        v   whisper | Exa | Firecrawl | Claude                  |
+               |        v   whisper | Firecrawl | Claude                        |
                | /opt/pkm-vault  --git push/pull (HTTPS)-->  pkm-vault (GitHub) |
                +----------------------------------------------------------------+
                  cron: 06:30 reindex | 07:00 daily/weekly summary | config-backup every 6h
@@ -34,7 +34,7 @@ Slack  <-----> | thoth-slack.service  --(127.0.0.1:9277)-->  thoth-hindsight    
 - [ ] A VPS: Ubuntu 24.04+ (24.04/26.04 tested), 2 vCPU, ~8 GB RAM, 50 GB+ disk. CPU-only is fine.
 - [ ] Two GitHub repos: this one (thoth) and your own empty `pkm-vault` (your knowledge).
 - [ ] API keys (created in step 6): Anthropic (required), Gemini (for the index),
-      Exa + Firecrawl (optional, for web research), a GitHub PAT (to push the vault).
+      Firecrawl (optional, for URL ingest), a GitHub PAT (to push the vault).
 - [ ] A Slack workspace where you can create an app ({doc}`slack-setup`).
 ```
 
@@ -193,12 +193,11 @@ Fill in these variables. **Where to get each key:**
 | `THOTH_HINDSIGHT_BINARY` | yes | `/home/pkm/.local/bin/hindsight-embed` (from step 4). |
 | `THOTH_HINDSIGHT_PROFILE` | yes | `thoth`. |
 | `THOTH_HINDSIGHT_BANK` | yes | `thoth`. |
-| `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate / answer. |
+| `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate. |
 | `ANTHROPIC_MODEL` | no | Override the default model for all calls. `THOTH_ANALYSE_MODEL` (vision), `THOTH_DIAGRAM_MODEL` (Excalidraw, worth an Opus), and `THOTH_INTENT_MODEL` (the intent gate, a cheap Haiku) override per-call. |
 | `THOTH_IMAGE_RESIZE_THRESHOLD_BYTES` | no | Captured images larger than this are downscaled (longest edge capped at ~1568px, aspect ratio preserved) before they are stored in `raw/assets/` *and* before they reach the vision model. Default `2097152` (2 MB); a non-positive value disables resizing. |
 | `GEMINI_API_KEY` | yes (for the index) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey). The **same key** you gave Hindsight in step 4; it powers embeddings + fact-extraction. |
-| `EXA_API_KEY` | no | [dashboard.exa.ai](https://dashboard.exa.ai) → API keys. Web **search** for the `research:` path. Blank ⇒ vault-only. |
-| `FIRECRAWL_API_KEY` | no | [firecrawl.dev](https://www.firecrawl.dev) → dashboard → API keys. URL→Markdown **extraction**. Blank ⇒ vault-only. |
+| `FIRECRAWL_API_KEY` | no | [firecrawl.dev](https://www.firecrawl.dev) → dashboard → API keys. URL→Markdown **extraction** for URL ingest. Blank ⇒ URLs stored without fetched content. |
 | `GITHUB_PKM_VAULT_TOKEN` | yes | A GitHub **fine-grained PAT** scoped to the `pkm-vault` repo with **Contents: Read and write** ([github.com/settings/tokens](https://github.com/settings/tokens)). thoth feeds it to git as an `x-access-token` HTTPS credential to push the vault. |
 | `SLACK_BOT_TOKEN` | yes | `xoxb-…` — see {doc}`slack-setup`. |
 | `SLACK_APP_TOKEN` | yes | `xapp-…` (scope `connections:write`) — see {doc}`slack-setup`. |
@@ -261,7 +260,7 @@ Cloudflare-Access wiring for the claude.ai connector).
 
 The first time the box hits the real services is the first time those seams run for real.
 Work through {doc}`first-light` — one happy-path check per boundary (Anthropic, Hindsight,
-Slack, MCP, Exa/Firecrawl, cron), plus the one-command live-smoke suite. Post a note, a URL,
+Slack, MCP, Firecrawl, cron), plus the one-command live-smoke suite. Post a note, a URL,
 and a voice memo in the capture channel and watch them land in the vault.
 
 ## Upgrading / redeploying a change

@@ -9,7 +9,7 @@ These cover the network surface added by ``thoth mcp --transport http``:
   with 401 BEFORE any tool dispatch;
 * Tier-2 Cf-Access JWT -- validate a freshly-signed token (throwaway RSA keypair,
   stubbed JWKS) and reject expired / wrong-audience / ``alg=none`` tokens;
-* ``tools/list`` parity -- the HTTP server still registers all seven ``pkm_*`` tools.
+* ``tools/list`` parity -- the HTTP server still registers all five ``pkm_*`` tools.
 
 No real ``mcp``/``uvicorn``/network: FastMCP, uvicorn and the JWKS fetch are faked. The
 JWT path uses a real in-test RSA keypair via ``pyjwt[crypto]`` (a dev dependency), so
@@ -360,7 +360,6 @@ def _ctx(config: Config) -> Any:
         vault=Vault(config),
         ingestor=_Stub(),  # type: ignore[arg-type]
         query_engine=_Stub(),  # type: ignore[arg-type]
-        research=_Stub(),  # type: ignore[arg-type]
         git=_Stub(),  # type: ignore[arg-type]
     )
 
@@ -459,17 +458,17 @@ def test_run_http_leaves_allowlists_at_defaults_when_unset(
     assert sec.allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 
 
-def test_run_http_registers_all_seven_tools(
+def test_run_http_registers_all_five_tools(
     tmp_path: Path, fake_mcp_and_uvicorn: dict[str, Any]
 ) -> None:
-    """tools/list parity: the HTTP server still exposes all seven pkm_* tools."""
+    """tools/list parity: the HTTP server still exposes all five pkm_* tools."""
     from thoth import mcp_server
 
     config = _config(tmp_path, THOTH_MCP_API_KEYS="secret-key")
     mcp_server.run(config, _ctx(config), transport="http", port=9998)
     server = fake_mcp_and_uvicorn["fastmcp"].instances[-1]
     assert set(server.registered) == set(mcp_server.TOOL_NAMES)
-    assert len(server.registered) == 9
+    assert len(server.registered) == 7
 
 
 # --- the auth middleware end to end (bearer accept / reject before dispatch) --------

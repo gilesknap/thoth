@@ -130,7 +130,6 @@ class Config:
     slack_alert_channel: str | None
     slack_allowed_users: str | None
     slack_capture_channel: str | None
-    exa_api_key: str | None
     firecrawl_api_key: str | None
     gemini_api_key: str | None
     daily_llm_budget: int
@@ -425,7 +424,6 @@ def load_config(
         slack_alert_channel=lookup("SLACK_ALERT_CHANNEL"),
         slack_allowed_users=lookup("SLACK_ALLOWED_USERS"),
         slack_capture_channel=lookup("SLACK_CAPTURE_CHANNEL"),
-        exa_api_key=lookup("EXA_API_KEY"),
         firecrawl_api_key=lookup("FIRECRAWL_API_KEY"),
         gemini_api_key=lookup("GEMINI_API_KEY"),
         daily_llm_budget=_int_opt(

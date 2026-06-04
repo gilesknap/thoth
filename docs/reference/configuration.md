@@ -52,7 +52,6 @@ and so on). Blank counts as unset.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `EXA_API_KEY` | Exa web-search key (powers the `research:` path). Blank = vault-only. | — |
 | `FIRECRAWL_API_KEY` | Firecrawl URL→Markdown key. Blank = vault-only. | — |
 | `GEMINI_API_KEY` | Gemini key for the Hindsight semantic index (embeddings + fact-extraction). | — |
 | `THOTH_HINDSIGHT_BINARY` | Path to the `hindsight-embed` CLI. | `hindsight` |

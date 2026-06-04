@@ -1,12 +1,10 @@
 """URL/PDF/image/audio extraction with an SSRF guard and injectable boundaries.
 
 This module is the appliance's read-only window onto the outside world (SPEC
-sections 6 and 7.1). It turns a URL into clean markdown (Exa for semantic
-discovery, Firecrawl for extraction), fetches a binary (a PDF or an image) to a
-temporary file *server-side* for :meth:`thoth.vault.Vault.save_asset` (never
-base64), and shells out to a local ``whisper`` CLI for optional speech-to-text.
-The same side-effect-free :meth:`Extractor.web_search` / :meth:`Extractor.web_extract`
-surface is reused by the Phase 3 ``pkm_ask`` research path.
+sections 6 and 7.1). It turns a URL into clean markdown via Firecrawl, fetches a
+binary (a PDF or an image) to a temporary file *server-side* for
+:meth:`thoth.vault.Vault.save_asset` (never base64), and shells out to a local
+``whisper`` CLI for optional speech-to-text.
 
 Every network entry point passes through a single SSRF gate
 (:func:`assert_url_allowed`) **before** any client or socket is touched: the URL
@@ -16,12 +14,11 @@ schemes and loopback/private/link-local/reserved/multicast/unspecified targets
 (for example the ``169.254.169.254`` cloud-metadata address).
 
 Import safety (the pytest-collection trap): only the standard library, ``httpx``,
-and :mod:`thoth.config` are imported at module top level. ``exa_py`` and the
-Firecrawl client are imported **lazily** inside :attr:`Extractor.exa` /
-:attr:`Extractor.firecrawl`, and ``whisper`` is never imported at all — it is a
-subprocess. So importing this module (and pytest collecting it) never requires a
-heavy or absent dependency. All external boundaries are injectable so tests do
-zero real network, DNS, or subprocess work.
+and :mod:`thoth.config` are imported at module top level. The Firecrawl client is
+imported **lazily** inside :attr:`Extractor.firecrawl`, and ``whisper`` is never
+imported at all — it is a subprocess. So importing this module (and pytest
+collecting it) never requires a heavy or absent dependency. All external
+boundaries are injectable so tests do zero real network, DNS, or subprocess work.
 """
 
 from __future__ import annotations
@@ -42,7 +39,6 @@ from thoth.config import Config
 
 __all__ = [
     "MAX_DOWNLOAD_BYTES",
-    "ExaLike",
     "ExtractError",
     "ExtractedDoc",
     "Extractor",
@@ -51,7 +47,6 @@ __all__ = [
     "FirecrawlLike",
     "SsrfError",
     "TranscriptionError",
-    "WebHit",
     "assert_url_allowed",
     "is_url_allowed",
 ]
@@ -108,20 +103,6 @@ class TranscriptionError(ExtractError):
     """Raised when the ``whisper`` subprocess fails or is not installed."""
 
 
-class ExaLike(Protocol):
-    """Structural type for the slice of ``exa_py`` :meth:`Extractor.web_search` uses."""
-
-    def search(self, query: str, *, num_results: int = ...) -> Any:
-        """Run a semantic search and return results (shape duck-typed downstream).
-
-        ``exa_py`` 2.x deprecated ``search_and_contents`` in favour of ``search``.
-        Plain ``search`` returns each result's ``url``/``title`` (and leaves the
-        contents fields empty) — :meth:`Extractor.web_search` only needs the URL
-        for discovery and treats any snippet as best-effort.
-        """
-        ...
-
-
 class FirecrawlLike(Protocol):
     """Structural type for the Firecrawl client :meth:`Extractor.web_extract` uses."""
 
@@ -133,18 +114,6 @@ class FirecrawlLike(Protocol):
         ``.metadata``).
         """
         ...
-
-
-@dataclass(frozen=True, slots=True)
-class WebHit:
-    """One Exa discovery result (a candidate page to read)."""
-
-    url: str
-    """The result's URL."""
-    title: str
-    """The result's title (empty string when Exa returns none)."""
-    snippet: str
-    """A short text snippet/highlight for the result (empty when absent)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +233,7 @@ def assert_url_allowed(url: str, *, allow_private_urls: bool = False) -> None:
     """Raise :class:`SsrfError` unless ``url`` passes :func:`is_url_allowed`.
 
     This is the single guard gate every network entry point calls *before* any
-    client or socket is touched, so a blocked URL never reaches Exa, Firecrawl, or
+    client or socket is touched, so a blocked URL never reaches Firecrawl or
     ``httpx``.
 
     Args:
@@ -295,46 +264,21 @@ def _content_type_to_ext(content_type: str) -> str:
     return _IMAGE_EXT_BY_CONTENT_TYPE.get(bare, _DEFAULT_BINARY_EXT)
 
 
-def _hit_attr(obj: Any, *names: str) -> str:
-    """Return the first present attribute/key among ``names`` as a string, else ``''``.
-
-    Tolerant of both attribute-style SDK objects and plain dicts so a test fake can
-    use either shape.
-
-    Args:
-        obj: The Exa result object or dict.
-        names: Candidate attribute/key names tried in order.
-
-    Returns:
-        The first found value coerced to ``str``, or ``''`` if none is present.
-    """
-    for name in names:
-        value: Any = None
-        if isinstance(obj, dict):
-            value = obj.get(name)
-        else:
-            value = getattr(obj, name, None)
-        if value is not None:
-            return str(value)
-    return ""
-
-
 class Extractor:
     """URL/PDF/image/STT extraction behind injected clients and the SSRF guard.
 
-    All external boundaries are injectable: an :class:`ExaLike` and a
-    :class:`FirecrawlLike` client (created lazily from :class:`~thoth.config.Config`
-    keys only when first used), an :class:`httpx.Client` (back it with
-    :class:`httpx.MockTransport` in tests), and the ``whisper`` CLI name (shelled out
-    via :func:`subprocess.run`). The SSRF gate runs inside :meth:`web_extract` and
-    :meth:`fetch_binary` before any of those boundaries is touched.
+    All external boundaries are injectable: a :class:`FirecrawlLike` client (created
+    lazily from :class:`~thoth.config.Config` keys only when first used), an
+    :class:`httpx.Client` (back it with :class:`httpx.MockTransport` in tests), and
+    the ``whisper`` CLI name (shelled out via :func:`subprocess.run`). The SSRF gate
+    runs inside :meth:`web_extract` and :meth:`fetch_binary` before any of those
+    boundaries is touched.
     """
 
     def __init__(
         self,
         config: Config,
         *,
-        exa: ExaLike | None = None,
         firecrawl: FirecrawlLike | None = None,
         http_client: httpx.Client | None = None,
         allow_private_urls: bool = False,
@@ -343,9 +287,7 @@ class Extractor:
         """Build an :class:`Extractor`.
 
         Args:
-            config: The frozen runtime config supplying the Exa/Firecrawl API keys.
-            exa: An optional injected Exa client; created lazily on first use of
-                :attr:`exa` when ``None``.
+            config: The frozen runtime config supplying the Firecrawl API key.
             firecrawl: An optional injected Firecrawl client; created lazily on first
                 use of :attr:`firecrawl` when ``None``.
             http_client: An optional injected :class:`httpx.Client`; a default
@@ -357,7 +299,6 @@ class Extractor:
             whisper_bin: The ``whisper`` executable name/path for :meth:`transcribe`.
         """
         self._config = config
-        self._exa = exa
         self._firecrawl = firecrawl
         self._http_client = http_client
         self._allow_private_urls = allow_private_urls
@@ -376,23 +317,6 @@ class Extractor:
         return self._http_client
 
     @property
-    def exa(self) -> ExaLike:
-        """The Exa client, importing ``exa_py`` and reading the key lazily on first use.
-
-        Raises:
-            ExtractError: if ``EXA_API_KEY`` is not configured.
-        """
-        if self._exa is None:
-            if self._config.exa_api_key is None:
-                raise ExtractError(
-                    "EXA_API_KEY is required for web search but is not set"
-                )
-            from exa_py import Exa
-
-            self._exa = Exa(self._config.exa_api_key)
-        return self._exa
-
-    @property
     def firecrawl(self) -> FirecrawlLike:
         """The Firecrawl client, importing the SDK and key lazily on first use.
 
@@ -408,45 +332,6 @@ class Extractor:
 
             self._firecrawl = Firecrawl(api_key=self._config.firecrawl_api_key)
         return self._firecrawl
-
-    def web_search(self, query: str, *, num_results: int = 5) -> list[WebHit]:
-        """Discover candidate pages for ``query`` via Exa (semantic search).
-
-        Side-effect-free and read-only (also reused by the Phase 3 research path).
-        The Exa result is duck-typed: each item may expose attributes or dict keys
-        for ``url``, ``title`` and a snippet/highlight, all coerced to strings.
-
-        Args:
-            query: The natural-language search query.
-            num_results: How many results to request (default 5).
-
-        Returns:
-            A list of :class:`WebHit` (possibly empty).
-
-        Raises:
-            ExtractError: if the Exa client is unavailable or the call fails.
-        """
-        try:
-            response = self.exa.search(query, num_results=num_results)
-        except ExtractError:
-            raise
-        except Exception as exc:
-            raise ExtractError(f"exa search failed: {exc}") from exc
-        results = getattr(response, "results", None)
-        if results is None and isinstance(response, dict):
-            results = response.get("results")
-        if results is None:
-            results = response if isinstance(response, list) else []
-        hits: list[WebHit] = []
-        for item in results:
-            hits.append(
-                WebHit(
-                    url=_hit_attr(item, "url"),
-                    title=_hit_attr(item, "title"),
-                    snippet=_hit_attr(item, "snippet", "highlights", "text"),
-                )
-            )
-        return hits
 
     def web_extract(self, url: str) -> ExtractedDoc:
         """Fetch ``url`` and return its clean markdown via Firecrawl (SSRF-guarded).

@@ -144,14 +144,13 @@ Single language end-to-end (appliance + MCP + reindex) keeps the surface tiny. *
 | `vault.py` | frontmatter read/write, slug/path helpers, `obsidian://` links, `log.md` edits, asset embed | 280 | 1 |
 | `bin/vault-pull`, `bin/vault-commit` (bash) + `git_sync.py` | pull-before-write / commit+push wrappers (carried fwd verbatim — Appendix → Git wrappers) + thin shell-out | 80 + 40 | 1 |
 | `llm.py` | Anthropic client + prompt caching; the system persona; the file-plan / answer schemas | 180 | 1 |
-| `extract.py` | URL→markdown (Exa find / Firecrawl extract), PDF, image save, STT hook (local whisper); read-only `web_search`/`web_extract` reused by `pkm_ask` | 160 | 2 |
+| `extract.py` | URL→markdown (Firecrawl extract), PDF, image save, STT hook (local whisper) | 160 | 2 |
 | `ingest.py` | INGEST: classify → capture raw → curate (bounded passes) → nav → retain → commit (§6; Appendix → Routing & persona) | 350 | 2 |
 | `query.py` | structural (index/grep) + Hindsight recall → compose answer + canonical links (§7; Appendix → Retrieval & obsidian links) | 180 | 2 |
-| `research.py` | `pkm_ask`: blended web+vault Q&A — Sonnet w/ read-only vault + Exa/Firecrawl tools, model-decides web, cites both, offer-to-save as `queries/` page (§7.1) | 130 | 3 |
 | `hindsight.py` | direct retain/recall wrappers over the installed client/CLI | 90 | 2 |
 | `reindex_from_vault.py` | nightly incremental + full rebuild (carried fwd — Appendix → Reindex job; mostly drafted already) | 140 | 3 |
 | `slack_app.py` | Bolt Socket-Mode daemon: `message.im`, `file_shared`, allow-list, mrkdwn rendering | 260 | 2 |
-| `mcp_server.py` | FastMCP stdio: `pkm_ingest`/`pkm_search`/`pkm_ask`/`pkm_todos`/`pkm_recent` (+ low-level `pkm_write_page`) | 140 | 3 |
+| `mcp_server.py` | FastMCP stdio: `pkm_ingest`/`pkm_search`/`pkm_todos`/`pkm_recent` (+ low-level `pkm_write_page`) | 140 | 3 |
 | `summary.py` | daily/weekly digest composed from vault frontmatter + `chat.postMessage` (§9) | 200 | 3 |
 | `lint.py` | the 13 maintenance checks (§11; Appendix → Lint checks) | 250 | 4 |
 | `bin/config-backup.sh` | push-only backup of the **app config** repo (carried fwd — Appendix → Backup/recovery) | 40 | 3 |
@@ -165,7 +164,7 @@ few focused sessions. Every line is yours.
 
 `slack_bolt` (Socket Mode) · `anthropic` · `mcp` (FastMCP) · shell to the `hindsight` CLI (env-overridable
 binary; VPS still has `hindsight-embed`) · `python-frontmatter` + `pyyaml` · `httpx` · `tenacity` (bounded retry
-around the Hindsight subprocess) · `exa-py` / Firecrawl REST · local `whisper` (optional, voice) ·
+around the Hindsight subprocess) · Firecrawl REST · local `whisper` (optional, voice) ·
 PostgreSQL (Hindsight subprocess, as today). Gemini is reached *through* Hindsight, so no separate embed code
 unless we later bypass it.
 
@@ -235,7 +234,7 @@ Same operation as the Hermes spec, minus Hermes tool names, run as **bounded val
 1. CLASSIFY           one cheap Claude call: type (entity|concept|…|action|media|memory|inbox),
                       named entities/concepts, and for life-admin the parsed fields (due/priority/…).
 2. CAPTURE RAW        extract.py by kind:
-                        URL -> Exa find / Firecrawl extract -> raw/articles/<slug>.md
+                        URL -> Firecrawl extract -> raw/articles/<slug>.md
                         PDF/arxiv -> extract -> raw/papers/<slug>.md  + keep <slug>.pdf
                         transcript/voice -> (whisper) -> raw/transcripts/<slug>.md
                         image -> raw/assets/<slug>-<hash>.<ext>  (binary, never base64)
@@ -317,45 +316,6 @@ query
 Slack renders `mrkdwn` `<url|label>`; MCP returns markdown `[label](url)` + raw path + wikilink (host may not
 make the custom scheme clickable, so always include the plain path). Slack file-upload is a last-resort
 fallback only.
-
-### 7.1 Blended web + vault Q&A — `pkm_ask` / `research.py`
-
-`query.py` above answers from the vault alone. **`pkm_ask`** is the second retrieval mode: a general
-question answered by **Claude Sonnet** with *both* the vault **and** the web as read-only sources, citing
-each. It re-homes the Exa + Firecrawl capability we had pre-configured under Hermes onto a tool we own, so a
-blended answer is reachable from **Slack/phone alone** — without opening Claude Code.
-
-> **Scope note (deliberate).** §1 pushed "web + knowledge-graph together" out to the external Claude Code.
-> `pkm_ask` knowingly re-internalizes a *read-only slice* of that for the appliance's own surfaces (Slack DM,
-> the MCP). It is **not** an open agent: it gets a closed, read-only tool set (vault read + web search/extract),
-> never writes, never a shell — fully inside the §3 rule. The one writing action (§4 below) is the explicit,
-> user-confirmed "save this answer" step, which routes through the same validated `write_page`.
-
-```
-pkm_ask(question, force_web=false)
-  1. VAULT pass    hindsight.recall + index/grep  -> candidate pages (read_page, read-only)
-  2. WEB decision  Sonnet is handed both tools and DECIDES if web is needed
-                   (force_web / a "research:" prefix forces it; pure-personal Qs like
-                    "what are my todos" stay vault-only and cheap):
-                     web_search(q)        Exa  -> ranked URLs + snippets   (semantic discovery)
-                     web_extract(url...)  Firecrawl -> clean markdown      (full read of top N)
-  3. COMPOSE       Sonnet answers from {vault excerpts + web excerpts}, citing BOTH:
-                     vault -> obsidian:// link + path + [[wikilink]]   (harness-attached, unfabricable)
-                     web   -> source URL(s)
-  4. OFFER SAVE    reply ends with "save this to the vault? (y)"; on confirm, write a
-                   queries/<slug>.md page: the answer + web `sources:` list + vault [[wikilinks]]
-                   via the validated write_page (closes the loop — web knowledge becomes a
-                   curated `queries/` second-brain page). Declined answers stay ephemeral.
-```
-
-**Exa ↔ Firecrawl split:** Exa is **semantic discovery** (find the right pages by meaning); Firecrawl is
-**extraction** (pull clean full-text of the top hits to actually read). Both clients already live in
-`extract.py` for the ingest path; `pkm_ask` reuses them via a thin read-only `web_search`/`web_extract`
-surface. SSRF guard `allow_private_urls: false` applies (§12). Cost (Sonnet + Exa/Firecrawl credits) is the
-high-value Q&A burn §1.3 explicitly earmarks; the model-decides gate keeps it off purely personal lookups.
-
-Exposed as the MCP tool **`pkm_ask`** and the default Slack free-text question path (`pkm_search` remains the
-fast vault-only lookup for when you want *only* your own pages).
 
 ---
 
@@ -556,11 +516,6 @@ changes is the *cut-over*: instead of rewriting a persona file and re-pointing a
    by tool name + description, so the server name is just the namespace prefix / a disambiguation handle.
 8. **State → keep a small transient single-writer SQLite** (`~/.thoth/state.db`) — gitignored, pruned,
    not backed up, never a knowledge store (schema + rationale in §10).
-9. **Blended web+vault Q&A → `pkm_ask`** (§7.1). Re-homes the pre-configured Exa + Firecrawl onto an owned
-   tool so general questions can be asked **from Slack/phone alone**, answered by Claude Sonnet over vault +
-   web with citations to both. **Web is model-decided** (a `research:` prefix / `force_web` forces it; pure
-   personal lookups stay vault-only). Answers are **offer-to-save** as a `queries/` page on confirm. Read-only
-   tool surface — stays inside §3; the spend is the §1.3-earmarked high-value Q&A budget.
 
 ---
 
@@ -604,7 +559,7 @@ pkm-vault/
 ├── log.md                # Append-only action log (rotated yearly + at 500 entries)
 │
 ├── raw/                  # LAYER 1 — immutable sources (read, never edit)
-│   ├── articles/         #   web clippings (Firecrawl/Exa extract -> markdown)
+│   ├── articles/         #   web clippings (Firecrawl extract -> markdown)
 │   ├── papers/           #   papers/arxiv: extracted <slug>.md + the source <slug>.pdf alongside it
 │   ├── transcripts/      #   meeting notes, voice memos, interview transcripts
 │   └── assets/           #   binary images/diagrams embedded by curated pages (NOT paper PDFs)

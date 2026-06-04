@@ -51,7 +51,7 @@ according to intent.**
 - The reindex walks knowledge *and* life-admin folders, retaining each page tagged with
   its `page_type` (already the tag contract).
 - Recall is filtered by tag per caller intent:
-  - Knowledge Q&A (`pkm_search` / `pkm_ask`) → filter to knowledge tags (preserves
+  - Knowledge Q&A (`pkm_search`) → filter to knowledge tags (preserves
     today's precision).
   - "Search my memories" / idea-mining (#37) → filter to `memory` / life-admin tags.
   - "Search everything" → no filter.

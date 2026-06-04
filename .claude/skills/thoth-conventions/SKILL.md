@@ -31,9 +31,9 @@ parsing it. Define a tool whose `input_schema` mirrors the contract, set
 `tool_choice={"type": "tool", "name": "<tool>"}`, and read the structured
 `tool_use.input` dict (the SDK/transport handles all escaping). Keep the existing
 validator as the post-call gate — tool-use guarantees *valid JSON*, not a *valid
-plan*. Curate's `submit_file_plan` does this (issue #110); `research.py` is the
-in-repo precedent for the loop (`_tool_use_blocks` / `_block_id` /
-`tool_result_block` / `assistant_blocks_message`, mostly promoted to `llm.py`).
+plan*. Curate's `submit_file_plan` does this (issue #110); the loop helpers
+(`_tool_use_blocks` / `_block_id` / `tool_result_block` /
+`assistant_blocks_message`) live in `llm.py`.
 
 This was a real fix, not a stylistic one: hand-serialized JSON aborted with
 "Unterminated string" on bodies containing newlines, tabs, or non-breaking spaces
@@ -45,8 +45,8 @@ after a rejected tool call (e.g. the plan failed validation), the follow-up **us
 turn must lead with a `tool_result` block keyed to the prior `tool_use` id** — a
 plain-text user turn there makes the *live* Messages API reject the request with
 HTTP 400 ("tool_use ids were found without tool_result blocks immediately after").
-Mirror `research.py`: echo the assistant's `tool_use` turn, then a user turn whose
-first block is `tool_result_block(<tool_use_id>, <repair_text>, is_error=True)`.
+Mirror curate's repair turn: echo the assistant's `tool_use` turn, then a user turn
+whose first block is `tool_result_block(<tool_use_id>, <repair_text>, is_error=True)`.
 Only the no-tool-call branch (model declined the tool) takes a plain-text follow-up.
 Injected fakes ignore this precondition, so this bug passes CI and only shows up
 live — see the `thoth-testing` skill for how to test the repair path against the
@@ -66,7 +66,7 @@ existing vault content.
 
 thoth is partly a **prototype for an organizational-memory system** where, in the
 target deployment, the backing store (the vault) is **never** available to the
-agent — only the MCP tools (`pkm_search` / `pkm_ask` / `pkm_recent` / …). A local
+agent — only the MCP tools (`pkm_search` / `pkm_recent` / …). A local
 vault checkout is a development convenience, **not** part of the product.
 
 So when demonstrating, testing, or answering with PKM capability, work **through

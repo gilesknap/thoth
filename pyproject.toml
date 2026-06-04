@@ -34,7 +34,6 @@ requires-python = ">=3.11"
 [project.optional-dependencies]
 runtime = [
     "anthropic",
-    "exa-py",
     "firecrawl-py",
     "mcp",
     "pillow",
@@ -124,7 +123,7 @@ filterwarnings = [
 testpaths = "docs src tests"
 # Custom markers (registered so filterwarnings=error does not trip PytestUnknownMarkWarning)
 markers = [
-    "live: opt-in first-light smoke tests that hit real external services (Anthropic, Hindsight, Slack, MCP, Exa, Firecrawl); skipped unless THOTH_LIVE_SMOKE=1. Run on the VPS with `THOTH_LIVE_SMOKE=1 uv run pytest -m live`.",
+    "live: opt-in first-light smoke tests that hit real external services (Anthropic, Hindsight, Slack, MCP, Firecrawl); skipped unless THOTH_LIVE_SMOKE=1. Run on the VPS with `THOTH_LIVE_SMOKE=1 uv run pytest -m live`.",
 ]
 
 [tool.coverage.run]

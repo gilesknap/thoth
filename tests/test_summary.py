@@ -205,7 +205,7 @@ def test_module_does_not_import_slack_sdk() -> None:
     """Importing thoth.summary pulls in no Slack/anthropic/mcp SDK."""
     import thoth.summary  # noqa: F401  (assert on sys.modules, already imported)
 
-    banned = {"slack_bolt", "slack_sdk", "anthropic", "mcp", "exa_py", "firecrawl"}
+    banned = {"slack_bolt", "slack_sdk", "anthropic", "mcp", "firecrawl"}
     assert banned.isdisjoint(sys.modules)
 
 
