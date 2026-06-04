@@ -96,12 +96,13 @@ Code via `claude mcp add --transport http …`, or claude.ai through the tunnel)
 at it:
 
 ```text
-- [ ] tools/list returns the seven pkm_* tools (pkm_search, pkm_ask, pkm_ingest,
-      pkm_save_answer, pkm_todos, pkm_recent, pkm_write_page)
+- [ ] tools/list returns the nine pkm_* tools (pkm_search, pkm_ask, pkm_ingest,
+      pkm_save_answer, pkm_todos, pkm_recent, pkm_write_page, pkm_read_page,
+      pkm_edit_page)
 - [ ] pkm_recent (days=7) executes and returns recent pages
 ```
 
-Expected: the seven tools enumerate and `pkm_recent` returns without error. The live suite
+Expected: the nine tools enumerate and `pkm_recent` returns without error. The live suite
 builds the server in-process and asserts the registered tool set:
 
 ```console
