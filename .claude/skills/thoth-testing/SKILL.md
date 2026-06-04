@@ -233,3 +233,26 @@ Two non-obvious traps when verifying a semantic-retrieval change live:
   forward progress with `pgrep -af 'memory retain'` (the page currently being retained) and
   the process being alive. Run it detached (`nohup … &`) and poll. Use `--budget 0` to make
   the rebuild ignore the daily LLM cap so it can't be throttled mid-run.
+
+- **Control for CLIENT tool-selection — most "retrieval got worse/better" reports are measuring
+  the client, not thoth.** thoth does not decide the output; the *calling* Claude session does.
+  Three independent variables masquerade as a retrieval-quality change:
+  1. **Which tool.** `pkm_search` (`QueryEngine.answer`, vault-only, citation-forward) and
+     `pkm_ask` (`ResearchEngine.ask`, vault **+ web** synthesis, prose-forward) are different
+     *engines* — comparing one to the other tells you nothing about a retrieval change. Compare
+     `pkm_search` to `pkm_search`.
+  2. **File-grep cheating.** A session whose working directory **is** the `pkm-vault` checkout
+     has the notes as local `.md` and will read them directly via `Grep`/`Read` — even when told
+     "use the MCP only." Claude Code does **not** disable its built-in file tools on a soft
+     instruction. That yields uncapped, full-text, tidily-categorized results and is an *unfair
+     bar* the MCP path can't match. To force a real MCP-only test, run the evaluating session in a
+     dir with **no vault checked out**, or `permissions.deny` `Read`/`Grep`/`Glob` on the vault.
+  3. **The `max_pages=5` cap.** `pkm_search` defaults to 5 citations, so the MCP path is
+     *structurally* capped regardless of how good retrieval is — "the MCP returns fewer links than
+     the file session" is the cap + file access, not a regression. Bump `max_pages` to see more.
+
+  Also: when the user does **not** explicitly say "look in the pkm," a session may never call
+  `pkm_*` at all and answer from training/web → *accurate but rambling, ungrounded*. So a fair
+  comparison fixes the tool, kills file access, bumps the cap, and reads `provenance`
+  (`grep`/`wikilink`/`recall` + RRF rank) to see what each method actually contributed. (This
+  exact confound nearly got the good #143 blend reverted off the live VPS.)
