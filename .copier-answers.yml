@@ -5,7 +5,8 @@ author_email: gilesknap@gmail.com
 author_name: Giles Knap
 description: agent PKM with semantic index, slack connector and MCP
 distribution_name: thoth
-docker: false
+docker: true
+docker_debug: false
 docs_type: sphinx
 git_platform: github.com
 github_org: gilesknap

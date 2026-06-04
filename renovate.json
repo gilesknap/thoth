@@ -25,6 +25,10 @@
         "actions/download-artifact",
         "softprops/action-gh-release",
         "codecov/codecov-action",
+        "docker/setup-buildx-action",
+        "docker/login-action",
+        "docker/build-push-action",
+        "docker/metadata-action",
         "peaceiris/actions-gh-pages"
       ],
       "matchManagers": [
