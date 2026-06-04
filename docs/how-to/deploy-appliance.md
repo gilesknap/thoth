@@ -33,8 +33,8 @@ Slack  <-----> | thoth-slack.service  --(127.0.0.1:8888)-->  thoth-hindsight    
 ```text
 - [ ] A VPS: Ubuntu 24.04+ (24.04/26.04 tested), 2 vCPU, ~8 GB RAM, 50 GB+ disk. CPU-only is fine.
 - [ ] Two GitHub repos: this one (thoth) and your own empty `pkm-vault` (your knowledge).
-- [ ] API keys (created in step 6): Anthropic (required), Gemini (for the index),
-      Firecrawl (optional, for URL ingest), a GitHub PAT (to push the vault).
+- [ ] API keys (created in step 6): Anthropic (required — used by both thoth and the index),
+      Exa + Firecrawl (optional, for research/URL ingest), a GitHub PAT (to push the vault).
 - [ ] A Slack workspace where you can create an app ({doc}`slack-setup`).
 ```
 
@@ -113,29 +113,32 @@ uv tool install hindsight-api
 hindsight-api --version
 ```
 
-The server reads its LLM provider config (the backend that does embedding/fact-extraction)
-from the environment; thoth's deployment uses Gemini. Put the `HINDSIGHT_API_*` env in a
-locked-down EnvironmentFile that only the service reads (the `thoth-hindsight.service` unit
-references it, so the Gemini key never lands in thoth's own `.env`):
+The server reads its backend config from the environment: **fact-extraction runs on
+Anthropic Claude** (the same vendor thoth uses — reuse your `ANTHROPIC_API_KEY` value),
+**embeddings run locally on the box** (no external embedding calls), and the database is
+hindsight-api's **own embedded Postgres** addressed by the `pg0://` scheme (no separate DB
+service to run). Put the `HINDSIGHT_API_*` env in a locked-down EnvironmentFile that only
+the service reads (the `thoth-hindsight.service` unit references
+`<THOTH_HOME>/hindsight-api.env`, so these keys never land in thoth's own `.env`). Copy the
+template and fill it in:
 
 ```bash
-# as pkm — ~/.hindsight/api.env, chmod 600
-install -d -m700 ~/.hindsight
-cat > ~/.hindsight/api.env <<'EOF'
-HINDSIGHT_API_LLM_PROVIDER=gemini
-HINDSIGHT_API_LLM_MODEL=gemini-2.5-flash
-HINDSIGHT_API_LLM_API_KEY=<your-gemini-key>
-EOF
-chmod 600 ~/.hindsight/api.env
+# as pkm — installs at <THOTH_HOME>/hindsight-api.env, chmod 600
+install -m600 /opt/thoth/deploy/hindsight-api.env.example /home/pkm/.thoth/hindsight-api.env
+$EDITOR /home/pkm/.thoth/hindsight-api.env   # set HINDSIGHT_API_LLM_API_KEY = your Anthropic key
 ```
+
+The template ships the live values: `HINDSIGHT_API_LLM_PROVIDER=anthropic`,
+`HINDSIGHT_API_LLM_MODEL=claude-haiku-4-5`, `HINDSIGHT_API_EMBEDDINGS_PROVIDER=local`, and
+`HINDSIGHT_API_DATABASE_URL=pg0://hindsight-embed-thoth`. Only the API key needs filling in.
 
 You do **not** start the server by hand — the `thoth-hindsight.service` unit (step 7) owns
 its lifecycle and runs it as `hindsight-api --host 127.0.0.1 --port 8888`. The bank id is
 `thoth` (a path segment on every retain/recall/forget).
 
 ```{note}
-The exact provider/model strings follow the live deployment; check the
-[Hindsight docs](https://hindsight.vectorize.io) if you want a different embedding backend.
+The provider/model/embeddings strings above follow the live deployment; the LLM provider is
+configurable (check the [Hindsight docs](https://hindsight.vectorize.io) for alternatives).
 thoth only requires: `hindsight-api` on PATH, bank `thoth`, and the server reachable at the
 `THOTH_HINDSIGHT_BASE_URL` (default `http://127.0.0.1:8888`).
 ```
@@ -197,10 +200,10 @@ Fill in these variables. **Where to get each key:**
 | `THOTH_HOME` | yes | `/home/pkm/.thoth` (state, manifest). |
 | `THOTH_HINDSIGHT_BASE_URL` | no | Base URL of the `hindsight-api` server (step 4). Default `http://127.0.0.1:8888`. |
 | `THOTH_HINDSIGHT_BANK` | yes | `thoth`. |
-| `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate. |
+| `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate — and the **same value** goes in Hindsight's `hindsight-api.env` (step 4) for fact-extraction. |
 | `ANTHROPIC_MODEL` | no | Override the default model for all calls. `THOTH_ANALYSE_MODEL` (vision), `THOTH_DIAGRAM_MODEL` (Excalidraw, worth an Opus), and `THOTH_INTENT_MODEL` (the intent gate, a cheap Haiku) override per-call. |
 | `THOTH_IMAGE_RESIZE_THRESHOLD_BYTES` | no | Captured images larger than this are downscaled (longest edge capped at ~1568px, aspect ratio preserved) before they are stored in `raw/assets/` *and* before they reach the vision model. Default `2097152` (2 MB); a non-positive value disables resizing. |
-| `GEMINI_API_KEY` | yes (for the index) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey). The **same key** you gave Hindsight in step 4; it powers embeddings + fact-extraction. |
+| `EXA_API_KEY` | no | [exa.ai](https://exa.ai) → dashboard → API keys. Web search for the blended `research:` path. Blank ⇒ vault-only. |
 | `FIRECRAWL_API_KEY` | no | [firecrawl.dev](https://www.firecrawl.dev) → dashboard → API keys. URL→Markdown **extraction** for URL ingest. Blank ⇒ URLs stored without fetched content. |
 | `GITHUB_PKM_VAULT_TOKEN` | yes | A GitHub **fine-grained PAT** scoped to the `pkm-vault` repo with **Contents: Read and write** ([github.com/settings/tokens](https://github.com/settings/tokens)). thoth feeds it to git as an `x-access-token` HTTPS credential to push the vault. |
 | `SLACK_BOT_TOKEN` | yes | `xoxb-…` — see {doc}`slack-setup`. |
@@ -215,8 +218,9 @@ from a manifest, enables Socket Mode, mints both tokens, and creates the capture
 ```{warning}
 `~/.thoth/.env` holds every secret. It is `chmod 600`, owned by `pkm`, and **must never be
 committed** to either repo. The only other place a secret lives is Hindsight's
-`~/.hindsight/api.env` (the Gemini key for the index server, step 4). Keep a copy of both in
-your password manager — that is the *only* backup of your secrets ({doc}`recovery`).
+`<THOTH_HOME>/hindsight-api.env` (the Anthropic key for the index server, step 4). Keep a
+copy of both in your password manager — that is the *only* backup of your secrets
+({doc}`recovery`).
 ```
 
 ## 7. Install and enable the systemd units + cron

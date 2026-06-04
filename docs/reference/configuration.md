@@ -33,7 +33,7 @@ and so on). Blank counts as unset.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `THOTH_DAILY_LLM_BUDGET` | Combined daily LLM call cap (appliance + Gemini extraction). Non-positive disables. | `200` |
+| `THOTH_DAILY_LLM_BUDGET` | Combined daily LLM call cap (appliance + Hindsight (Claude) extraction — all Anthropic). Non-positive disables. | `200` |
 | `THOTH_IMAGE_RESIZE_THRESHOLD_BYTES` | Downscale captured images larger than this before storage + vision. Non-positive disables. | `2097152` (2 MB) |
 | `THOTH_MAX_ANALYSE_IMAGES` | Cap on images sent to one multi-image vision call (extras still saved + embedded). Non-positive = no cap. | `6` |
 
@@ -52,10 +52,15 @@ and so on). Blank counts as unset.
 
 | Variable | Meaning | Default |
 |---|---|---|
+| `EXA_API_KEY` | Exa web-search key. With `FIRECRAWL_API_KEY`, powers the blended `research:` path. Blank = vault-only. | — |
 | `FIRECRAWL_API_KEY` | Firecrawl URL→Markdown key. Blank = vault-only. | — |
-| `GEMINI_API_KEY` | Gemini key for the Hindsight semantic index (embeddings + fact-extraction). | — |
 | `THOTH_HINDSIGHT_BASE_URL` | Base URL of the standalone `hindsight-api` HTTP server. | `http://127.0.0.1:8888` |
 | `THOTH_HINDSIGHT_BANK` | Hindsight bank id (a path segment on retain/recall/forget). | `thoth` |
+
+Hindsight's own backend config (the LLM provider/model/key for fact-extraction, local
+embeddings, and the embedded-Postgres `pg0://` URL) is **not** a thoth env var. It lives in
+a dedicated file read only by `thoth-hindsight.service` — see
+`deploy/hindsight-api.env.example`.
 
 ## Vault git sync
 
