@@ -36,6 +36,16 @@ jobs:
       contents: read
       packages: write
 
+  helm:
+    needs: test
+    if: always()
+    uses: ./.github/workflows/_helm.yml
+    with:
+      publish: ${{ needs.test.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+
   docs:
     uses: ./.github/workflows/_docs.yml
     permissions:

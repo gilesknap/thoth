@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-summary-weekly" (include "thoth.fullname" .) }}
+  labels:
+    app.kubernetes.io/component: summary-weekly
+    {{- include "thoth.labels" . | nindent 4 }}
+spec:
+  schedule: "0 7 * * 1"
+  timeZone: Europe/London
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: summary-weekly
+            {{- include "thoth.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: summary-weekly
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args: ["summary", "weekly"]
+              envFrom:
+                {{- include "thoth.envFrom" . | nindent 16 }}
+              volumeMounts:
+                {{- include "thoth.volumeMounts" . | nindent 16 }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          volumes:
+            {{- include "thoth.volumes" . | nindent 12 }}

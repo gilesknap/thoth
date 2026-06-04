@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "thoth.hindsightServiceName" . }}
+  labels:
+    app.kubernetes.io/component: hindsight
+    {{- include "thoth.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: hindsight
+      {{- include "thoth.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: hindsight
+        {{- include "thoth.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: hindsight
+          image: "{{ .Values.hindsight.image }}"
+          imagePullPolicy: {{ .Values.hindsight.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.hindsight.port }}
+          env:
+            - name: HINDSIGHT_API_LLM_PROVIDER
+              value: {{ .Values.hindsight.llmProvider | quote }}
+            - name: HINDSIGHT_API_LLM_MODEL
+              value: {{ .Values.hindsight.llmModel | quote }}
+            - name: HINDSIGHT_API_WORKER_ID
+              value: {{ .Values.hindsight.workerId | quote }}
+            # The extraction LLM key reuses GEMINI_API_KEY from the thoth Secret.
+            - name: HINDSIGHT_API_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: GEMINI_API_KEY
+            {{- if .Values.hindsight.databaseUrl }}
+            - name: HINDSIGHT_API_DATABASE_URL
+              value: {{ .Values.hindsight.databaseUrl | quote }}
+            {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.hindsight.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.hindsight.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if not .Values.hindsight.databaseUrl }}
+          volumeMounts:
+            - name: pg0
+              mountPath: {{ .Values.hindsight.pgDataDir | quote }}
+          {{- end }}
+      {{- if not .Values.hindsight.databaseUrl }}
+      volumes:
+        - name: pg0
+          persistentVolumeClaim:
+            claimName: {{ include "thoth.pg0PvcName" . }}
+      {{- end }}

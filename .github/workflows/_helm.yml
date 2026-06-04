@@ -1,0 +1,72 @@
+name: Package helm chart
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        type: boolean
+        description: If true, pushes the chart to the OCI registry on tags
+
+env:
+  HELM_VERSION_TO_INSTALL: 3.17.1
+
+jobs:
+  package-helm-chart:
+    name: Package and Push Helm Chart
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Need this so setuptools_scm / chart tooling see the full tag history.
+          fetch-depth: 0
+
+      - name: Install helm
+        uses: Azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION_TO_INSTALL }}
+
+      # Check that alpha/beta versions have the form X.Y.Z-alpha.A required by Helm.
+      # An early check saves waiting for the package step before finding a problem.
+      - name: Check helm version tag
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+((-alpha|-beta|-rc)\.[0-9]+)?$ ]]; then
+            echo "Valid version format: '${VERSION}'"
+          else
+            echo "Invalid version: '${VERSION}'. Expected 'X.Y.Z' or 'X.Y.Z-beta.1' or 'X.Y.Z-alpha.1'"
+            exit 1
+          fi
+
+      - name: Lint helm chart
+        run: helm lint Charts/thoth
+
+      - name: Package helm chart
+        env:
+          # Stamp the real version from the tag; off a tag it stays at 0.0.0 so a PR
+          # build still produces a (throwaway) package and exercises packaging.
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}
+        run: |
+          set -xe
+          mkdir -p charts
+          helm package -u --app-version "${VERSION}" --version "${VERSION}" Charts/thoth
+          mv thoth-*.tgz charts/
+
+      - name: Upload helm chart values schema
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart-schemas
+          path: schemas/*
+
+      - name: Push tagged helm chart to registry
+        if: inputs.publish && github.ref_type == 'tag'
+        run: |
+          set -x
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io/${{ github.repository_owner }} --username ${{ github.repository_owner }} --password-stdin
+          REGISTRY=oci://ghcr.io/${{ github.repository_owner }}/charts
+          for i in charts/*.tgz; do
+            helm push "${i}" "${REGISTRY,,}"
+          done

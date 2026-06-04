@@ -1,0 +1,251 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "thoth Helm chart",
+    "description": "Helm chart for deploying thoth (Slack daemon + MCP server + Hindsight index + cron)",
+    "type": "object",
+    "properties": {
+        "nameOverride": {
+            "description": "Override the chart name used in resource names.",
+            "type": "string"
+        },
+        "fullnameOverride": {
+            "description": "Override the fully-qualified release name.",
+            "type": "string"
+        },
+        "image": {
+            "description": "Container image for the thoth Slack/MCP/cron workloads.",
+            "type": "object",
+            "properties": {
+                "repository": {
+                    "description": "thoth image repository.",
+                    "type": "string"
+                },
+                "tag": {
+                    "description": "Image tag. The deploying overlay pins this to a release tag.",
+                    "type": "string"
+                },
+                "pullPolicy": {
+                    "description": "Image pull policy.",
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
+        "secretName": {
+            "description": "Name of the pre-existing Secret holding all secret env.",
+            "type": "string"
+        },
+        "nodeSelector": {
+            "description": "Node placement. Default pins to amd64.",
+            "type": "object"
+        },
+        "podSecurityContext": {
+            "description": "Pod-level securityContext applied to every workload.",
+            "type": "object"
+        },
+        "securityContext": {
+            "description": "Container-level securityContext applied to every workload.",
+            "type": "object"
+        },
+        "resources": {
+            "description": "Resource requests/limits applied to the thoth workloads.",
+            "type": "object"
+        },
+        "storage": {
+            "description": "Persistent storage for vault, thoth home, and Hindsight Postgres.",
+            "type": "object",
+            "properties": {
+                "vault": {
+                    "$ref": "#/$defs/storageClaim"
+                },
+                "thothHome": {
+                    "$ref": "#/$defs/storageClaim"
+                },
+                "pg0": {
+                    "$ref": "#/$defs/storageClaim"
+                }
+            },
+            "additionalProperties": false
+        },
+        "config": {
+            "description": "Non-secret thoth configuration rendered into a ConfigMap.",
+            "type": "object",
+            "properties": {
+                "pkmVault": {
+                    "description": "Vault path inside the container.",
+                    "type": "string"
+                },
+                "thothHome": {
+                    "description": "THOTH_HOME path inside the container.",
+                    "type": "string"
+                },
+                "obsidianVaultName": {
+                    "description": "Obsidian vault name.",
+                    "type": "string"
+                },
+                "logLevel": {
+                    "description": "Log level for the thoth daemons.",
+                    "type": "string"
+                },
+                "anthropicModel": {
+                    "description": "Default Anthropic model.",
+                    "type": "string"
+                },
+                "analyseModel": {
+                    "description": "Override model for the analyse/kind/transcription call.",
+                    "type": "string"
+                },
+                "diagramModel": {
+                    "description": "Override model for the Excalidraw diagram call.",
+                    "type": "string"
+                },
+                "intentModel": {
+                    "description": "Override model for the intent gate.",
+                    "type": "string"
+                },
+                "dailyLlmBudget": {
+                    "description": "Daily LLM spend budget (USD) per Europe/London day.",
+                    "type": "string"
+                },
+                "gitRemote": {
+                    "description": "Git remote name the vault wrappers use.",
+                    "type": "string"
+                },
+                "gitBranch": {
+                    "description": "Git branch the vault wrappers use.",
+                    "type": "string"
+                },
+                "mcpAllowedHosts": {
+                    "description": "Comma-separated Host header allow-list for the MCP server.",
+                    "type": "string"
+                },
+                "mcpAllowedOrigins": {
+                    "description": "Comma-separated Origin allow-list for the MCP server.",
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
+        "mcp": {
+            "description": "The HTTP MCP server.",
+            "type": "object",
+            "properties": {
+                "port": {
+                    "description": "Container/Service port the MCP server listens on.",
+                    "type": "integer"
+                }
+            },
+            "additionalProperties": false
+        },
+        "hindsight": {
+            "description": "The networked Hindsight semantic-index Service.",
+            "type": "object",
+            "properties": {
+                "image": {
+                    "description": "Hindsight container image.",
+                    "type": "string"
+                },
+                "pullPolicy": {
+                    "description": "Image pull policy for the Hindsight image.",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Port the Hindsight API listens on.",
+                    "type": "integer"
+                },
+                "llmProvider": {
+                    "description": "Hindsight LLM provider for fact extraction.",
+                    "type": "string"
+                },
+                "llmModel": {
+                    "description": "Hindsight LLM model for fact extraction.",
+                    "type": "string"
+                },
+                "workerId": {
+                    "description": "Stable Hindsight worker id.",
+                    "type": "string"
+                },
+                "databaseUrl": {
+                    "description": "External Postgres URL. When set, the embedded pg0 PVC is not created.",
+                    "type": "string"
+                },
+                "pgDataDir": {
+                    "description": "Mount point for the embedded Hindsight Postgres data directory.",
+                    "type": "string"
+                },
+                "resources": {
+                    "description": "Resource requests/limits for the Hindsight pod.",
+                    "type": "object"
+                }
+            },
+            "additionalProperties": false
+        },
+        "ingress": {
+            "description": "Optional ingress exposing the MCP Service.",
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Whether to create an Ingress for the MCP Service.",
+                    "type": "boolean"
+                },
+                "className": {
+                    "description": "IngressClass name.",
+                    "type": "string"
+                },
+                "host": {
+                    "description": "Public host for the MCP endpoint.",
+                    "type": "string"
+                },
+                "annotations": {
+                    "description": "Extra annotations for the Ingress.",
+                    "type": "object"
+                },
+                "tls": {
+                    "description": "TLS configuration for the Ingress.",
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Whether to enable TLS on the Ingress.",
+                            "type": "boolean"
+                        },
+                        "secretName": {
+                            "description": "Name of the TLS Secret.",
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "global": {
+            "description": "Global values shared between all subcharts.",
+            "$comment": "Allows this chart to be used as a Helm dependency despite additionalProperties:false.",
+            "type": [
+                "object",
+                "null"
+            ]
+        }
+    },
+    "additionalProperties": false,
+    "$defs": {
+        "storageClaim": {
+            "type": "object",
+            "properties": {
+                "size": {
+                    "description": "Requested size for the PVC.",
+                    "type": "string"
+                },
+                "accessMode": {
+                    "description": "Access mode for the PVC.",
+                    "type": "string"
+                },
+                "storageClassName": {
+                    "description": "StorageClass for the PVC. Empty = cluster default.",
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        }
+    }
+}
