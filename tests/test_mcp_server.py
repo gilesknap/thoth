@@ -772,7 +772,7 @@ def test_pkm_save_answer_vault_rejection_is_ok_false(
 def test_pkm_todos_lists_open_actions_with_status_due_priority(
     config: Config, vault: Vault
 ) -> None:
-    """Open actions are returned with status/due/priority and [[wikilinks]]."""
+    """Open actions render the MCP citation style: link, path, [[wikilink]], status."""
     (vault.root / "actions" / "fix-fence.md").write_text(
         _action_page(
             title="Fix fence",
@@ -789,9 +789,15 @@ def test_pkm_todos_lists_open_actions_with_status_due_priority(
     ctx = _context(config, vault)
     result = pkm_todos(ctx)
     assert result.ok is True
-    # SummaryEngine renders folder-qualified wikilinks ([[actions/<slug>]]).
-    assert "[[actions/fix-fence]]" in result.text
+    # MCP citation style: [title](obsidian-uri) - `path` [[wikilink]], matching the
+    # other six pkm_* tools. SummaryEngine renders folder-qualified wikilinks.
+    fence_uri = "obsidian://open?vault=pkm-vault&file=actions%2Ffix-fence.md"
+    assert (
+        f"- [Fix fence]({fence_uri}) - `actions/fix-fence.md` [[actions/fix-fence]] "
+        in result.text
+    )
     assert "[[actions/call-bank]]" in result.text
+    assert "`actions/call-bank.md`" in result.text
     assert "status: todo" in result.text
     assert "priority: high" in result.text
     assert "due: 2026-06-10" in result.text
@@ -819,8 +825,14 @@ def test_pkm_todos_excludes_done_unless_requested(config: Config, vault: Vault) 
 
     with_done = pkm_todos(ctx, include_done=True)
     assert "[[actions/open-one]]" in with_done.text
-    assert "[[actions/done-one]]" in with_done.text
+    # Closed section uses the same MCP citation style: link, path, [[wikilink]], status.
+    done_uri = "obsidian://open?vault=pkm-vault&file=actions%2Fdone-one.md"
+    assert (
+        f"- [Done one]({done_uri}) - `actions/done-one.md` [[actions/done-one]] "
+        "(status: done)" in with_done.text
+    )
     assert "[[actions/cancelled-one]]" in with_done.text
+    assert "`actions/cancelled-one.md`" in with_done.text
     assert set(with_done.data["closed"]) == {
         "[[actions/done-one]]",
         "[[actions/cancelled-one]]",
