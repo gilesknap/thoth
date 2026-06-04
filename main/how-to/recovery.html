@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Recover from a lost VPS &#8212; thoth 0.6.1.dev17+g218a49e53 documentation</title>
+    <title>Recover from a lost VPS &#8212; thoth 0.6.1.dev22+g4837dec8f documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=620ae958"></script>
+    <script src="../_static/documentation_options.js?v=4e0b108d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -537,17 +537,17 @@ through the <a class="reference internal" href="first-light.html"><span class="s
 <p>Estimated recovery time ~1-2 h, dominated by package installs and the reindex pass; the
 knowledge itself is restored the instant the vault clone completes.</p>
 </section>
-<section id="recall-provenance-is-tag-keyed-after-a-restore">
-<h2>Recall provenance is tag-keyed after a restore<a class="headerlink" href="#recall-provenance-is-tag-keyed-after-a-restore" title="Link to this heading">#</a></h2>
+<section id="recall-provenance-round-trips-by-document-id-after-a-restore">
+<h2>Recall provenance round-trips by <code class="docutils literal notranslate"><span class="pre">document_id</span></code> after a restore<a class="headerlink" href="#recall-provenance-round-trips-by-document-id-after-a-restore" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">reindex</span> <span class="pre">--full-rebuild</span></code> re-stores every vault page with the vault-relative path
-carried as the primary <code class="docutils literal notranslate"><span class="pre">rel</span></code> <strong>tag</strong> (alongside the page type). Recall recovers the source
-path from each hit’s <code class="docutils literal notranslate"><span class="pre">rel</span></code> tag, falling back to the in-band <code class="docutils literal notranslate"><span class="pre">SOURCE:</span> <span class="pre">&lt;rel-path&gt;</span></code> sentinel
-line only when tags are absent (Hindsight runs LLM fact-extraction, so the sentinel can be
-stranded on one atomic fact or none – tags are therefore preferred; SPEC section 8). Both
-channels are restored by the rebuild, so retrieval keeps citing the right vault page after
-recovery.</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] confirm the restore by checking `thoth reindex --full-rebuild` completed (tags
-      re-attached) -- not by grepping for SOURCE: lines
+carried as the memory’s <code class="docutils literal notranslate"><span class="pre">document_id</span></code> (with the page type carried as a <code class="docutils literal notranslate"><span class="pre">document_tag</span></code>).
+Recall recovers the source path from each hit’s <code class="docutils literal notranslate"><span class="pre">document_id</span></code>, falling back to the in-band
+<code class="docutils literal notranslate"><span class="pre">SOURCE:</span> <span class="pre">&lt;rel-path&gt;</span></code> sentinel line only when it is absent (Hindsight runs LLM
+fact-extraction, so the sentinel can be stranded on one atomic fact or none – the
+<code class="docutils literal notranslate"><span class="pre">document_id</span></code> is therefore preferred; SPEC section 8). Both channels are restored by the
+rebuild, so retrieval keeps citing the right vault page after recovery.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] confirm the restore by checking `thoth reindex --full-rebuild` completed
+      (document_id re-attached) -- not by grepping for SOURCE: lines
 </pre></div>
 </div>
 </section>
@@ -666,7 +666,7 @@ requirement.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#canonical-recovery-always-correct">Canonical recovery (always correct)</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recall-provenance-is-tag-keyed-after-a-restore">Recall provenance is tag-keyed after a restore</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recall-provenance-round-trips-by-document-id-after-a-restore">Recall provenance round-trips by <code class="docutils literal notranslate"><span class="pre">document_id</span></code> after a restore</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optional-fast-restore-an-optimisation-never-a-substitute">Optional fast restore (an optimisation, never a substitute)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-not-recovered-and-why-that-is-fine">What is <em>not</em> recovered (and why that is fine)</a></li>
 </ul>

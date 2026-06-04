@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architecture overview &#8212; thoth 0.6.1.dev17+g218a49e53 documentation</title>
+    <title>Architecture overview &#8212; thoth 0.6.1.dev22+g4837dec8f documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=620ae958"></script>
+    <script src="../_static/documentation_options.js?v=4e0b108d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -969,7 +969,7 @@ any LLM call — so nothing is lost if the process restarts mid-flight.</p>
     ing --&gt; llm[&quot;llm.py&lt;br&gt;Claude Sonnet API&lt;br&gt;classify · curate&quot;]
     an --&gt; llm
     ing --&gt; va[&quot;vault.py&lt;br&gt;path-confined writes&lt;br&gt;schema validation&quot;]
-    ing --&gt; hs[&quot;hindsight.py&lt;br&gt;Hindsight CLI&lt;br&gt;semantic index&quot;]
+    ing --&gt; hs[&quot;hindsight.py&lt;br&gt;hindsight-api HTTP&lt;br&gt;semantic index&quot;]
     va --&gt; gs[&quot;git_sync.py&lt;br&gt;vault-pull · vault-commit&quot;]
     gs --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
     hs -.-&gt; ov
@@ -1041,7 +1041,7 @@ surface cannot escape the vault either.</p>
     cc --&gt; mcp[&quot;mcp_server.py&lt;br&gt;FastMCP · 5 pkm_* tools&quot;]
     mcp --&gt; qry[&quot;query.py&lt;br&gt;vault-only retrieval&lt;br&gt;grep ∪ recall · RRF blend&quot;]
     qry --&gt; va[&quot;vault.py&lt;br&gt;read-only&quot;]
-    qry --&gt; hs[&quot;hindsight.py&lt;br&gt;Hindsight CLI recall&quot;]
+    qry --&gt; hs[&quot;hindsight.py&lt;br&gt;hindsight-api recall&quot;]
     va --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
     hs -.-&gt; ov
     </pre><p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> blends <strong>two retrieval sources</strong> and fuses them with <strong>Reciprocal
@@ -1123,7 +1123,7 @@ that 404 fall back to a proven dated id (<code class="docutils literal notransla
 <td><p>Multi-model LLM backend — intent gate (Haiku), classify/curate/analyse (Sonnet), Excalidraw reconstruction (Opus). See <a class="reference internal" href="#models"><span class="std std-ref">Models</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p><strong>Hindsight</strong></p></td>
-<td><p>Semantic search backend: fact-extraction (not token-chunking) and recall over the vault</p></td>
+<td><p>Semantic search backend: fact-extraction (not token-chunking) and recall over the vault. The <code class="docutils literal notranslate"><span class="pre">hindsight.py</span></code> seam is an <strong>HTTP client</strong> (<code class="docutils literal notranslate"><span class="pre">httpx</span></code>) to a standalone <code class="docutils literal notranslate"><span class="pre">hindsight-api</span></code> server (<a class="reference internal" href="../reference/configuration.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BASE_URL</span></code></span></a>, default <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8888</span></code>); the bank is a URL path segment and a page’s vault-relative path round-trips as the memory <code class="docutils literal notranslate"><span class="pre">document_id</span></code>. A standalone server (vs an embedded library) is the foundation for moving the index to its own scaled deployment later.</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Firecrawl</strong></p></td>
 <td><p>Web page extraction to clean Markdown during ingest</p></td>
@@ -1147,7 +1147,7 @@ that 404 fall back to a proven dated id (<code class="docutils literal notransla
 <td><p>Unicode-correct slug generation for vault file names</p></td>
 </tr>
 <tr class="row-even"><td><p><strong>tenacity</strong></p></td>
-<td><p>Retry hardening around transient Hindsight subprocess failures</p></td>
+<td><p>Retry hardening around transient Hindsight HTTP failures (5xx + transport errors)</p></td>
 </tr>
 </tbody>
 </table>

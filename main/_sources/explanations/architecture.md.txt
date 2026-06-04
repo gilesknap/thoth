@@ -35,7 +35,7 @@ flowchart TB
     ing --> llm["llm.py<br>Claude Sonnet API<br>classify · curate"]
     an --> llm
     ing --> va["vault.py<br>path-confined writes<br>schema validation"]
-    ing --> hs["hindsight.py<br>Hindsight CLI<br>semantic index"]
+    ing --> hs["hindsight.py<br>hindsight-api HTTP<br>semantic index"]
     va --> gs["git_sync.py<br>vault-pull · vault-commit"]
     gs --> ov[("Obsidian vault<br>git-backed Markdown")]
     hs -.-> ov
@@ -91,7 +91,7 @@ flowchart TB
     cc --> mcp["mcp_server.py<br>FastMCP · 5 pkm_* tools"]
     mcp --> qry["query.py<br>vault-only retrieval<br>grep ∪ recall · RRF blend"]
     qry --> va["vault.py<br>read-only"]
-    qry --> hs["hindsight.py<br>Hindsight CLI recall"]
+    qry --> hs["hindsight.py<br>hindsight-api recall"]
     va --> ov[("Obsidian vault<br>git-backed Markdown")]
     hs -.-> ov
 ```
@@ -142,7 +142,7 @@ that 404 fall back to a proven dated id (`llm.py`); a daily call-count budget
 |---|---|
 | **Slack Bolt** | Socket-Mode event handling — the inbound capture channel |
 | **Anthropic Claude API** | Multi-model LLM backend — intent gate (Haiku), classify/curate/analyse (Sonnet), Excalidraw reconstruction (Opus). See [Models](models) |
-| **Hindsight** | Semantic search backend: fact-extraction (not token-chunking) and recall over the vault |
+| **Hindsight** | Semantic search backend: fact-extraction (not token-chunking) and recall over the vault. The `hindsight.py` seam is an **HTTP client** (`httpx`) to a standalone `hindsight-api` server ([`THOTH_HINDSIGHT_BASE_URL`](../reference/configuration.md), default `http://127.0.0.1:8888`); the bank is a URL path segment and a page's vault-relative path round-trips as the memory `document_id`. A standalone server (vs an embedded library) is the foundation for moving the index to its own scaled deployment later. |
 | **Firecrawl** | Web page extraction to clean Markdown during ingest |
 | **Whisper** | Local CLI for audio/voice message transcription |
 | **FastMCP** | MCP server framework — exposes the `pkm_*` tool surface to Claude Code and claude.ai |
@@ -150,4 +150,4 @@ that 404 fall back to a proven dated id (`llm.py`); a daily call-count budget
 | **Obsidian** | Markdown vault viewer and editor on the workstation |
 | **python-frontmatter** | YAML frontmatter parsing for vault page metadata |
 | **python-slugify** | Unicode-correct slug generation for vault file names |
-| **tenacity** | Retry hardening around transient Hindsight subprocess failures |
+| **tenacity** | Retry hardening around transient Hindsight HTTP failures (5xx + transport errors) |
