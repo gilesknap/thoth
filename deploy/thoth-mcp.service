@@ -1,11 +1,10 @@
 # thoth-mcp.service — the MCP streamable-HTTP server (issue #103).
 #
-# This is the OPTIONAL network MCP surface: `thoth mcp --transport http` serves the same
-# seven `pkm_*` tools as the stdio transport, but over an authenticated HTTP socket so a
-# remote client (claude.ai web/mobile via Cloudflare-Access OAuth, or Claude Code via a
-# static bearer) can reach the vault. Install it ONLY when you want remote MCP; the local
-# stdio transport (`thoth mcp`) needs no service. See docs/how-to/deploy-appliance.md
-# (section 7a) and ADR 0011 for the cloudflared + Cloudflare Access wiring.
+# This is the network MCP surface: `thoth mcp --transport http` serves the seven `pkm_*`
+# tools over an authenticated HTTP socket so a remote client (claude.ai web/mobile via
+# Cloudflare-Access OAuth, or Claude Code via a static bearer) can reach the vault. See
+# docs/how-to/mcp-server-setup.md and ADR 0011 for the cloudflared + Cloudflare Access
+# wiring.
 #
 # The socket binds LOOPBACK ONLY (127.0.0.1 — the `thoth mcp` default host). It is NEVER
 # exposed on a public interface directly: a cloudflared tunnel + Cloudflare Access front
