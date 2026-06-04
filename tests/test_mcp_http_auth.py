@@ -361,6 +361,7 @@ def _ctx(config: Config) -> Any:
         ingestor=_Stub(),  # type: ignore[arg-type]
         query_engine=_Stub(),  # type: ignore[arg-type]
         research=_Stub(),  # type: ignore[arg-type]
+        git=_Stub(),  # type: ignore[arg-type]
     )
 
 
@@ -468,7 +469,7 @@ def test_run_http_registers_all_seven_tools(
     mcp_server.run(config, _ctx(config), transport="http", port=9998)
     server = fake_mcp_and_uvicorn["fastmcp"].instances[-1]
     assert set(server.registered) == set(mcp_server.TOOL_NAMES)
-    assert len(server.registered) == 7
+    assert len(server.registered) == 9
 
 
 # --- the auth middleware end to end (bearer accept / reject before dispatch) --------
