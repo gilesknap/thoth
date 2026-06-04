@@ -57,6 +57,7 @@ import hashlib
 import logging
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -517,7 +518,12 @@ class Ingestor:
     # ---- the full pipeline -------------------------------------------------------
 
     def ingest(
-        self, capture: Capture, *, commit: bool = True, as_is: bool = False
+        self,
+        capture: Capture,
+        *,
+        commit: bool = True,
+        as_is: bool = False,
+        on_phase: Callable[[str], None] | None = None,
     ) -> IngestReport:
         """Run the bounded passes and return a structured report.
 
@@ -555,6 +561,15 @@ class Ingestor:
 
         Args:
             capture: The inbound item to ingest.
+            on_phase: Optional best-effort progress callback (issue #137), invoked
+                with a short label (with the model where applicable) **before** each
+                user-meaningful pass runs -- ``"reading image (<model>)"``,
+                ``"classifying (<model>)"``, ``"curating (<model>)"`` (curate path
+                only), ``"indexing"``. The Slack handler threads it through to edit
+                the "Filing…" placeholder live; non-Slack callers (MCP, the ``thoth
+                capture`` backfill) leave it ``None`` (a no-op). It is fired only on
+                phase transitions, never in a tight loop, and a raising callback is
+                swallowed so progress reporting can never break or abort an ingest.
 
         Returns:
             The :class:`IngestReport` describing every file touched.
@@ -564,6 +579,16 @@ class Ingestor:
                 LLM-availability failure is reported as deferred, not raised).
         """
         started = time.monotonic()
+
+        def phase(label: str) -> None:
+            """Fire the progress callback guarded (best-effort, never breaks ingest)."""
+            if on_phase is None:
+                return
+            try:
+                on_phase(label)
+            except Exception:  # noqa: BLE001 - progress reporting is best-effort, never fatal
+                pass
+
         # commit=False means a batch caller (thoth capture) pulled once up front, so
         # skip the per-call orient and let the staged changes accumulate for its commit.
         # The orient pull rewrites the whole working tree (``pull --rebase
@@ -576,8 +601,13 @@ class Ingestor:
         holding = self.persist_inbound(capture, as_is=as_is)
         analysed = _Analysed(analysis=None)
         try:
+            phase(
+                "reading image "
+                f"({self._config.analyse_model or self._config.anthropic_model})"
+            )
             analysed = self.analyse(capture)
             analysis = analysed.analysis
+            phase(f"classifying ({self._config.anthropic_model})")
             classification = self.classify(
                 capture,
                 analysis=analysis,
@@ -629,6 +659,7 @@ class Ingestor:
                     ),
                 )
             else:
+                phase(f"curating ({self._config.anthropic_model})")
                 candidates = self.fetch_candidates(classification)
                 plan = self.curate(
                     capture,
@@ -667,6 +698,7 @@ class Ingestor:
         # Retain (Hindsight) reads the already-durable pages off disk and never touches
         # the working tree, so it runs OUTSIDE the working-tree lock -- keeping the
         # locked section down to the sub-second log-append -> stage -> commit -> push.
+        phase("indexing")
         self._retain_pages(page_paths, classification)
 
         report = self._build_report(capture, classification, raw, page_paths, plan)

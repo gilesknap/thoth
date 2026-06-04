@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -104,12 +105,26 @@ class FakeIngestor:
         self, report: IngestReport | None = None, error: Exception | None = None
     ) -> None:
         self.captures: list[Capture] = []
+        self.phases: list[str] = []
         self._report = report if report is not None else _report()
         self._error = error
 
-    def ingest(self, capture: Capture) -> IngestReport:
-        """Record the capture and return the canned report (or raise)."""
+    def ingest(
+        self,
+        capture: Capture,
+        *,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> IngestReport:
+        """Record the capture, replay a couple of phases, and return the canned report.
+
+        Replaying ``on_phase`` (issue #137) lets a test assert the placeholder is edited
+        in place as ingest progresses, without standing up the real pipeline.
+        """
         self.captures.append(capture)
+        if on_phase is not None:
+            for label in ("classifying (m)", "indexing"):
+                self.phases.append(label)
+                on_phase(label)
         if self._error is not None:
             raise self._error
         return self._report
@@ -1964,8 +1979,13 @@ def test_ingest_posts_filing_placeholder_then_updates(config: Config) -> None:
     assert len(ing.captures) == 1
     assert len(client.posts) == 1
     assert "Filing" in client.posts[0]["text"]
-    assert len(client.updates) == 1
-    assert "Filed 1 page(s):" in client.updates[0]["text"]
+    # The placeholder is edited in place per phase (issue #137), then once more with the
+    # final confirmation -- all on the one placeholder ts, never a second post.
+    assert [u["ts"] for u in client.updates] == ["1700000000.000100"] * 3
+    filing = ":hourglass_flowing_sand: Filing…"
+    assert client.updates[0]["text"] == f"{filing} — classifying (m)"
+    assert client.updates[1]["text"] == f"{filing} — indexing"
+    assert "Filed 1 page(s):" in client.updates[2]["text"]
     assert say.messages == []
 
 
@@ -2030,6 +2050,99 @@ def test_responder_finish_falls_back_when_update_raises() -> None:
     responder.progress(":mag: Looking…")
     responder.finish("the answer")
     assert say.messages == ["the answer"]
+
+
+def test_responder_update_edits_placeholder_in_place() -> None:
+    """update() re-edits the captured placeholder ts -- no extra posts, never a say."""
+    say = Recorder()
+    client = FakeSlackClient()
+    responder = Responder(say, client=cast(Any, client), channel="D1")
+    responder.progress(":hourglass_flowing_sand: Filing…")
+    responder.update(":hourglass_flowing_sand: Filing… — classifying (m)")
+    # Edited in place (chat.update on the placeholder ts); no new post, no say.
+    assert len(client.posts) == 1
+    assert [u["text"] for u in client.updates] == [
+        ":hourglass_flowing_sand: Filing… — classifying (m)"
+    ]
+    assert client.updates[0]["ts"] == "1700000000.000100"
+    assert say.messages == []
+
+
+def test_responder_progress_captures_ts_from_non_dict_response() -> None:
+    """progress() reads the ts from a SlackResponse-like object, not just a dict.
+
+    The real ``slack_sdk`` ``WebClient`` returns a ``SlackResponse`` -- dict-*like*
+    (``.get`` works) but NOT a ``dict`` subclass. A regression where progress() gated
+    the ts read on ``isinstance(response, dict)`` silently dropped the placeholder ts
+    against the live client, degrading every in-place edit to a separate message. This
+    pins the duck-typed read so a real-client placeholder is editable.
+    """
+
+    class SlackResponseLike:
+        """Dict-like but not a dict subclass -- mirrors slack_sdk's SlackResponse."""
+
+        def __init__(self, data: dict[str, Any]) -> None:
+            self._data = data
+
+        def get(self, key: str, default: Any = None) -> Any:
+            return self._data.get(key, default)
+
+    class NonDictClient:
+        def __init__(self) -> None:
+            self.updates: list[dict[str, str]] = []
+
+        def chat_postMessage(  # noqa: N802 - SDK name
+            self, *, channel: str, text: str, **kwargs: Any
+        ) -> SlackResponseLike:
+            return SlackResponseLike({"ok": True, "ts": "1700000000.000200"})
+
+        def chat_update(  # noqa: N802 - SDK name
+            self, *, channel: str, ts: str, text: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            self.updates.append({"ts": ts, "text": text})
+            return {"ok": True}
+
+    say = Recorder()
+    client = NonDictClient()
+    responder = Responder(say, client=cast(Any, client), channel="D1")
+    responder.progress(":hourglass_flowing_sand: Filing…")
+    responder.update(":hourglass_flowing_sand: Filing… — indexing")
+    # The ts was captured from the non-dict response, so the edit lands in place.
+    assert [u["ts"] for u in client.updates] == ["1700000000.000200"]
+    assert say.messages == []
+
+
+def test_responder_update_noops_without_placeholder_ts() -> None:
+    """With no placeholder ts (post returned none) update() no-ops, never spams."""
+    say = Recorder()
+    client = FakeSlackClient(post_ts=None)
+    responder = Responder(say, client=cast(Any, client), channel="D1")
+    responder.progress(":hourglass_flowing_sand: Filing…")
+    responder.update(":hourglass_flowing_sand: Filing… — indexing")
+    assert client.updates == []
+    assert say.messages == []
+
+
+def test_responder_update_swallows_client_error() -> None:
+    """A failed chat.update is swallowed -- an intermediate update is never fatal."""
+
+    class FlakyClient:
+        def chat_postMessage(  # noqa: N802 - SDK name
+            self, *, channel: str, text: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            return {"ok": True, "ts": "9.9"}
+
+        def chat_update(  # noqa: N802 - SDK name
+            self, *, channel: str, ts: str, text: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            raise RuntimeError("edit window expired")
+
+    say = Recorder()
+    responder = Responder(say, client=cast(Any, FlakyClient()), channel="D1")
+    responder.progress(":hourglass_flowing_sand: Filing…")
+    responder.update(":hourglass_flowing_sand: Filing… — curating (m)")
+    # Swallowed: no exception, and (unlike finish) no fresh say fallback either.
+    assert say.messages == []
 
 
 # --------------------------------------------------------------------------------------

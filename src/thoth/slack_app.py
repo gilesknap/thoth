@@ -564,6 +564,13 @@ class Responder:
         under the originating message. With no client/channel, or if the post fails for
         any reason, this no-ops and a later :meth:`finish` falls back to a single
         ``say`` -- the placeholder must never be able to swallow the real reply.
+
+        The ts is read by duck-typing ``response.get("ts")`` rather than requiring a
+        ``dict``: the real ``slack_sdk`` ``WebClient`` returns a ``SlackResponse`` (a
+        dict-*like* object that is **not** a ``dict`` subclass), so an ``isinstance(...,
+        dict)`` guard would silently drop the ts against the live client -- leaving
+        :meth:`update`/:meth:`finish` with no placeholder to edit and degrading every
+        in-place edit to a separate message.
         """
         if self._client is None or not self._channel:
             return
@@ -571,11 +578,32 @@ class Responder:
             response = self._client.chat_postMessage(
                 channel=self._channel, text=placeholder, **self._thread_kwargs()
             )
+            ts = response.get("ts")
         except Exception:  # noqa: BLE001 - placeholder is best-effort UX, never fatal
             return
-        ts = response.get("ts") if isinstance(response, dict) else None
         if isinstance(ts, str) and ts:
             self._ts = ts
+
+    def update(self, text: str) -> None:
+        """Edit the placeholder in place with intermediate progress (best-effort).
+
+        Used to stream per-phase progress (issue #137) into the same "Filing…"
+        message as ingest moves through its passes -- the placeholder ts captured by
+        :meth:`progress` is re-edited via ``chat.update`` so the user sees a live
+        phase line without any extra messages.
+
+        Unlike :meth:`finish`, an intermediate update **never** falls back to a fresh
+        ``say``: with no client/channel/ts (a client-less/test path, or the placeholder
+        post failed) it no-ops, and a failed edit is swallowed. An intermediate update
+        must never be able to spam the thread or break ingest -- only the placeholder
+        edit, best-effort.
+        """
+        if self._client is None or not self._channel or self._ts is None:
+            return
+        try:
+            self._client.chat_update(channel=self._channel, ts=self._ts, text=text)
+        except Exception:  # noqa: BLE001 - intermediate progress is best-effort, never fatal
+            return
 
     def finish(self, text: str) -> None:
         """Deliver the final reply: edit the placeholder in place, else a fresh ``say``.
@@ -945,8 +973,13 @@ class Handlers:
         #5). It is not appended to the early conflict/error replies above.
         """
         responder.progress(_INGEST_PLACEHOLDER)
+
+        def on_phase(label: str) -> None:
+            """Stream a per-phase line into the placeholder (#137, best-effort)."""
+            responder.update(f"{_INGEST_PLACEHOLDER} — {label}")
+
         try:
-            report = self.ingestor.ingest(capture)
+            report = self.ingestor.ingest(capture, on_phase=on_phase)
         except VaultConflictError as exc:
             responder.finish(
                 f":warning: *Vault conflict* - {exc}. Resolve in Obsidian, then retry."

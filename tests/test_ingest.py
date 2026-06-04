@@ -676,6 +676,60 @@ def test_ingest_url_happy_path(harness: IngestHarness) -> None:
     assert "notes/transformer-models.md" in harness.origin_files()
 
 
+def test_ingest_reports_ordered_phases_with_models(harness: IngestHarness) -> None:
+    """on_phase fires the user-meaningful passes in order, with model labels (#137)."""
+    doc = ExtractedDoc(
+        source_url="https://example.com/transformers",
+        title="Transformer Models",
+        markdown="Transformers use attention to weigh tokens.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    phases: list[str] = []
+    ingestor.ingest(
+        Capture(url="https://example.com/transformers"), on_phase=phases.append
+    )
+
+    model = harness.config.anthropic_model
+    assert phases == [
+        f"reading image ({model})",
+        f"classifying ({model})",
+        f"curating ({model})",
+        "indexing",
+    ]
+
+
+def test_ingest_survives_raising_on_phase_callback(harness: IngestHarness) -> None:
+    """A raising on_phase callback is swallowed; progress never breaks ingest (#137)."""
+    doc = ExtractedDoc(
+        source_url="https://example.com/transformers",
+        title="Transformer Models",
+        markdown="Transformers use attention to weigh tokens.",
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient(_classify_json(), _file_plan_json()),
+        extractor=FakeExtractor(doc=doc),
+        hindsight=FakeHindsight(),
+    )
+
+    def boom(label: str) -> None:
+        raise RuntimeError("progress sink exploded")
+
+    report = ingestor.ingest(
+        Capture(url="https://example.com/transformers"), on_phase=boom
+    )
+
+    # The ingest completed normally despite every callback raising.
+    assert report.page_paths == ["notes/transformer-models.md"]
+    assert report.committed is True
+
+
 def test_default_info_output_gains_no_debug_lines(
     harness: IngestHarness, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -4228,6 +4282,32 @@ def test_ingest_as_is_skips_curate_and_files_verbatim(harness: IngestHarness) ->
     assert "source: import" in page_text.split("---", 2)[1]
     # The filed page was indexed through the same retain pass.
     assert [r.rel_path for r in hindsight.retained] == ["notes/my-note.md"]
+
+
+def test_ingest_as_is_omits_curating_phase(harness: IngestHarness) -> None:
+    """The ``as_is`` path skips curate, so no ``curating`` progress phase fires (#137).
+
+    The other user-meaningful phases still fire in order; only the curate transition --
+    which the low-touch import deliberately skips -- is absent.
+    """
+    client = _ScriptedClient(_classify_json(page_type="note", slug="my-note"))
+    ingestor = _build_ingestor(
+        harness, client=client, extractor=FakeExtractor(), hindsight=FakeHindsight()
+    )
+    phases: list[str] = []
+
+    ingestor.ingest(
+        Capture(text="# body\n", source="import", filename="my-note.md"),
+        as_is=True,
+        on_phase=phases.append,
+    )
+
+    model = harness.config.anthropic_model
+    assert phases == [
+        f"reading image ({model})",
+        f"classifying ({model})",
+        "indexing",
+    ]
 
 
 def test_ingest_commit_false_defers_git(harness: IngestHarness) -> None:
