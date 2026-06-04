@@ -2,13 +2,13 @@
 <!DOCTYPE html>
 
 
-<html lang="en" data-content_root="../" >
+<html lang="en" data-content_root="../../" >
 
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architectural Decision Records &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
+    <title>12. Blend grep and semantic retrieval with Reciprocal Rank Fusion &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
   
   
   
@@ -27,27 +27,27 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
-<link href="../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+  <link href="../../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
 
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
-    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
+  <script defer src="../../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
-<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=1873bd77"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
-    <script src="../_static/copybutton.js?v=30646c52"></script>
-    <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions';</script>
+    <script src="../../_static/documentation_options.js?v=1873bd77"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=30646c52"></script>
+    <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0012-blend-grep-and-semantic-retrieval-rrf';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -56,19 +56,19 @@
             false;
         </script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <link rel="icon" href="../_static/dls-logo.svg"/>
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="1. Record architecture decisions" href="decisions/0001-record-architecture-decisions.html" />
-    <link rel="prev" title="Architecture review notes" href="architecture-review.html" />
+    <link rel="icon" href="../../_static/dls-logo.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="11. MCP HTTP transport with tiered authentication" href="0011-mcp-http-transport-and-tiered-auth.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
   
     
-    <script src="../_static/searchtools.js"></script>
-    <script src="../_static/language_data.js"></script>
-    <script src="../searchindex.js"></script>
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
   
   </head>
   <body data-default-mode="">
@@ -88,7 +88,7 @@
   <dialog id="pst-search-dialog">
     
 <form class="bd-search d-flex align-items-center"
-      action="../search.html"
+      action="../../search.html"
       method="get">
   <i class="fa-solid fa-magnifying-glass"></i>
   <input type="search"
@@ -124,7 +124,7 @@
     
   
 
-<a class="navbar-brand logo" href="../index.html">
+<a class="navbar-brand logo" href="../../index.html">
   
   
   
@@ -135,8 +135,8 @@
       
     
     
-    <img src="../_static/dls-logo.svg" class="logo__image only-light" alt=""/>
-    <img src="../_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
+    <img src="../../_static/dls-logo.svg" class="logo__image only-light" alt=""/>
+    <img src="../../_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
   
   
     <p class="title logo__title">thoth</p>
@@ -154,28 +154,28 @@
   <ul class="bd-navbar-elements navbar-nav">
     
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../tutorials.html">
+  <a class="nav-link nav-internal" href="../../tutorials.html">
     Tutorials
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../how-to.html">
+  <a class="nav-link nav-internal" href="../../how-to.html">
     How-to Guides
   </a>
 </li>
 
 
 <li class="nav-item current active">
-  <a class="nav-link nav-internal" href="../explanations.html">
+  <a class="nav-link nav-internal" href="../../explanations.html">
     Explanations
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../reference.html">
+  <a class="nav-link nav-internal" href="../../reference.html">
     Reference
   </a>
 </li>
@@ -307,28 +307,28 @@
   <ul class="bd-navbar-elements navbar-nav">
     
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../tutorials.html">
+  <a class="nav-link nav-internal" href="../../tutorials.html">
     Tutorials
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../how-to.html">
+  <a class="nav-link nav-internal" href="../../how-to.html">
     How-to Guides
   </a>
 </li>
 
 
 <li class="nav-item current active">
-  <a class="nav-link nav-internal" href="../explanations.html">
+  <a class="nav-link nav-internal" href="../../explanations.html">
     Explanations
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../reference.html">
+  <a class="nav-link nav-internal" href="../../reference.html">
     Reference
   </a>
 </li>
@@ -421,21 +421,21 @@
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="architecture-review.html">Architecture review notes</a></li>
-<li class="toctree-l1 current active has-children"><a class="current reference internal" href="#">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture.html">Architecture overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture-review.html">Architecture review notes</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../decisions.html">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
 </ul>
 </details></li>
 </ul>
@@ -474,14 +474,17 @@
   <ul class="bd-breadcrumbs">
     
     <li class="breadcrumb-item breadcrumb-home">
-      <a href="../index.html" class="nav-link" aria-label="Home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
     
-    <li class="breadcrumb-item"><a href="../explanations.html" class="nav-link">Explanations</a></li>
+    <li class="breadcrumb-item"><a href="../../explanations.html" class="nav-link">Explanations</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Architectural Decision Records</span></li>
+    
+    <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</span></li>
   </ul>
 </nav>
 </div>
@@ -498,26 +501,77 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="architectural-decision-records">
-<h1>Architectural Decision Records<a class="headerlink" href="#architectural-decision-records" title="Link to this heading">#</a></h1>
-<p>Architectural decisions are made throughout a project’s lifetime. As a way of keeping track of these decisions, we record these decisions in Architecture Decision Records (ADRs) listed below.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
+  <section id="blend-grep-and-semantic-retrieval-with-reciprocal-rank-fusion">
+<h1>12. Blend grep and semantic retrieval with Reciprocal Rank Fusion<a class="headerlink" href="#blend-grep-and-semantic-retrieval-with-reciprocal-rank-fusion" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-04</p>
+<section id="status">
+<h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
+<p>Accepted</p>
+</section>
+<section id="context">
+<h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> powers <code class="docutils literal notranslate"><span class="pre">pkm_search</span></code> (and the vault half of <code class="docutils literal notranslate"><span class="pre">pkm_ask</span></code>): given a query, it
+selects which vault pages to cite. It has two retrieval sources available:</p>
+<ul class="simple">
+<li><p><strong>Structural</strong> — a lexical grep over the curated folders plus wikilink traversal.
+Cheap, exact, and good at literal token matches and a page’s <code class="docutils literal notranslate"><span class="pre">summary:</span></code> gloss; blind to
+synonyms and paraphrase.</p></li>
+<li><p><strong>Semantic</strong> — Hindsight recall (an embedding/fact-extraction index). Good at “about
+the same thing in different words”; on this vault it is <strong>low-resolution</strong> (it leans
+toward the bank’s dominant content cluster).</p></li>
 </ul>
-</div>
-<p>For more information on ADRs see this <a class="reference external" href="http://thinkrelevance.com/blog/2011/11/15/documenting-architecture-decisions">blog by Michael Nygard</a>.</p>
+<p>The earlier design ran them <strong>cost-ordered</strong>: grep first, and recall only as a fallback
+<em>when structural results looked thin</em>. In practice that gate suppressed recall exactly
+when it was most useful — a dense, on-topic query already had “enough” grep hits, so the
+grep-complementary pages recall would have added (relevant notes that simply don’t share
+the query’s literal tokens) were never consulted. The two sources are <strong>complementary</strong>,
+not a primary-plus-backup pair, so gating one behind the other’s thinness left good pages
+uncited.</p>
+</section>
+<section id="decision">
+<h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
+<p><strong>Always run both sources and merge their ranked lists with Reciprocal Rank Fusion
+(RRF).</strong> Recall is no longer a fallback — it <strong>always gets a vote</strong> when enabled.</p>
+<ul class="simple">
+<li><p><strong>Concurrency.</strong> Recall is the slow source, so it runs in a worker thread while the
+cheap structural pass runs on the calling thread; the semantic latency overlaps grep
+rather than serialising after it.</p></li>
+<li><p><strong>Fusion.</strong> Each unique page scores <code class="docutils literal notranslate"><span class="pre">Σ</span> <span class="pre">1</span> <span class="pre">/</span> <span class="pre">(RRF_K</span> <span class="pre">+</span> <span class="pre">rank)</span></code> over the sources that
+surfaced it, with <code class="docutils literal notranslate"><span class="pre">RRF_K</span> <span class="pre">=</span> <span class="pre">60</span></code> (the standard Cormack/Clarke/Buettcher damping constant).
+Pages sort by that fused score; structural discovery order breaks ties (a structural hit
+leads a recall hit on a score tie). The top <code class="docutils literal notranslate"><span class="pre">max_pages</span></code> are cited. A recall-only hit at
+rank 0 still scores <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">60</span></code> — enough to earn a slot even when structural already filled
+<code class="docutils literal notranslate"><span class="pre">max_pages</span></code>, which is the whole point.</p></li>
+<li><p><strong>Provenance.</strong> Each cited page records <em>which</em> method(s) surfaced it (<code class="docutils literal notranslate"><span class="pre">grep</span></code> /
+<code class="docutils literal notranslate"><span class="pre">wikilink</span></code> / <code class="docutils literal notranslate"><span class="pre">recall</span></code>) and its fused rank, exposed as <code class="docutils literal notranslate"><span class="pre">provenance</span></code> on the <code class="docutils literal notranslate"><span class="pre">pkm_search</span></code>
+result and logged at DEBUG.</p></li>
+<li><p><strong>Graceful degradation.</strong> A Hindsight failure logs a warning and collapses to
+structural-only order rather than failing the query; <code class="docutils literal notranslate"><span class="pre">use_recall=False</span></code> skips the
+semantic pass (and its worker) entirely.</p></li>
+</ul>
+<p>A related, separate knob — <code class="docutils literal notranslate"><span class="pre">search_keywords</span></code> (issue #139) — lets the calling model seed
+the whole-word grep with de-pluralised / synonym terms, since grep matches whole words and
+a plural query otherwise misses singular page content.</p>
+</section>
+<section id="consequences">
+<h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><strong>Recall complements grep instead of backstopping it.</strong> On dense, on-topic queries the
+blend cites grep-missed-but-relevant pages it previously skipped (a measured win on the
+owner’s dense work domains).</p></li>
+<li><p><strong>Sparse/off-topic queries stay honest.</strong> When recall only returns the dominant cluster
+as noise, those hits land at tail rank and the structural pages still lead — RRF damping
+keeps a weak single-source hit from outranking a strong one.</p></li>
+<li><p><strong>Verifying retrieval needs care.</strong> Because recall is low-resolution, judging the blend
+on a sparse worst-case query reads as “no gain”; probe a dense domain and read
+<code class="docutils literal notranslate"><span class="pre">provenance</span></code> to see each method’s contribution. (This nearly got the blend reverted off
+the live appliance — the regression was a client reading vault files directly, not the
+blend. The verification methodology lives in the <code class="docutils literal notranslate"><span class="pre">thoth-testing</span></code> skill.)</p></li>
+<li><p><strong>No new dependencies.</strong> RRF is a few lines of arithmetic; recall already shelled out to
+Hindsight. The cost is one always-on recall call per query (overlapped, and still inside
+the daily budget guard).</p></li>
+</ul>
+</section>
 </section>
 
 
@@ -531,20 +585,20 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="architecture-review.html"
+       href="0011-mcp-http-transport-and-tiered-auth.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Architecture review notes</p>
+        <p class="prev-next-title">11. MCP HTTP transport with tiered authentication</p>
       </div>
     </a>
     <a class="right-next"
-       href="decisions/0001-record-architecture-decisions.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">1. Record architecture decisions</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -560,10 +614,25 @@
 
 
   <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#status">Status</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#context">Context</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decision">Decision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#consequences">Consequences</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0012-blend-grep-and-semantic-retrieval-rrf.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -578,7 +647,7 @@
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/explanations/decisions.md.txt">
+    <a href="../../_sources/explanations/decisions/0012-blend-grep-and-semantic-retrieval-rrf.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
@@ -597,8 +666,8 @@
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
-<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
+  <script defer src="../../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">

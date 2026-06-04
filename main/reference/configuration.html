@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architectural Decision Records &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
+    <title>Configuration reference &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=30646c52"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'reference/configuration';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="1. Record architecture decisions" href="decisions/0001-record-architecture-decisions.html" />
-    <link rel="prev" title="Architecture review notes" href="architecture-review.html" />
+    <link rel="next" title="thoth" href="../_api/thoth.html" />
+    <link rel="prev" title="Reference" href="../reference.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -167,14 +167,14 @@
 </li>
 
 
-<li class="nav-item current active">
+<li class="nav-item ">
   <a class="nav-link nav-internal" href="../explanations.html">
     Explanations
   </a>
 </li>
 
 
-<li class="nav-item ">
+<li class="nav-item current active">
   <a class="nav-link nav-internal" href="../reference.html">
     Reference
   </a>
@@ -320,14 +320,14 @@
 </li>
 
 
-<li class="nav-item current active">
+<li class="nav-item ">
   <a class="nav-link nav-internal" href="../explanations.html">
     Explanations
   </a>
 </li>
 
 
-<li class="nav-item ">
+<li class="nav-item current active">
   <a class="nav-link nav-internal" href="../reference.html">
     Reference
   </a>
@@ -421,23 +421,10 @@
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="architecture-review.html">Architecture review notes</a></li>
-<li class="toctree-l1 current active has-children"><a class="current reference internal" href="#">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
-</ul>
-</details></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_api/thoth.html">API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../genindex.html">Index</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/gilesknap/thoth/releases">Release Notes</a></li>
 </ul>
 </div>
 </nav></div>
@@ -479,9 +466,9 @@
       </a>
     </li>
     
-    <li class="breadcrumb-item"><a href="../explanations.html" class="nav-link">Explanations</a></li>
+    <li class="breadcrumb-item"><a href="../reference.html" class="nav-link">Reference</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Architectural Decision Records</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Configuration reference</span></li>
   </ul>
 </nav>
 </div>
@@ -498,26 +485,236 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="architectural-decision-records">
-<h1>Architectural Decision Records<a class="headerlink" href="#architectural-decision-records" title="Link to this heading">#</a></h1>
-<p>Architectural decisions are made throughout a project’s lifetime. As a way of keeping track of these decisions, we record these decisions in Architecture Decision Records (ADRs) listed below.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
-</ul>
+  <section id="configuration-reference">
+<h1>Configuration reference<a class="headerlink" href="#configuration-reference" title="Link to this heading">#</a></h1>
+<p>thoth is configured entirely through environment variables, optionally seeded from a
+<code class="docutils literal notranslate"><span class="pre">.env</span></code> file at <code class="docutils literal notranslate"><span class="pre">$THOTH_HOME/.env</span></code> (chmod 600, never committed). The real environment wins
+over the <code class="docutils literal notranslate"><span class="pre">.env</span></code> file, which wins over the documented defaults; <code class="docutils literal notranslate"><span class="pre">load_config</span></code> reads them
+once at process entry and never mutates the environment. <code class="docutils literal notranslate"><span class="pre">src/thoth/config.py</span></code> is the
+single source of truth, and <code class="docutils literal notranslate"><span class="pre">deploy/.env.example</span></code> is the copy-paste starting point.</p>
+<p>Only <strong><code class="docutils literal notranslate"><span class="pre">PKM_VAULT</span></code></strong> is hard-required. Everything else has a default or is needed only for
+the feature it powers (Slack tokens to run the daemon, an Anthropic key to make LLM calls,
+and so on). Blank counts as unset.</p>
+<section id="core-vault">
+<h2>Core / vault<a class="headerlink" href="#core-vault" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">PKM_VAULT</span></code></p></td>
+<td><p>Absolute path to the Obsidian vault. <strong>Required.</strong></p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">OBSIDIAN_VAULT_NAME</span></code></p></td>
+<td><p>Vault name used in <code class="docutils literal notranslate"><span class="pre">obsidian://</span></code> deep links.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pkm-vault</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_HOME</span></code></p></td>
+<td><p>thoth home dir; also the default <code class="docutils literal notranslate"><span class="pre">.env</span></code> and <code class="docutils literal notranslate"><span class="pre">state.db</span></code> location.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">~/.thoth</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_LOG_LEVEL</span></code></p></td>
+<td><p>Log level for the daemon (<code class="docutils literal notranslate"><span class="pre">DEBUG</span></code> for the full pipeline trail).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+</tr>
+</tbody>
+</table>
 </div>
-<p>For more information on ADRs see this <a class="reference external" href="http://thinkrelevance.com/blog/2011/11/15/documenting-architecture-decisions">blog by Michael Nygard</a>.</p>
+</section>
+<section id="anthropic-models">
+<h2>Anthropic + models<a class="headerlink" href="#anthropic-models" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ANTHROPIC_API_KEY</span></code></p></td>
+<td><p>Anthropic API key (required for any LLM call).</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code></p></td>
+<td><p>Default model for every call that does not pin its own.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">claude-sonnet-4-6</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_ANALYSE_MODEL</span></code></p></td>
+<td><p>Override for the vision analyse/OCR/transcription call.</p></td>
+<td><p>unset → <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL</span></code></p></td>
+<td><p>Override for the Excalidraw reconstruction call (wants spatial reasoning).</p></td>
+<td><p>unset → <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code></p></td>
+<td><p>Override for the free-text intent gate (a one-shot routing call).</p></td>
+<td><p>unset → a cheap Haiku</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="budgets-image-handling">
+<h2>Budgets + image handling<a class="headerlink" href="#budgets-image-handling" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_DAILY_LLM_BUDGET</span></code></p></td>
+<td><p>Combined daily LLM call cap (appliance + Gemini extraction). Non-positive disables.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_IMAGE_RESIZE_THRESHOLD_BYTES</span></code></p></td>
+<td><p>Downscale captured images larger than this before storage + vision. Non-positive disables.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2097152</span></code> (2 MB)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_MAX_ANALYSE_IMAGES</span></code></p></td>
+<td><p>Cap on images sent to one multi-image vision call (extras still saved + embedded). Non-positive = no cap.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">6</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="slack">
+<h2>Slack<a class="headerlink" href="#slack" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_BOT_TOKEN</span></code></p></td>
+<td><p>Bot token (<code class="docutils literal notranslate"><span class="pre">xoxb-…</span></code>). Required for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>.</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_APP_TOKEN</span></code></p></td>
+<td><p>App-level token (<code class="docutils literal notranslate"><span class="pre">xapp-…</span></code>) for Socket Mode. Required for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>.</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_CAPTURE_CHANNEL</span></code></p></td>
+<td><p>Private channel id the daemon listens/replies in. Required for <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code>.</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_SUMMARY_CHANNEL</span></code></p></td>
+<td><p>Channel id for the daily/weekly digest.</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_ALERT_CHANNEL</span></code></p></td>
+<td><p>Channel/DM id for unattended error + heartbeat alerts.</p></td>
+<td><p>unset → first <code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code> id</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code></p></td>
+<td><p>Allowed member id(s) (<code class="docutils literal notranslate"><span class="pre">U…</span></code>, <strong>not</strong> a <code class="docutils literal notranslate"><span class="pre">D…</span></code> DM id), comma-separated.</p></td>
+<td><p>—</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="web-research-semantic-index">
+<h2>Web research + semantic index<a class="headerlink" href="#web-research-semantic-index" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">EXA_API_KEY</span></code></p></td>
+<td><p>Exa web-search key (powers the <code class="docutils literal notranslate"><span class="pre">research:</span></code> path). Blank = vault-only.</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">FIRECRAWL_API_KEY</span></code></p></td>
+<td><p>Firecrawl URL→Markdown key. Blank = vault-only.</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">GEMINI_API_KEY</span></code></p></td>
+<td><p>Gemini key for the Hindsight semantic index (embeddings + fact-extraction).</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BINARY</span></code></p></td>
+<td><p>Path to the <code class="docutils literal notranslate"><span class="pre">hindsight-embed</span></code> CLI.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">hindsight</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_PROFILE</span></code></p></td>
+<td><p>Named Hindsight profile (carries the index LLM key/port).</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BANK</span></code></p></td>
+<td><p>Hindsight bank id (positional on retain/recall).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">thoth</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="vault-git-sync">
+<h2>Vault git sync<a class="headerlink" href="#vault-git-sync" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">GITHUB_PKM_VAULT_TOKEN</span></code></p></td>
+<td><p>GitHub token (<code class="docutils literal notranslate"><span class="pre">ghp_…</span></code>) for two-way vault git sync.</p></td>
+<td><p>—</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="mcp-http-transport">
+<h2>MCP HTTP transport<a class="headerlink" href="#mcp-http-transport" title="Link to this heading">#</a></h2>
+<p>Needed to run the MCP server (<a class="reference internal" href="../how-to/mcp-server-setup.html"><span class="doc">Set up the MCP server</span></a>). The server <strong>fails fast</strong>
+if <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_API_KEYS</span></code> is unset — it never binds an unauthenticated socket.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Variable</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Default</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_MCP_API_KEYS</span></code></p></td>
+<td><p>Bearer key(s) for HTTP requests, comma-separated for rotation. <strong>Required for the socket.</strong></p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_MCP_CF_ACCESS_TEAM_DOMAIN</span></code></p></td>
+<td><p>Cloudflare Access team domain (Tier 2 JWT; both Cf vars needed to enable).</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_MCP_CF_ACCESS_AUD</span></code></p></td>
+<td><p>Cloudflare Access application AUD tag (Tier 2 JWT).</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_MCP_ALLOWED_HOSTS</span></code></p></td>
+<td><p>Extra <code class="docutils literal notranslate"><span class="pre">Host</span></code> values past FastMCP’s DNS-rebinding guard (appended to loopback).</p></td>
+<td><p>—</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">THOTH_MCP_ALLOWED_ORIGINS</span></code></p></td>
+<td><p>Extra <code class="docutils literal notranslate"><span class="pre">Origin</span></code> values (with scheme) past the guard (appended to loopback).</p></td>
+<td><p>—</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 
 
@@ -531,20 +728,20 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="architecture-review.html"
+       href="../reference.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Architecture review notes</p>
+        <p class="prev-next-title">Reference</p>
       </div>
     </a>
     <a class="right-next"
-       href="decisions/0001-record-architecture-decisions.html"
+       href="../_api/thoth.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">1. Record architecture decisions</p>
+        <p class="prev-next-title"><code class="docutils literal notranslate"><span class="pre">thoth</span></code></p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -560,10 +757,28 @@
 
 
   <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#core-vault">Core / vault</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#anthropic-models">Anthropic + models</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#budgets-image-handling">Budgets + image handling</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack">Slack</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#web-research-semantic-index">Web research + semantic index</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#vault-git-sync">Vault git sync</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-http-transport">MCP HTTP transport</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/reference/configuration.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -578,7 +793,7 @@
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/explanations/decisions.md.txt">
+    <a href="../_sources/reference/configuration.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

@@ -54,7 +54,7 @@ $ uv run thoth --version
 | Command | What it does |
 | --- | --- |
 | `thoth slack` | Run the capture/retrieve daemon (Socket Mode); the appliance's only long-running process. |
-| `thoth mcp` | Serve the `pkm_*` tools over MCP (stdio) for Claude Desktop / MCP clients. |
+| `thoth mcp --transport http` | Serve the `pkm_*` tools over the bearer-authenticated MCP HTTP socket for Claude Code / claude.ai (see {doc}`../how-to/mcp-server-setup`). |
 | `thoth reindex [--full-rebuild]` | (Re)build the Hindsight semantic index from the vault. |
 | `thoth summary daily\|weekly` | Compose and post the digest to the Slack summary channel. |
 

@@ -87,15 +87,13 @@ Expected: a threaded reply within a few seconds. A `ConfigError` for `SLACK_BOT_
 means the app token lacks Socket Mode, the bot was not invited to the channel, or
 `SLACK_CAPTURE_CHANNEL` is not the channel you posted in. Stop with `Ctrl-C` once it works.
 
-## 4. MCP -- the pkm_* tools list and one executes over stdio
+## 4. MCP -- the pkm_* tools list and one executes over the HTTP socket
 
-The MCP server speaks JSON-RPC over stdio. List tools, then call one.
-
-```console
-$ thoth mcp
-```
-
-With an MCP client (Claude Desktop, or `mcp` dev tooling) pointed at that stdio command:
+The MCP server is the bearer-authenticated HTTP socket from
+{doc}`mcp-server-setup` (`thoth-mcp.service`, `127.0.0.1:8765`). With the unit
+running and a `THOTH_MCP_API_KEYS` bearer set, point a connected client (Claude
+Code via `claude mcp add --transport http …`, or claude.ai through the tunnel)
+at it:
 
 ```text
 - [ ] tools/list returns the seven pkm_* tools (pkm_search, pkm_ask, pkm_ingest,

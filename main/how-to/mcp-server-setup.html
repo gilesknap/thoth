@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architectural Decision Records &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
+    <title>Set up the MCP server &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=30646c52"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'how-to/mcp-server-setup';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="1. Record architecture decisions" href="decisions/0001-record-architecture-decisions.html" />
-    <link rel="prev" title="Architecture review notes" href="architecture-review.html" />
+    <link rel="next" title="Recover from a lost VPS" href="recovery.html" />
+    <link rel="prev" title="Import existing files and folders (thoth capture)" href="import-existing-files.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -160,14 +160,14 @@
 </li>
 
 
-<li class="nav-item ">
+<li class="nav-item current active">
   <a class="nav-link nav-internal" href="../how-to.html">
     How-to Guides
   </a>
 </li>
 
 
-<li class="nav-item current active">
+<li class="nav-item ">
   <a class="nav-link nav-internal" href="../explanations.html">
     Explanations
   </a>
@@ -313,14 +313,14 @@
 </li>
 
 
-<li class="nav-item ">
+<li class="nav-item current active">
   <a class="nav-link nav-internal" href="../how-to.html">
     How-to Guides
   </a>
 </li>
 
 
-<li class="nav-item current active">
+<li class="nav-item ">
   <a class="nav-link nav-internal" href="../explanations.html">
     Explanations
   </a>
@@ -421,23 +421,13 @@
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture overview</a></li>
-<li class="toctree-l1"><a class="reference internal" href="architecture-review.html">Architecture review notes</a></li>
-<li class="toctree-l1 current active has-children"><a class="current reference internal" href="#">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
-<li class="toctree-l2"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
-</ul>
-</details></li>
+<li class="toctree-l1"><a class="reference internal" href="contribute.html">Contribute to the project</a></li>
+<li class="toctree-l1"><a class="reference internal" href="deploy-appliance.html">Deploy the thoth appliance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="first-light.html">First-light smoke checklist</a></li>
+<li class="toctree-l1"><a class="reference internal" href="import-existing-files.html">Import existing files and folders (<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code>)</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Set up the MCP server</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">Recover from a lost VPS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="slack-setup.html">Set up the Slack app</a></li>
 </ul>
 </div>
 </nav></div>
@@ -479,9 +469,9 @@
       </a>
     </li>
     
-    <li class="breadcrumb-item"><a href="../explanations.html" class="nav-link">Explanations</a></li>
+    <li class="breadcrumb-item"><a href="../how-to.html" class="nav-link">How-to Guides</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Architectural Decision Records</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Set up the MCP server</span></li>
   </ul>
 </nav>
 </div>
@@ -498,26 +488,125 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="architectural-decision-records">
-<h1>Architectural Decision Records<a class="headerlink" href="#architectural-decision-records" title="Link to this heading">#</a></h1>
-<p>Architectural decisions are made throughout a project’s lifetime. As a way of keeping track of these decisions, we record these decisions in Architecture Decision Records (ADRs) listed below.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
-<li class="toctree-l1"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
-</ul>
+  <section id="set-up-the-mcp-server">
+<h1>Set up the MCP server<a class="headerlink" href="#set-up-the-mcp-server" title="Link to this heading">#</a></h1>
+<p>The MCP server is how Claude Code and claude.ai reach the vault’s seven <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code>
+tools. It runs as the <code class="docutils literal notranslate"><span class="pre">thoth-mcp.service</span></code> systemd unit — <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span> <span class="pre">--transport</span> <span class="pre">http</span></code>, serving bearer-authenticated streamable-HTTP bound to <strong>loopback</strong>
+(<code class="docutils literal notranslate"><span class="pre">127.0.0.1:8765</span></code>) — with a cloudflared tunnel exposing it to your remote
+clients. See <a class="reference internal" href="../explanations/decisions/0011-mcp-http-transport-and-tiered-auth.html"><span class="doc">11. MCP HTTP transport with tiered authentication</span></a>
+for the design.</p>
+<p>This guide assumes the appliance is already deployed (<a class="reference internal" href="deploy-appliance.html"><span class="doc">Deploy the thoth appliance</span></a>).
+All hostnames, teams, and tags below are <strong>placeholders</strong> — substitute your own
+and never commit the real values.</p>
+<section id="add-a-bearer-key">
+<h2>1. Add a bearer key<a class="headerlink" href="#add-a-bearer-key" title="Link to this heading">#</a></h2>
+<p>The server <strong>fails fast</strong> if no key is set — it never binds an unauthenticated
+socket. As <strong><code class="docutils literal notranslate"><span class="pre">pkm</span></code></strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># generate a key and append it; rotate later by adding a second comma-separated value</span>
+<span class="nv">KEY</span><span class="o">=</span><span class="k">$(</span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;import secrets; print(secrets.token_urlsafe(32))&#39;</span><span class="k">)</span>
+<span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;THOTH_MCP_API_KEYS=%s\n&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$KEY</span><span class="s2">&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>/home/pkm/.thoth/.env
+chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/home/pkm/.thoth/.env
+</pre></div>
 </div>
-<p>For more information on ADRs see this <a class="reference external" href="http://thinkrelevance.com/blog/2011/11/15/documenting-architecture-decisions">blog by Michael Nygard</a>.</p>
+</section>
+<section id="install-and-enable-the-unit">
+<h2>2. Install and enable the unit<a class="headerlink" href="#install-and-enable-the-unit" title="Link to this heading">#</a></h2>
+<p>As <strong>root</strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cp<span class="w"> </span>/opt/thoth/deploy/thoth-mcp.service<span class="w"> </span>/etc/systemd/system/
+systemctl<span class="w"> </span>daemon-reload
+systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>thoth-mcp.service
+systemctl<span class="w"> </span>status<span class="w"> </span>thoth-mcp.service<span class="w"> </span>--no-pager
+</pre></div>
+</div>
+<p>Like the other units it is pre-hardened and runs as <code class="docutils literal notranslate"><span class="pre">pkm</span></code>, reading secrets only
+from <code class="docutils literal notranslate"><span class="pre">/home/pkm/.thoth/.env</span></code>.</p>
+</section>
+<section id="connect-claude-code">
+<h2>3. Connect Claude Code<a class="headerlink" href="#connect-claude-code" title="Link to this heading">#</a></h2>
+<p>A remote Claude Code reaches it with that bearer:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># from your laptop, once the tunnel (section 4) is up — replace &lt;public-hostname&gt; and &lt;key&gt;</span>
+claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>--transport<span class="w"> </span>http<span class="w"> </span>thoth<span class="w"> </span>https://&lt;public-hostname&gt;/mcp<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--header<span class="w"> </span><span class="s2">&quot;Authorization: Bearer &lt;key&gt;&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="expose-it-with-cloudflared-cloudflare-access">
+<h2>4. Expose it with cloudflared + Cloudflare Access<a class="headerlink" href="#expose-it-with-cloudflared-cloudflare-access" title="Link to this heading">#</a></h2>
+<p>claude.ai’s web/mobile custom connectors authenticate a remote MCP server
+through an <strong>OAuth 2.1</strong> flow, not a pasted bearer — so to use the connector from
+claude.ai, front the loopback server with a <strong>cloudflared tunnel</strong> and
+<strong>Cloudflare Access “Managed OAuth”</strong> (Cloudflare is the OAuth authorization
+server; thoth ships only the env-gated JWT enforcement hook).</p>
+<ol class="arabic">
+<li><p><strong>Install cloudflared and create a tunnel</strong> (as root):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># install cloudflared per Cloudflare&#39;s apt/rpm instructions, then:</span>
+cloudflared<span class="w"> </span>tunnel<span class="w"> </span>login
+cloudflared<span class="w"> </span>tunnel<span class="w"> </span>create<span class="w"> </span>thoth-mcp
+cloudflared<span class="w"> </span>tunnel<span class="w"> </span>route<span class="w"> </span>dns<span class="w"> </span>thoth-mcp<span class="w"> </span>&lt;public-hostname&gt;<span class="w">   </span><span class="c1"># e.g. mcp.example.com</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Point the tunnel ingress at the loopback MCP server.</strong> In
+<code class="docutils literal notranslate"><span class="pre">/etc/cloudflared/config.yml</span></code> (placeholders):</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">tunnel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;tunnel-uuid&gt;</span>
+<span class="nt">credentials-file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/cloudflared/&lt;tunnel-uuid&gt;.json</span>
+
+<span class="nt">ingress</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;public-hostname&gt;</span><span class="w">          </span><span class="c1"># e.g. mcp.example.com</span>
+<span class="w">    </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://127.0.0.1:8765</span><span class="w">       </span><span class="c1"># matches thoth-mcp.service ExecStart</span>
+<span class="w">    </span><span class="nt">originRequest</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">httpHostHeader</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">localhost:8765</span><span class="w">     </span><span class="c1"># see the DNS-rebinding note below</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http_status:404</span>
+</pre></div>
+</div>
+<p>Run it as a service: <code class="docutils literal notranslate"><span class="pre">cloudflared</span> <span class="pre">service</span> <span class="pre">install</span> <span class="pre">&amp;&amp;</span> <span class="pre">systemctl</span> <span class="pre">enable</span> <span class="pre">--now</span> <span class="pre">cloudflared</span></code>.</p>
+<p><strong>DNS-rebinding / <code class="docutils literal notranslate"><span class="pre">Host</span></code> header (don’t skip this).</strong> FastMCP’s streamable-HTTP
+transport ships DNS-rebinding protection that, by default, only accepts a <strong>loopback</strong>
+<code class="docutils literal notranslate"><span class="pre">Host</span></code> header (<code class="docutils literal notranslate"><span class="pre">127.0.0.1:*</span></code> / <code class="docutils literal notranslate"><span class="pre">localhost:*</span></code>). The tunnel forwards your <em>public</em>
+hostname, so without intervention every real request gets a <code class="docutils literal notranslate"><span class="pre">421</span> <span class="pre">Misdirected</span> <span class="pre">Request</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">httpHostHeader:</span> <span class="pre">localhost:8765</span></code> line above rewrites the origin <code class="docutils literal notranslate"><span class="pre">Host</span></code> back to the
+allowed loopback value — the simplest fix, and it keeps the guard meaningful.
+<em>Alternatively</em> (or if a client also sends an <code class="docutils literal notranslate"><span class="pre">Origin</span></code> the guard rejects), allow the
+public names explicitly in <code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code> — these <strong>append to</strong>, never replace, the
+loopback defaults:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># as pkm — only if you are NOT using httpHostHeader above</span>
+<span class="nv">THOTH_MCP_ALLOWED_HOSTS</span><span class="o">=</span>&lt;public-hostname&gt;
+<span class="nv">THOTH_MCP_ALLOWED_ORIGINS</span><span class="o">=</span>https://&lt;public-hostname&gt;
+</pre></div>
+</div>
+<p>During the live verify, watch <code class="docutils literal notranslate"><span class="pre">journalctl</span> <span class="pre">-u</span> <span class="pre">thoth-mcp</span></code> for <code class="docutils literal notranslate"><span class="pre">421</span></code> and adjust whichever
+knob your setup needs.</p>
+</li>
+<li><p><strong>Create a Cloudflare Access application</strong> for <code class="docutils literal notranslate"><span class="pre">&lt;public-hostname&gt;</span></code> (self-hosted),
+enable <strong>Managed OAuth</strong> in its Advanced settings, allow <strong>localhost / loopback
+clients</strong> with redirect <code class="docutils literal notranslate"><span class="pre">http://localhost/*</span></code> (claude.ai uses an ephemeral callback
+port), and add an Access policy permitting your identity (e.g. one-time-PIN to your
+email). Add a <strong>cache rule</strong> to bypass cache for <code class="docutils literal notranslate"><span class="pre">/.well-known/*</span></code> and ensure the
+“Block AI training bots” rule does <strong>not</strong> cover this app, or OAuth discovery is blocked.</p></li>
+<li><p><strong>Turn on origin-side JWT enforcement (Tier 2, defense-in-depth).</strong> Copy the Access
+application’s <strong>Audience (AUD) tag</strong> and your <strong>team domain</strong>, and add to
+<code class="docutils literal notranslate"><span class="pre">~/.thoth/.env</span></code> (placeholders), then restart the unit:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># as pkm — placeholders only, real values from the Cloudflare dashboard</span>
+cat<span class="w"> </span>&gt;&gt;<span class="w"> </span>/home/pkm/.thoth/.env<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<span class="s">THOTH_MCP_CF_ACCESS_TEAM_DOMAIN=&lt;your-team&gt;.cloudflareaccess.com</span>
+<span class="s">THOTH_MCP_CF_ACCESS_AUD=&lt;your-access-application-aud-tag&gt;</span>
+<span class="s">EOF</span>
+chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/home/pkm/.thoth/.env
+sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>thoth-mcp.service
+</pre></div>
+</div>
+<p>With both set, thoth additionally validates the <code class="docutils literal notranslate"><span class="pre">Cf-Access-Jwt-Assertion</span></code> header
+(signature against <code class="docutils literal notranslate"><span class="pre">https://&lt;your-team&gt;.cloudflareaccess.com/cdn-cgi/access/certs</span></code>,
+<code class="docutils literal notranslate"><span class="pre">aud</span></code>, <code class="docutils literal notranslate"><span class="pre">exp</span></code>, RS256-pinned) on every request. Leave them unset to run bearer-only.</p>
+</li>
+<li><p><strong>Add the connector in claude.ai</strong> → Settings → Connectors → <em>Add custom connector</em> →
+MCP server URL <code class="docutils literal notranslate"><span class="pre">https://&lt;public-hostname&gt;/mcp</span></code>, and complete the Access login when
+prompted. Verify discovery first with
+<code class="docutils literal notranslate"><span class="pre">curl</span> <span class="pre">-s</span> <span class="pre">https://&lt;public-hostname&gt;/.well-known/oauth-authorization-server</span></code>.</p></li>
+</ol>
+<p>The env vars added above are also listed (with placeholders) in <code class="docutils literal notranslate"><span class="pre">deploy/.env.example</span></code>
+and in <a class="reference internal" href="../reference/configuration.html"><span class="doc">Configuration reference</span></a>.</p>
+</section>
 </section>
 
 
@@ -531,20 +620,20 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="architecture-review.html"
+       href="import-existing-files.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Architecture review notes</p>
+        <p class="prev-next-title">Import existing files and folders (<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code>)</p>
       </div>
     </a>
     <a class="right-next"
-       href="decisions/0001-record-architecture-decisions.html"
+       href="recovery.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">1. Record architecture decisions</p>
+        <p class="prev-next-title">Recover from a lost VPS</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -560,10 +649,25 @@
 
 
   <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#add-a-bearer-key">1. Add a bearer key</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-and-enable-the-unit">2. Install and enable the unit</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#connect-claude-code">3. Connect Claude Code</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#expose-it-with-cloudflared-cloudflare-access">4. Expose it with cloudflared + Cloudflare Access</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/how-to/mcp-server-setup.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -578,7 +682,7 @@
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/explanations/decisions.md.txt">
+    <a href="../_sources/how-to/mcp-server-setup.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

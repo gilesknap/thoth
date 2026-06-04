@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architecture overview &#8212; thoth 0.6.1.dev4+g99bede5bb documentation</title>
+    <title>Architecture overview &#8212; thoth 0.6.1.dev6+g623ba720c documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=a8a832b4"></script>
+    <script src="../_static/documentation_options.js?v=1873bd77"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -871,6 +871,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
 </ul>
 </details></li>
 </ul>
@@ -990,17 +991,56 @@ reconstructing layout into valid Excalidraw JSON needs spatial reasoning), and a
 document gets a faithful structured-markdown transcription in its body. The
 original is always kept and a derivation failure never defers the capture
 (ADR-0009). See <a class="reference internal" href="#models"><span class="std std-ref">Models</span></a> for the per-call model strategy.</p>
+<section id="what-you-can-capture">
+<h3>What you can capture<a class="headerlink" href="#what-you-can-capture" title="Link to this heading">#</a></h3>
+<p>A single Slack message (or <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span> <span class="pre">&lt;path&gt;</span></code>) accepts any of:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Input</p></th>
+<th class="head"><p>Handling</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Text</strong></p></td>
+<td><p>Filed as a note; the intent gate routes bare free-text to capture / query / ask.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>URL</strong></p></td>
+<td><p>Fetched server-side and extracted to clean Markdown (Exa search + Firecrawl), SSRF-guarded.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Image</strong> (PNG/JPG/…)</p></td>
+<td><p>One vision call: OCR text, routing hint, entities, and an image <em>kind</em>. Images over 2 MB are downscaled first (<a class="reference internal" href="../reference/configuration.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">THOTH_IMAGE_RESIZE_THRESHOLD_BYTES</span></code></span></a>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>PDF</strong></p></td>
+<td><p>Vision analysis → text + a structured-Markdown transcription in the page body.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Audio / voice</strong></p></td>
+<td><p>Transcribed locally via the Whisper CLI, then filed as text (the title comes from the speech).</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Hand-drawn diagram</strong></p></td>
+<td><p>Reconstructed into an editable <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> scene alongside the original (ADR-0009).</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Multi-image batch</strong></p></td>
+<td><p>All images in one message → one curated page, shared summary/tags, every image embedded (capped per call by <a class="reference internal" href="../reference/configuration.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">THOTH_MAX_ANALYSE_IMAGES</span></code></span></a>).</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 <section id="mcp-query-research-pipeline">
 <h2>MCP query/research pipeline<a class="headerlink" href="#mcp-query-research-pipeline" title="Link to this heading">#</a></h2>
 <p>Claude Code and claude.ai reach the vault through seven <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tools served
-over FastMCP (stdio). The same path-confinement and schema-validation rules
-apply here as in ingest — the MCP surface cannot escape the vault either.</p>
+over a bearer-authenticated FastMCP HTTP socket (<code class="docutils literal notranslate"><span class="pre">thoth-mcp.service</span></code>, loopback
+<code class="docutils literal notranslate"><span class="pre">127.0.0.1:8765</span></code>, fronted by a cloudflared tunnel — see
+<a class="reference internal" href="../how-to/mcp-server-setup.html"><span class="doc">Set up the MCP server</span></a> and ADR
+<a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html"><span class="doc">11. MCP HTTP transport with tiered authentication</span></a>). The same
+path-confinement and schema-validation rules apply here as in ingest — the MCP
+surface cannot escape the vault either.</p>
 <pre  class="mermaid">
         flowchart TB
     cc([&quot;Claude Code&lt;br&gt;or claude.ai&quot;])
     cc --&gt; mcp[&quot;mcp_server.py&lt;br&gt;FastMCP · 7 pkm_* tools&quot;]
-    mcp --&gt; qry[&quot;query.py&lt;br&gt;vault-only retrieval&lt;br&gt;cost-ordered search&quot;]
+    mcp --&gt; qry[&quot;query.py&lt;br&gt;vault-only retrieval&lt;br&gt;grep ∪ recall · RRF blend&quot;]
     mcp --&gt; res[&quot;research.py&lt;br&gt;blended web+vault Q&amp;A&quot;]
     qry --&gt; va[&quot;vault.py&lt;br&gt;read-only&quot;]
     qry --&gt; hs[&quot;hindsight.py&lt;br&gt;Hindsight CLI recall&quot;]
@@ -1008,14 +1048,23 @@ apply here as in ingest — the MCP surface cannot escape the vault either.</p>
     res --&gt; ext[&quot;extract.py&lt;br&gt;Exa · Firecrawl&lt;br&gt;web search · extract&quot;]
     va --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
     hs -.-&gt; ov
-    </pre><p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> uses a cost-ordered search strategy: grep → wikilink traversal →
-Hindsight semantic recall — cheapest first, LLM only as a last resort. grep
-scans the whole file including frontmatter, so a reference page’s one-line
-<code class="docutils literal notranslate"><span class="pre">summary:</span></code> gloss is matched there; <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a static set of Bases
-dashboards that retrieval never reads. <code class="docutils literal notranslate"><span class="pre">research.py</span></code> (the <code class="docutils literal notranslate"><span class="pre">pkm_ask</span></code> tool) runs Claude Sonnet with
-read-only vault tools and optional live web calls; the model decides when to
-reach for the web and can offer to save the composed answer back to the vault
-as a <code class="docutils literal notranslate"><span class="pre">notes/</span></code> page.</p>
+    </pre><p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> blends <strong>two retrieval sources</strong> and fuses them with <strong>Reciprocal
+Rank Fusion</strong> (RRF, <code class="docutils literal notranslate"><span class="pre">K=60</span></code>): a <em>structural</em> pass (grep + wikilink traversal) and
+a <em>semantic</em> pass (Hindsight recall). The semantic pass <strong>always gets a vote</strong>
+when enabled — there is no “only when results look thin” gate — and runs
+<strong>concurrently</strong> in a worker thread so its latency overlaps grep rather than
+serialising after it. Each unique page scores <code class="docutils literal notranslate"><span class="pre">Σ</span> <span class="pre">1/(60+rank)</span></code> across the sources
+that surfaced it; the top <code class="docutils literal notranslate"><span class="pre">max_pages</span></code> are cited, each tagged with its
+<em>provenance</em> (which method — grep / wikilink / recall — found it). A Hindsight
+failure degrades gracefully to structural-only. grep scans the whole file
+including frontmatter, so a page’s one-line <code class="docutils literal notranslate"><span class="pre">summary:</span></code> gloss is matched there,
+and a caller can pass <code class="docutils literal notranslate"><span class="pre">search_keywords</span></code> to seed the whole-word grep with
+de-pluralised/synonym terms; <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a static set of Bases dashboards that
+retrieval never reads. See ADR
+<a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html"><span class="doc">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</span></a>. <code class="docutils literal notranslate"><span class="pre">research.py</span></code> (the
+<code class="docutils literal notranslate"><span class="pre">pkm_ask</span></code> tool) runs Claude Sonnet with read-only vault tools and optional live
+web calls; the model decides when to reach for the web and can offer to save the
+composed answer back to the vault as a <code class="docutils literal notranslate"><span class="pre">notes/</span></code> page.</p>
 </section>
 <section id="models">
 <span id="id1"></span><h2>Models<a class="headerlink" href="#models" title="Link to this heading">#</a></h2>
@@ -1168,7 +1217,10 @@ that 404 fall back to a proven dated id (<code class="docutils literal notransla
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-ingest-pipeline">Slack ingest pipeline</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-ingest-pipeline">Slack ingest pipeline</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-you-can-capture">What you can capture</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-query-research-pipeline">MCP query/research pipeline</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#models">Models</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-stack">The stack</a></li>
