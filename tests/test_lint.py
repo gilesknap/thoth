@@ -213,10 +213,10 @@ def _knowledge(
 
 
 def test_module_imports_no_client_sdk() -> None:
-    """Importing thoth.lint pulls in no Slack/anthropic/mcp/exa/firecrawl SDK."""
+    """Importing thoth.lint pulls in no Slack/anthropic/mcp/firecrawl SDK."""
     import thoth.lint  # noqa: F401
 
-    banned = {"slack_bolt", "slack_sdk", "anthropic", "mcp", "exa_py", "firecrawl"}
+    banned = {"slack_bolt", "slack_sdk", "anthropic", "mcp", "firecrawl"}
     assert banned.isdisjoint(sys.modules)
 
 

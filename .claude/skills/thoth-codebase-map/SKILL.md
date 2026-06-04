@@ -42,8 +42,8 @@ Most filenames say what they are (`slack_app.py`, `query.py`, `summary.py`,
 map, so this skill deliberately does **not** restate it (a hand-kept file list
 just drifts). Only the non-obvious ones, where the name doesn't reveal the role:
 
-- `extract.py` vs `analyse.py` — `extract.py` *fetches* external content (Exa
-  search, Firecrawl page→Markdown, Whisper transcription); `analyse.py` does
+- `extract.py` vs `analyse.py` — `extract.py` *fetches* external content
+  (Firecrawl page→Markdown, Whisper transcription); `analyse.py` does
   vision / OCR / PDF analysis. Easy to reach for the wrong one.
 - `llm.py` — the **single Anthropic seam** (`LLM.complete`); also owns the
   classify/curate prompts and the curate file-plan JSON schema + validation.
@@ -85,8 +85,8 @@ index is a rebuildable projection; recall is the last/most-expensive query pass.
 
 ### The two retrieval modalities are complementary, not redundant
 
-`QueryEngine.answer` (behind `pkm_search`, and reused by `ResearchEngine.ask`
-for `pkm_ask`) runs cost-ordered passes with a short-circuit: **grep** over the
+`QueryEngine.answer` (behind `pkm_search`) runs cost-ordered passes with a
+short-circuit: **grep** over the
 curated folders → **wikilink** graph-follow → **semantic recall** via Hindsight,
 where recall fires **only when the cheap passes returned fewer than `max_pages`
 candidates** (the #107 "thin top-up" — grep hits always lead the rank; recall

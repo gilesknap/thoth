@@ -3,7 +3,7 @@
 CI mocks every external boundary (SPEC section 12), so these seams are unverified until
 the appliance first runs against the real services on the VPS. This module is the
 executable companion to ``docs/how-to/first-light.md``: one happy-path test per boundary
-(Anthropic, Hindsight, Slack, MCP, Exa, Firecrawl, the cron entrypoints), each driving
+(Anthropic, Hindsight, Slack, MCP, Firecrawl, the cron entrypoints), each driving
 the *real* ``thoth`` code path against the *real* service.
 
 It is **opt-in and skipped offline**. The whole module is guarded by a module-level
@@ -14,7 +14,7 @@ registered ``live`` marker (declared in ``pyproject.toml`` so no
     THOTH_LIVE_SMOKE=1 uv run pytest -m live
 
 Import safety (the pytest-collection trap): the heavy/absent runtime clients
-(``anthropic`` / ``slack_bolt`` / ``mcp`` / ``exa_py`` / ``firecrawl``, and the
+(``anthropic`` / ``slack_bolt`` / ``mcp`` / ``firecrawl``, and the
 ``hindsight`` CLI) are **never** imported at this module's top level. Each is pulled in
 **lazily inside its test function** -- either directly or (the common case) by the
 ``thoth`` entry point the test calls, which already imports its client lazily. So this
@@ -317,7 +317,7 @@ def test_live_slack_app_builds_and_auth_succeeds(live_config: Config) -> None:
 
 
 def test_live_mcp_server_lists_pkm_tools(live_config: Config, tmp_path: Path) -> None:
-    """``build_server`` registers exactly the seven ``pkm_*`` tools on a real FastMCP.
+    """``build_server`` registers exactly the five ``pkm_*`` tools on a real FastMCP.
 
     Imports ``mcp`` lazily (inside :func:`thoth.mcp_server.build_server`) and builds the
     real FastMCP server over a real (throwaway ``tmp_path``) vault, asserting the
@@ -341,26 +341,7 @@ def test_live_mcp_server_lists_pkm_tools(live_config: Config, tmp_path: Path) ->
 
 
 # --------------------------------------------------------------------------------------
-# 5. Exa -- one real semantic search returns at least one hit
-# --------------------------------------------------------------------------------------
-
-
-def test_live_exa_search_returns_hits(live_config: Config) -> None:
-    """A single real Exa search returns at least one :class:`~thoth.extract.WebHit`.
-
-    Imports ``exa_py`` lazily (inside :attr:`thoth.extract.Extractor.exa`) and runs one
-    stable query. A failure mentioning a missing key means ``EXA_API_KEY`` is unset.
-    """
-    from thoth.extract import Extractor
-
-    extractor = Extractor(live_config)
-    hits = extractor.web_search("python programming language", num_results=3)
-    assert hits, "Exa search returned no hits"
-    assert hits[0].url, "Exa hit carried no URL"
-
-
-# --------------------------------------------------------------------------------------
-# 6. Firecrawl -- one real extract returns non-empty markdown
+# 5. Firecrawl -- one real extract returns non-empty markdown
 # --------------------------------------------------------------------------------------
 
 
@@ -380,7 +361,7 @@ def test_live_firecrawl_extract_returns_markdown(live_config: Config) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 7. Cron entrypoints -- an incremental reindex runs and records its marker
+# 6. Cron entrypoints -- an incremental reindex runs and records its marker
 # --------------------------------------------------------------------------------------
 
 
@@ -410,7 +391,7 @@ def test_live_reindex_incremental_runs(live_config: Config) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 8. Budget guard -- a real Anthropic call is charged, the next is blocked (issue #16)
+# 7. Budget guard -- a real Anthropic call is charged, the next is blocked (issue #16)
 # --------------------------------------------------------------------------------------
 
 
@@ -538,14 +519,13 @@ def _real_tool_context(config: Config) -> ToolContext:
     """Build a :class:`ToolContext` whose collaborators are unused by ``build_server``.
 
     ``build_server`` only registers tool callables; it does not invoke them, so the
-    ingestor/query/research seams need not be real for the tools/list smoke. The vault
-    is the real one over the seeded tmp vault.
+    ingestor/query seams need not be real for the tools/list smoke. The vault is the
+    real one over the seeded tmp vault.
     """
     from thoth.git_sync import GitSync
     from thoth.ingest import Ingestor
     from thoth.mcp_server import ToolContext
     from thoth.query import QueryEngine
-    from thoth.research import ResearchEngine
     from thoth.vault import Vault
 
     return ToolContext(
@@ -553,7 +533,6 @@ def _real_tool_context(config: Config) -> ToolContext:
         vault=Vault(config),
         ingestor=cast(Ingestor, _unused("ingestor")),
         query_engine=cast(QueryEngine, _unused("query_engine")),
-        research=cast(ResearchEngine, _unused("research")),
         git=cast(GitSync, _unused("git")),
     )
 

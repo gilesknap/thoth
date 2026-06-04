@@ -170,16 +170,13 @@ def test_run_init_builds_vault_and_seeds(
 def test_run_slack_builds_graph_and_calls_slack_run(
     monkeypatch: pytest.MonkeyPatch, stub_config: Config
 ) -> None:
-    """``thoth slack`` builds the graph and hands research to slack_app.run."""
+    """``thoth slack`` builds the graph and hands the collaborators to slack_app.run."""
     captured: dict[str, Any] = {}
 
-    sentinel = object()
     monkeypatch.setattr(
         __main__,
         "_build_graph",
-        lambda cfg: __main__._Graph(
-            ingestor="ING", query_engine="QRY", research=sentinel
-        ),
+        lambda cfg: __main__._Graph(ingestor="ING", query_engine="QRY"),
     )
 
     import thoth.slack_app as slack_app
@@ -195,7 +192,6 @@ def test_run_slack_builds_graph_and_calls_slack_run(
     cfg, ingestor, query_engine, kw = captured["args"]
     assert ingestor == "ING"
     assert query_engine == "QRY"
-    assert kw["research"] is sentinel
 
 
 def test_build_graph_wires_schema_md_into_ingestor(tmp_path: Path) -> None:
@@ -1060,7 +1056,7 @@ def _wire_capture_fakes(
         __main__,
         "_build_graph",
         lambda cfg, *, guard=None: __main__._Graph(
-            ingestor=ingestor, query_engine=None, research=None
+            ingestor=ingestor, query_engine=None
         ),
     )
     monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: git)
@@ -1390,7 +1386,7 @@ def test_run_capture_drain_honours_budget_zero(
         __main__,
         "_build_graph",
         lambda cfg, *, guard=None: __main__._Graph(
-            ingestor=_RecordingIngestor(), query_engine=None, research=None
+            ingestor=_RecordingIngestor(), query_engine=None
         ),
     )
 
@@ -1421,7 +1417,7 @@ def test_run_capture_budget_override_reaches_guard(
         __main__,
         "_build_graph",
         lambda cfg, *, guard=None: __main__._Graph(
-            ingestor=_RecordingIngestor(), query_engine=None, research=None
+            ingestor=_RecordingIngestor(), query_engine=None
         ),
     )
     config = load_config({"PKM_VAULT": str(tmp_path / "vault")})

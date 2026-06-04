@@ -2,25 +2,25 @@
 
 The Slack surface (:mod:`thoth.slack_app`) routes a message with a deterministic
 ``if/elif`` ladder -- a pending-save affirmative, a ``capture:``/``note:``/``save:``
-prefix, a bare URL, a shared file -- and historically defaulted *everything else* to the
-blended ask. That made plain prose like "remind me to call the dentist tomorrow" get
-*answered* instead of *filed*; to capture a free thought you had to prefix it.
+prefix, a bare URL, a shared file -- and historically defaulted *everything else* to a
+query. That made plain prose like "remind me to call the dentist tomorrow" get
+*searched* instead of *filed*; to capture a free thought you had to prefix it.
 
 This module adds the one missing decision: for a message that hits **none** of those
 deterministic short-circuits, ask a cheap model which engine the user meant. The gate
-only *chooses* an engine -- it never blends them and never hands the read-only ask path
-write access (least-privilege, SPEC sections 3 and 12). The deterministic prefixes stay
-as the explicit escape hatch when the model guesses wrong.
+only *chooses* an engine -- it never blends them and never hands the read-only query
+path write access (least-privilege, SPEC sections 3 and 12). The deterministic
+prefixes stay as the explicit escape hatch when the model guesses wrong.
 
 Design constraints:
 
-* **Slack-only.** MCP already exposes explicit tools (``pkm_ingest`` / ``pkm_ask`` /
+* **Slack-only.** MCP already exposes explicit tools (``pkm_ingest`` / ``pkm_search`` /
   ``pkm_todos`` ...), so the calling agent does its own dispatch; no gate is needed
   there.
 * **Total / fail-safe.** :meth:`IntentClassifier.classify` never raises: any model,
-  network, or parse failure returns the safe default (route to ask). Silently filing a
+  network, or parse failure returns the safe default (route to query). Silently filing a
   real question as a note is the annoying failure mode; *answering* a misfiled note is
-  harmless, so the gate defaults to ask whenever it is unsure -- including on a
+  harmless, so the gate defaults to query whenever it is unsure -- including on a
   low-confidence verdict (see :attr:`IntentDecision.route`).
 * **Cheap.** One small model call (a Haiku, :data:`DEFAULT_INTENT_MODEL`) per bare
   free-text message only -- prefixed / URL / file messages skip the gate entirely. The
@@ -53,8 +53,8 @@ DEFAULT_INTENT_MODEL: str = "claude-haiku-4-5-20251001"
 _MAX_TOKENS: int = 64
 """The classifier emits a tiny JSON object; cap generation hard to stay cheap/fast."""
 
-# The three engines the gate can route a bare free-text message to.
-_VALID_INTENTS: frozenset[str] = frozenset({"capture", "ask", "query"})
+# The two engines the gate can route a bare free-text message to.
+_VALID_INTENTS: frozenset[str] = frozenset({"capture", "query"})
 _VALID_CONFIDENCES: frozenset[str] = frozenset({"high", "medium", "low"})
 
 INTENT_INSTRUCTIONS: str = """# Slack intent gate
@@ -62,7 +62,7 @@ INTENT_INSTRUCTIONS: str = """# Slack intent gate
 Classify the user's Slack message into exactly ONE routing intent for their personal
 knowledge-management assistant, then return ONLY a JSON object (no prose, no fence):
 
-{"intent": "capture" | "ask" | "query", "confidence": "high" | "medium" | "low",
+{"intent": "capture" | "query", "confidence": "high" | "medium" | "low",
  "keywords": ["dog", "Labradoodle", "pet"]}
 
 - "capture": the user is recording something to FILE for later -- a note, idea, fact
@@ -70,12 +70,10 @@ knowledge-management assistant, then return ONLY a JSON object (no prose, no fen
   "note that ...", "I need to ...", and bare declarative statements ("the wifi password
   is hunter2", "Jane's birthday is in March") are captures.
 - "query": the user is asking to RETRIEVE something from their OWN vault/notes
-  ("what are my open todos?", "what did I save about exa?", "show my notes on raft").
-- "ask": the user is asking a question that may need outside/world knowledge or
-  research ("what's the difference between raft and paxos?", "who won the 2022 final?").
+  ("what are my open todos?", "what did I save about raft?", "show my notes on raft").
 
-When the message is ambiguous between asking and filing, prefer "ask" and lower the
-confidence -- answering a misfiled note is harmless, but silently filing a real
+When the message is ambiguous between asking and filing, prefer "query" and lower the
+confidence -- searching a misfiled note is harmless, but silently filing a real
 question is not. Set "confidence" to how sure you are of the chosen intent.
 
 "keywords" seed a lexical search of the user's vault, so give the most useful search
@@ -92,12 +90,12 @@ carries no searchable terms (e.g. a pure reminder).
 class IntentDecision:
     """A routing verdict for one bare free-text Slack message.
 
-    ``intent`` is the model's best guess (one of ``capture`` / ``ask`` / ``query``) and
+    ``intent`` is the model's best guess (one of ``capture`` / ``query``) and
     ``confidence`` is ``high`` / ``medium`` / ``low``. Callers route on :attr:`route`,
-    not :attr:`intent` directly, so the low-confidence-to-ask safety rule is applied in
-    one place. ``keywords`` are the de-pluralised, stop-word-stripped, synonym-expanded
-    search terms the gate extracted from the message (issue #102); they seed the lexical
-    grep on the query/ask read paths and are empty when the model gave none.
+    not :attr:`intent` directly, so the low-confidence-to-query safety rule is applied
+    in one place. ``keywords`` are the de-pluralised, stop-word-stripped,
+    synonym-expanded search terms the gate extracted from the message (issue #102); they
+    seed the lexical grep on the query read path and are empty when the model gave none.
     """
 
     intent: str
@@ -106,19 +104,20 @@ class IntentDecision:
 
     @property
     def route(self) -> str:
-        """The engine to route to, collapsing a low-confidence verdict to ``ask``.
+        """The engine to route to, collapsing a low-confidence verdict to ``query``.
 
-        Answering a misfiled note is harmless; silently filing a real question as a
+        Searching a misfiled note is harmless; silently filing a real question as a
         note is the annoying failure (issue #5), so a ``low`` confidence -- whatever the
-        guessed intent -- routes to the safe blended ask.
+        guessed intent -- routes to the safe query.
         """
         if self.confidence == "low":
-            return "ask"
+            return "query"
         return self.intent
 
 
-# The safe verdict returned whenever the gate cannot get a usable answer: route to ask.
-_DEFAULT_DECISION: IntentDecision = IntentDecision(intent="ask", confidence="low")
+# The safe verdict returned whenever the gate cannot get a usable answer: route to query
+# (least-privilege default).
+_DEFAULT_DECISION: IntentDecision = IntentDecision(intent="query", confidence="low")
 
 
 @dataclass
@@ -136,12 +135,12 @@ class IntentClassifier:
     model: str = DEFAULT_INTENT_MODEL
 
     def classify(self, text: str) -> IntentDecision:
-        """Return the routing verdict for ``text`` -- never raises (fail-safe to ask).
+        """Return the routing verdict for ``text`` -- never raises (fail-safe to query).
 
         Sends ``text`` as a single user turn under :data:`INTENT_INSTRUCTIONS` and
         parses the model's JSON. Any failure -- a model/network error, missing or
         invalid JSON, or an out-of-range ``intent`` -- returns the safe
-        :data:`_DEFAULT_DECISION` (route to ask) rather than propagating, because the
+        :data:`_DEFAULT_DECISION` (route to query) rather than propagating, because the
         gate is a routing optimisation and the user's message must still be served.
 
         Args:
@@ -158,7 +157,7 @@ class IntentClassifier:
                 model=self.model,
             )
             obj = parse_json_block(extract_text(response))
-        except Exception:  # noqa: BLE001 - the gate is total; fail safe to ask
+        except Exception:  # noqa: BLE001 - the gate is total; fail safe to query
             decision = _DEFAULT_DECISION
         else:
             decision = _decision_from(obj)
@@ -176,9 +175,9 @@ class IntentClassifier:
 def _decision_from(obj: dict[str, object]) -> IntentDecision:
     """Build an :class:`IntentDecision` from a parsed object, defaulting on bad shapes.
 
-    An ``intent`` outside the three known engines is untrustworthy, so the whole verdict
+    An ``intent`` outside the two known engines is untrustworthy, so the whole verdict
     falls back to the safe default. A missing or unknown ``confidence`` is treated as
-    ``low`` (which also routes to ask) rather than rejected, so a model that names a
+    ``low`` (which also routes to query) rather than rejected, so a model that names a
     valid intent but botches the confidence still routes conservatively. ``keywords`` is
     parsed leniently (issue #102): a missing, non-list, or garbled value degrades to an
     empty tuple rather than rejecting the verdict, because the keywords only *seed* the

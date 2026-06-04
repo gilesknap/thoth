@@ -3,22 +3,19 @@
 This module is the appliance's primary capture/retrieve surface (SPEC sections 6, 7
 and 10). It wires a Slack `Bolt <https://slack.dev/bolt-python>`_ Socket-Mode app to
 collaborators that are constructed elsewhere and injected here: an
-:class:`~thoth.ingest.Ingestor` (capture), a :class:`~thoth.query.QueryEngine` (fast
-vault-only retrieve), and -- when wired -- a :class:`~thoth.research.ResearchEngine`
-(the blended web+vault Q&A that backs the default free-text path, SPEC section 7.1). The
+:class:`~thoth.ingest.Ingestor` (capture) and a :class:`~thoth.query.QueryEngine` (fast
+vault-only retrieve, which backs the free-text query path). The
 daemon listens in **one dedicated private channel** (``SLACK_CAPTURE_CHANNEL``, you plus
 the bot) and ignores every other conversation (issue #61): each top-level message starts
-a new capture/ask handled **in its own thread** (the bot replies under the originating
+a new capture/query handled **in its own thread** (the bot replies under the originating
 message's ``ts``), and a reply *inside* that thread continues it -- so per-conversation
 state is keyed by **thread**, not channel, and two interleaved topics never clobber each
-other's pending save. A file upload arrives as a ``message`` with subtype ``file_share``
+other. A file upload arrives as a ``message`` with subtype ``file_share``
 carrying the full file objects. The daemon gates each message through an allow-list and
 a transient redelivery dedupe, routes a bare URL / uploaded file to an ingest and sends
 **bare free text** through a lightweight intent gate
-(:class:`~thoth.intent.IntentClassifier`, issue #5) that picks capture / vault-query /
-blended ask -- falling back to the pre-gate default (blended ask, or vault-only query
-when no research engine is injected) when no classifier is wired. It offers to save a
-blended answer as a ``notes/`` page on a follow-up "y" *in the thread*, and replies in
+(:class:`~thoth.intent.IntentClassifier`, issue #5) that picks capture / vault-query --
+falling back to the safe vault-only query when no classifier is wired. It replies in
 Slack ``mrkdwn``. A slow request shows an immediate placeholder
 (":hourglass_flowing_sand: Filing…" / ":mag: Looking…") that is edited in place with the
 final render via ``chat.update`` (issue #34, Slice B) so a multi-second capture is not a
@@ -74,21 +71,12 @@ from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.intent import IntentClassifier, IntentDecision
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
 from thoth.render import render_vault_ref
-from thoth.research import (
-    AskResult,
-    ResearchEngine,
-    ResearchError,
-    force_web_requested,
-)
 from thoth.state import EventStore
 
 logger = logging.getLogger(__name__)
 
 DEDUPE_TTL_SECONDS: float = 3600.0
 """Prune processed-event ids older than one hour (SPEC section 10)."""
-
-PENDING_SAVE_TTL_SECONDS: float = 1800.0
-"""How long an unanswered save offer stays live (~30 min, SPEC section 10)."""
 
 # A free-text message whose body, once stripped, begins with one of these prefixes is
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
@@ -100,26 +88,15 @@ _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
 # :meth:`Handlers._is_image_file`.
 _IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 
-# Affirmative replies that confirm a pending "save this answer to the vault?" offer.
-_CONFIRM_WORDS: frozenset[str] = frozenset(
-    {"y", "yes", "save", "save it", "ok", "okay"}
+# The safe routing verdict used when the gate is bypassed (no classifier wired): route
+# to the vault-only query with no keywords, so the read path greps the raw text -- the
+# safe fallback (issue #5 / #102).
+_QUERY_FALLBACK_DECISION: IntentDecision = IntentDecision(
+    intent="query", confidence="high"
 )
-
-# The safe routing verdict used when the gate is bypassed (no classifier wired, or a
-# deterministic ``research:`` escape hatch): route to the blended ask with no keywords,
-# so the read path greps the raw text -- the pre-gate behaviour (issue #5 / #102).
-_ASK_FALLBACK_DECISION: IntentDecision = IntentDecision(intent="ask", confidence="high")
 
 # The polite refusal sent to a user who is not on the allow-list, if anything at all.
 _REFUSAL_TEXT: str = "Sorry, you are not authorised to use this assistant."
-
-# The offer-to-save line appended to a blended answer (SPEC section 7.1 step 4). The
-# confirmation must land *in the thread* the answer was posted to (issue #61): a
-# channel-level "y" is a fresh top-level message keyed to its own thread, so it will not
-# confirm (recoverable -- the user just re-sends "y" as a reply -- never data-loss).
-_SAVE_OFFER_TEXT: str = (
-    "_Save this answer to the vault? Reply *y* in this thread to file it._"
-)
 
 # Appended to a confirmation when the intent gate (issue #5) routed *bare* free text to
 # capture, so a misfile is recoverable in one reply: the user can just re-send it as a
@@ -222,40 +199,6 @@ def render_query_result(result: QueryResult) -> str:
         lines.append("")
         lines.append("*Sources:*")
         lines.extend(f"- {render_citation(c)}" for c in result.citations)
-    return "\n".join(lines)
-
-
-def render_ask_result(result: AskResult, *, offer_save: bool = True) -> str:
-    """Render a blended web+vault Q&A answer as a ``mrkdwn`` block (SPEC section 7.1).
-
-    The prose answer comes first, then a ``Sources:`` list combining the harness-built
-    vault citations (:func:`render_citation`) and the web URLs the model actually read.
-    When ``offer_save`` is set (and the answer is non-empty), the offer-to-save line is
-    appended so the user can file the answer as a ``notes/`` page with a one-word reply.
-    Both vault and web citations use the one concise shared shape (issue #63): a
-    title-only clickable ``<obsidian-uri|title>`` link (web citations use the URL as the
-    link target).
-
-    Args:
-        result: The blended answer to render.
-        offer_save: Whether to append the "save this answer?" offer line.
-
-    Returns:
-        A ``mrkdwn`` string ready for ``chat.postMessage``.
-    """
-    lines = [result.answer.strip()]
-    if result.vault_citations or result.web_citations:
-        lines.append("")
-        lines.append("*Sources:*")
-        lines.extend(f"- {render_citation(c)}" for c in result.vault_citations)
-        for web in result.web_citations:
-            ref = render_vault_ref(
-                obsidian_uri=web.url, title=web.title or web.url, path=web.url
-            )
-            lines.append(f"- {ref}")
-    if offer_save:
-        lines.append("")
-        lines.append(_SAVE_OFFER_TEXT)
     return "\n".join(lines)
 
 
@@ -405,66 +348,6 @@ class EventDedupe:
         cutoff = self._clock() - self._ttl
         self._seen = {
             event_id: ts for event_id, ts in self._seen.items() if ts >= cutoff
-        }
-
-
-class PendingSaves:
-    """Transient per-thread buffer of the last blended answer awaiting a save reply.
-
-    The blended-ask path (SPEC section 7.1) ends by offering to save the answer; a
-    follow-up "y" *in the same thread* confirms. It holds the ``(question, AskResult)``
-    for the most recent answer **per conversation thread** (keyed by ``thread_ts or
-    ts``, issue #61) until it is confirmed, superseded, or expires (the ``ttl_seconds``
-    window, ~30 min, SPEC section 10). Keying by thread -- not channel -- is the
-    load-bearing change of issue #61: in a single shared channel a channel key would be
-    effectively global, so two interleaved topics clobber each other's pending save and
-    a "y" would apply to whatever the most recent answer in the channel was. It is
-    **transient working memory only**, never a store -- the in-memory seam the Phase-3
-    SQLite ``conversations`` table would later sit behind. The clock is injectable for
-    deterministic tests.
-    """
-
-    def __init__(
-        self,
-        *,
-        ttl_seconds: float = PENDING_SAVE_TTL_SECONDS,
-        clock: Callable[[], float] | None = None,
-    ) -> None:
-        """Build an empty pending-save buffer.
-
-        Args:
-            ttl_seconds: How long an unanswered save offer is remembered.
-            clock: A monotonic-ish time source returning seconds; defaults to
-                :func:`time.monotonic`.
-        """
-        self._ttl = ttl_seconds
-        self._clock = clock if clock is not None else time.monotonic
-        self._pending: dict[str, tuple[float, str, AskResult]] = {}
-
-    def remember(self, key: str, question: str, result: AskResult) -> None:
-        """Record the latest savable answer for thread ``key`` (no-op for empty id)."""
-        if key:
-            self._pending[key] = (self._clock(), question, result)
-
-    def take(self, key: str) -> tuple[str, AskResult] | None:
-        """Pop and return the live ``(question, result)`` for thread ``key``, if any.
-
-        Prunes expired entries first, then removes and returns the pending answer for
-        the conversation thread ``key`` (so a single "y" saves it exactly once); returns
-        ``None`` when there is no live offer.
-        """
-        self.prune()
-        entry = self._pending.pop(key, None)
-        if entry is None:
-            return None
-        _, question, result = entry
-        return question, result
-
-    def prune(self) -> None:
-        """Drop every pending offer older than ``ttl_seconds`` from now."""
-        cutoff = self._clock() - self._ttl
-        self._pending = {
-            key: entry for key, entry in self._pending.items() if entry[0] >= cutoff
         }
 
 
@@ -656,10 +539,8 @@ class Handlers:
     ingestor: Ingestor
     query_engine: QueryEngine
     allowed_users: frozenset[str]
-    research: ResearchEngine | None = None
     intent_classifier: IntentClassifier | None = None
     dedupe: EventDedupe = field(default_factory=EventDedupe)
-    pending_saves: PendingSaves = field(default_factory=PendingSaves)
     alerter: AlerterLike | None = None
     git: GitSync | None = None
     capture_channel: str = ""
@@ -684,24 +565,18 @@ class Handlers:
         loop on its own replies. Each reply is posted **in the message's thread**
         (``thread_ts or ts``) and per-conversation state is keyed by that same thread
         (issue #61). Enforces the allow-list (replying with a polite refusal to a known
-        but not-allowed sender) and the redelivery dedupe. Routing (SPEC sections
-        6, 7.1):
+        but not-allowed sender) and the redelivery dedupe. Routing (SPEC section 6):
 
         * a **file upload** (a ``message`` with subtype ``file_share``) downloads and
           ingests every attached file via :meth:`_ingest_uploaded_files` -- this event
           carries the full file objects (download URL + name) and a usable ``channel``,
           unlike the bare ``file_shared`` event the appliance ignores;
-        * a bare ``y``/``yes``/``save`` reply **in a thread** confirms that thread's
-          pending "save this answer?" offer and files the last blended answer as a
-          ``notes/`` page;
         * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
           ingest (:meth:`thoth.ingest.Ingestor.ingest`);
         * any other **bare free text** is routed by the intent gate
           (:meth:`_route_free_text`, issue #5): an injected
-          :class:`~thoth.intent.IntentClassifier` chooses capture / vault-query /
-          blended ask. With no classifier wired the pre-gate default holds -- the
-          **blended** Q&A path (:meth:`thoth.research.ResearchEngine.ask`) when a
-          research engine is wired, else the vault-only
+          :class:`~thoth.intent.IntentClassifier` chooses capture / vault-query. With no
+          classifier wired the safe fallback holds -- the vault-only
           :meth:`thoth.query.QueryEngine.answer`.
 
         A surfaced :class:`~thoth.git_sync.VaultConflictError` is rendered fail-loud
@@ -746,8 +621,6 @@ class Handlers:
         if not text:
             return
         source = self._source_label()
-        if self._is_confirm_save(text) and self._try_confirm_save(thread, responder):
-            return
         if self._is_capture_text(text):
             capture = Capture(text=self._strip_capture_prefix(text), source=source)
             self._do_ingest(capture, responder)
@@ -755,7 +628,7 @@ class Handlers:
             capture = Capture(url=text, source=source)
             self._do_ingest(capture, responder)
         else:
-            self._route_free_text(text, thread, source, responder)
+            self._route_free_text(text, source, responder)
 
     def _ingest_uploaded_files(
         self,
@@ -884,66 +757,51 @@ class Handlers:
 
     # ---- internals ---------------------------------------------------------------
 
-    def _route_free_text(
-        self, text: str, thread: str, source: str, responder: Responder
-    ) -> None:
+    def _route_free_text(self, text: str, source: str, responder: Responder) -> None:
         """Route bare free text through the intent gate (issue #5).
 
         Only reached for a message that hit none of the deterministic short-circuits
-        (pending-save affirmative, ``capture:``/``note:``/``save:`` prefix, bare URL,
-        shared file). The injected :class:`~thoth.intent.IntentClassifier` -- when wired
-        -- chooses the engine:
+        (``capture:``/``note:``/``save:`` prefix, bare URL, shared file). The injected
+        :class:`~thoth.intent.IntentClassifier` -- when wired -- chooses the engine:
 
         * ``capture`` files the text as a note, appending :data:`_GATE_CAPTURE_HINT`
           so a misfile is recoverable in one reply;
-        * ``query`` runs the vault-only :meth:`thoth.query.QueryEngine.answer`;
-        * ``ask`` (the default, and the low-confidence fallback) takes the blended
-          web+vault path when a research engine is wired, else the vault-only query.
+        * ``query`` (the safe fallback) runs the vault-only
+          :meth:`thoth.query.QueryEngine.answer`.
 
-        With no classifier wired the route is always ``ask``, so the pre-gate behaviour
-        is preserved exactly: blended ask when research is wired, vault-only query
-        otherwise.
+        With no classifier wired the route is always ``query`` (the safe vault path).
 
         The gate's keywords (issue #102) ride along on the :class:`~thoth.intent.
-        IntentDecision` and are passed to both read paths (:meth:`_do_query` /
-        :meth:`_do_ask`) as ``search_terms`` to seed the lexical grep; capture ignores
-        them (it has its own classify/curate enrichment). On the research-prefix / no-
-        classifier ``ask`` fallback there are no keywords, so the read path greps the
-        raw text -- unchanged behaviour.
+        IntentDecision` and are passed to :meth:`_do_query` as ``search_terms`` to seed
+        the lexical grep; capture ignores them (it has its own classify/curate
+        enrichment). On the no-classifier ``query`` fallback there are no keywords, so
+        the read path greps the raw text.
         """
         decision = self._free_text_route(text)
         route = decision.route
         keywords = list(decision.keywords)
         # Concise operator-readable line (issue #52): the engine bare free text was
-        # routed to (capture / query / ask), so a misroute is visible in the log.
+        # routed to (capture / query), so a misroute is visible in the log.
         logger.info("slack routed free text to %s", route)
         if route == "capture":
             capture = Capture(text=text, source=source)
             self._do_ingest(capture, responder, hint=_GATE_CAPTURE_HINT)
-        elif route == "query":
-            self._do_query(text, responder, search_terms=keywords)
-        elif self.research is not None:
-            self._do_ask(text, thread, responder, search_terms=keywords)
         else:
             self._do_query(text, responder, search_terms=keywords)
 
     def _free_text_route(self, text: str) -> IntentDecision:
         """Pick the routing verdict for bare free text (issue #5 + #102 keywords).
 
-        Returns the safe ``ask`` decision (no keywords) when no classifier is wired (the
-        pre-gate default, so the research/query fallback in :meth:`_route_free_text` is
-        unchanged) **and** when the text carries the explicit ``research:`` marker --
-        that marker is a deterministic "ask the web" escape hatch (issue #5) and skips
-        the gate to reach :meth:`thoth.research.ResearchEngine.ask`, which strips it and
-        forces the web on; classifying it could misroute it to capture/query. Otherwise
-        it consults the gate and returns the full :class:`~thoth.intent.IntentDecision`,
+        Returns the safe ``query`` decision (no keywords) when no classifier is wired,
+        so the fallback in :meth:`_route_free_text` is the vault-only path. Otherwise it
+        consults the gate and returns the full :class:`~thoth.intent.IntentDecision`,
         whose :attr:`~thoth.intent.IntentDecision.route` already collapses a low-
-        confidence verdict to the safe ``ask`` and whose ``keywords`` seed the read
+        confidence verdict to the safe ``query`` and whose ``keywords`` seed the read
         path's grep (issue #102). The classifier is itself total, so a model/parse
         failure also yields the safe default rather than raising.
         """
-        if self.intent_classifier is None or force_web_requested(text):
-            return _ASK_FALLBACK_DECISION
+        if self.intent_classifier is None:
+            return _QUERY_FALLBACK_DECISION
         return self.intent_classifier.classify(text)
 
     def _do_ingest(
@@ -1050,87 +908,6 @@ class Handlers:
             return
         responder.finish(render_query_result(result))
 
-    def _do_ask(
-        self,
-        text: str,
-        thread: str,
-        responder: Responder,
-        *,
-        search_terms: list[str] | None = None,
-    ) -> None:
-        """Run the blended web+vault ask, reply with the offer-to-save, and remember it.
-
-        Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
-        it in place with the rendered answer; degrades to a single reply on a
-        client-less path.
-
-        The (model-decided) web gate lives in :meth:`thoth.research.ResearchEngine.ask`;
-        a leading ``research:`` marker / ``force_web`` forces the web on. On success the
-        rendered answer carries the "save this answer?" offer and the
-        ``(question, result)`` is stashed in :attr:`pending_saves` **keyed by the
-        conversation thread** (issue #61) so a follow-up "y" in that thread files it. A
-        :class:`~thoth.research.ResearchError` is rendered fail-loud. ``search_terms``
-        are the intent gate's keywords (issue #102): they seed the vault candidate grep
-        while the web gate and prose stay keyed off ``text``; empty/``None`` greps it.
-        """
-        assert self.research is not None  # routing guard guarantees this
-        responder.progress(_ASK_PLACEHOLDER)
-        try:
-            result = self.research.ask(text, search_terms=search_terms)
-        except BudgetExceededError:
-            responder.finish(_BUDGET_REACHED_TEXT)
-            return
-        except ResearchError as exc:
-            responder.finish(f":x: Could not answer that: {exc}")
-            return
-        offer = bool(result.answer.strip())
-        self.pending_saves.remember(thread, text, result)
-        responder.finish(render_ask_result(result, offer_save=offer))
-
-    def _try_confirm_save(self, thread: str, responder: Responder) -> bool:
-        """File the thread's pending answer as a ``notes/`` page on a "y" reply.
-
-        ``thread`` is the conversation key (``thread_ts or ts``, issue #61), so a "y"
-        only confirms the offer made *in its own thread* -- a "y" elsewhere finds
-        nothing pending and falls through. Returns ``True`` once it has handled the
-        confirmation (whether the save succeeded, was rejected, or there was nothing
-        pending so the "y" falls through to normal routing -- in which case it returns
-        ``False``). A vault rejection is rendered fail-loud. ``research`` is required to
-        save; if it is not wired the reply falls through.
-
-        The success reply uses the one concise shared reference (issue #53): an
-        ``<obsidian-uri|title>: path`` line whose title is derived from the saved page's
-        slug. When the ``obsidian://`` link cannot be built the plain ``Saved `path```
-        fallback is used. It is posted in the thread via the responder.
-        """
-        if self.research is None:
-            return False
-        pending = self.pending_saves.take(thread)
-        if pending is None:
-            return False
-        question, result = pending
-        try:
-            rel = self.research.save_answer(question, result)
-        except ResearchError as exc:
-            responder.say(f":x: Could not save that: {exc}")
-            return True
-        uri = self._vault_uri(rel)
-        if uri:
-            title = Path(rel).stem.replace("-", " ").title()
-            responder.say(
-                "Saved " + render_vault_ref(obsidian_uri=uri, title=title, path=rel)
-            )
-        else:
-            responder.say(f"Saved `{rel}`")
-        return True
-
-    def _vault_uri(self, rel: str) -> str | None:
-        """Build the ``obsidian://`` link for a saved page, or ``None`` on rejection."""
-        try:
-            return self.config.obsidian_uri(rel)
-        except ValueError:
-            return None
-
     def _source_label(self) -> str:
         """The vault ``source`` value for Slack-originated captures."""
         return "slack"
@@ -1147,9 +924,9 @@ class Handlers:
 
         The per-conversation state key (issue #61), and the ``thread_ts`` the bot
         replies under: a reply *inside* a thread carries the thread root's ``thread_ts``
-        (so a follow-up / save "y" keys to the same conversation as the top-level one),
-        while a top-level message has only its own ``ts`` (which becomes the thread root
-        once the bot replies under it). No fallback to the bare channel -- that would
+        (so a follow-up keys to the same conversation as the top-level one), while a
+        top-level message has only its own ``ts`` (which becomes the thread root once
+        the bot replies under it). No fallback to the bare channel -- that would
         reintroduce the cross-topic collision issue #61 exists to remove.
         """
         thread_ts = event.get("thread_ts")
@@ -1157,11 +934,6 @@ class Handlers:
             return thread_ts
         ts = event.get("ts")
         return ts if isinstance(ts, str) else ""
-
-    @staticmethod
-    def _is_confirm_save(text: str) -> bool:
-        """Return ``True`` iff the whole message is a save-confirmation word."""
-        return text.strip().lower() in _CONFIRM_WORDS
 
     @staticmethod
     def _should_handle(event: dict[str, Any]) -> bool:
@@ -1276,8 +1048,6 @@ def _build_handlers(
     config: Config,
     ingestor: Ingestor,
     query_engine: QueryEngine,
-    *,
-    research: ResearchEngine | None = None,
 ) -> tuple[Handlers, str]:
     """Construct the Slack :class:`Handlers` graph; return it with the bot token.
 
@@ -1305,8 +1075,8 @@ def _build_handlers(
     # daemon has no DM fallback, so without it there is nowhere to listen.
     capture_channel = config.require_slack_capture_channel()
     # The daily cost guard (issue #16) also caps the intent gate's cheap Haiku calls; it
-    # shares the same state.db counters as the ingest/query/research graph and alerts
-    # once per day via the same errors-to-Slack target the Handlers use.
+    # shares the same state.db counters as the ingest/query graph and alerts once per
+    # day via the same errors-to-Slack target the Handlers use.
     alerter = make_alerter(config)
     intent_guard = make_budget_guard(config, alerter=alerter)
     handlers = Handlers(
@@ -1322,11 +1092,10 @@ def _build_handlers(
         # The one private channel the daemon listens/replies in; messages elsewhere are
         # ignored (issue #61).
         capture_channel=capture_channel,
-        research=research,
         # Free-text intent gate (issue #5): one cheap Haiku call routes bare prose to
-        # capture / vault-query / blended ask instead of always defaulting to ask. Its
-        # own lazy LLM client (a different, cheaper model than the ask/curate Sonnet);
-        # the model is overridable without a redeploy via THOTH_INTENT_MODEL.
+        # capture / vault-query instead of always defaulting to query. Its own lazy LLM
+        # client (a different, cheaper model than the curate Sonnet); the model is
+        # overridable without a redeploy via THOTH_INTENT_MODEL.
         intent_classifier=IntentClassifier(
             LLM(config, guard=intent_guard),
             model=config.intent_model or DEFAULT_INTENT_MODEL,
@@ -1347,8 +1116,6 @@ def build_app(
     config: Config,
     ingestor: Ingestor,
     query_engine: QueryEngine,
-    *,
-    research: ResearchEngine | None = None,
 ) -> Any:
     """Lazily import ``slack_bolt``, build the App, and register the handlers.
 
@@ -1360,16 +1127,13 @@ def build_app(
     carries file uploads, as a ``file_share`` subtype) to those handlers. The bare
     ``file_shared`` event is bound to a no-op (it is a stub the appliance ignores -- see
     :meth:`Handlers._should_handle`). The app is **not** started -- :func:`run` does
-    that. When ``research`` is provided, free-text questions take the blended web+vault
-    path with the offer-to-save (SPEC section 7.1); otherwise they take the vault-only
-    path.
+    that. Free-text questions take the vault-only query path.
 
     Args:
         config: The frozen runtime config (provides the Slack bot token + capture
             channel).
         ingestor: The constructed ingest pipeline.
         query_engine: The constructed retrieval engine.
-        research: The optional blended-ask engine for the free-text path.
 
     Returns:
         The configured ``slack_bolt.App`` instance (typed ``Any`` to avoid a top-level
@@ -1377,9 +1141,7 @@ def build_app(
     """
     from slack_bolt import App
 
-    handlers, bot_token = _build_handlers(
-        config, ingestor, query_engine, research=research
-    )
+    handlers, bot_token = _build_handlers(config, ingestor, query_engine)
     app = App(token=bot_token)
 
     @app.event("message")
@@ -1404,16 +1166,13 @@ def run(
     config: Config,
     ingestor: Ingestor,
     query_engine: QueryEngine,
-    *,
-    research: ResearchEngine | None = None,
 ) -> None:
     """Build the app and block serving over Socket Mode (the daemon entry point).
 
     Lazily imports ``SocketModeHandler``, builds the app via :func:`build_app`, and
     calls ``handler.start()`` which blocks forever. This is the production entry point
     (``thoth slack``) and is never unit-tested live (CI has no Slack socket); the
-    testable logic all lives on :class:`Handlers`. ``research`` enables the blended
-    free-text path (SPEC section 7.1).
+    testable logic all lives on :class:`Handlers`.
 
     Unattended observability (issue #15): the blocking serve is wrapped by
     :func:`serve_with_alerting` so an **unhandled** daemon exception is reported to the
@@ -1426,14 +1185,13 @@ def run(
         config: The frozen runtime config (provides both Slack tokens).
         ingestor: The constructed ingest pipeline.
         query_engine: The constructed retrieval engine.
-        research: The optional blended-ask engine for the free-text path.
     """
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
     from thoth.alerts import make_alerter
 
     _, app_token = config.require_slack()
-    app = build_app(config, ingestor, query_engine, research=research)
+    app = build_app(config, ingestor, query_engine)
     alerter = make_alerter(config)
     serve_with_alerting(
         lambda: SocketModeHandler(app, app_token).start(),

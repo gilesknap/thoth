@@ -2,7 +2,7 @@
 
 The classifier is exercised with an injected fake :class:`~thoth.llm.LLM` so no real
 ``anthropic`` client is built and no network is touched. The seam is **total**: every
-model / parse failure must fall back to the safe ``ask`` route rather than raising.
+model / parse failure must fall back to the safe ``query`` route rather than raising.
 """
 
 from __future__ import annotations
@@ -75,23 +75,23 @@ def test_default_intent_model_is_a_dated_haiku() -> None:
     assert DEFAULT_INTENT_MODEL == "claude-haiku-4-5-20251001"
 
 
-@pytest.mark.parametrize("intent", ["capture", "ask", "query"])
+@pytest.mark.parametrize("intent", ["capture", "query"])
 def test_route_passes_through_when_confident(intent: str) -> None:
     """A high/medium-confidence verdict routes to its named intent verbatim."""
     assert IntentDecision(intent=intent, confidence="high").route == intent
     assert IntentDecision(intent=intent, confidence="medium").route == intent
 
 
-@pytest.mark.parametrize("intent", ["capture", "ask", "query"])
-def test_low_confidence_always_routes_to_ask(intent: str) -> None:
-    """A low-confidence verdict collapses to ask whatever the guessed intent."""
-    assert IntentDecision(intent=intent, confidence="low").route == "ask"
+@pytest.mark.parametrize("intent", ["capture", "query"])
+def test_low_confidence_always_routes_to_query(intent: str) -> None:
+    """A low-confidence verdict collapses to query whatever the guessed intent."""
+    assert IntentDecision(intent=intent, confidence="low").route == "query"
 
 
 # --- classify happy paths ----------------------------------------------------
 
 
-@pytest.mark.parametrize("intent", ["capture", "ask", "query"])
+@pytest.mark.parametrize("intent", ["capture", "query"])
 def test_classify_parses_each_intent(config: Config, intent: str) -> None:
     """A well-formed JSON verdict is parsed into the matching decision."""
     classifier, _ = _classifier(
@@ -146,7 +146,7 @@ def test_classify_sends_text_under_instructions_with_haiku(config: Config) -> No
 def test_classify_honours_model_override(config: Config) -> None:
     """A custom model id (e.g. from THOTH_INTENT_MODEL) flows to the create call."""
     classifier, client = _classifier(
-        config, text='{"intent": "ask", "confidence": "high"}', model="custom-model-1"
+        config, text='{"intent": "query", "confidence": "high"}', model="custom-model-1"
     )
     classifier.classify("hello")
     assert client.messages.calls[0]["model"] == "custom-model-1"
@@ -155,36 +155,36 @@ def test_classify_honours_model_override(config: Config) -> None:
 # --- classify fail-safe paths ------------------------------------------------
 
 
-def test_classify_falls_back_to_ask_on_model_error(config: Config) -> None:
-    """A raising model call is swallowed and yields the safe low-confidence ask."""
+def test_classify_falls_back_to_query_on_model_error(config: Config) -> None:
+    """A raising model call is swallowed and yields the safe low-confidence query."""
     classifier, _ = _classifier(config, error=RuntimeError("api exploded"))
     decision = classifier.classify("anything")
-    assert decision == IntentDecision(intent="ask", confidence="low")
-    assert decision.route == "ask"
+    assert decision == IntentDecision(intent="query", confidence="low")
+    assert decision.route == "query"
 
 
-def test_classify_falls_back_to_ask_on_unparseable_output(config: Config) -> None:
+def test_classify_falls_back_to_query_on_unparseable_output(config: Config) -> None:
     """Non-JSON model output yields the safe default rather than raising."""
     classifier, _ = _classifier(config, text="I think this is a question, sorry!")
-    assert classifier.classify("anything").route == "ask"
+    assert classifier.classify("anything").route == "query"
 
 
 def test_classify_rejects_unknown_intent(config: Config) -> None:
-    """An out-of-range intent is untrustworthy -> the whole verdict defaults to ask."""
+    """An out-of-range intent is untrustworthy -> the verdict defaults to query."""
     classifier, _ = _classifier(
         config, text='{"intent": "delete-everything", "confidence": "high"}'
     )
-    assert classifier.classify("anything").route == "ask"
+    assert classifier.classify("anything").route == "query"
 
 
 def test_classify_treats_bad_confidence_as_low(config: Config) -> None:
-    """A valid intent with a missing/garbage confidence routes conservatively to ask."""
+    """A valid intent with missing/garbage confidence routes conservatively to query."""
     classifier, _ = _classifier(config, text='{"intent": "capture"}')
     decision = classifier.classify("anything")
     assert decision.intent == "capture"
     assert decision.confidence == "low"
-    # ...so a capture the model wasn't sure about is still answered, not filed.
-    assert decision.route == "ask"
+    # ...so a capture the model wasn't sure about is still queried, not filed.
+    assert decision.route == "query"
 
 
 # --- keywords (issue #102) ---------------------------------------------------

@@ -309,7 +309,7 @@ def test_response_content_blocks_preserves_tool_use_dict_shape() -> None:
     response = {
         "content": [
             {"type": "text", "text": "thinking"},
-            {"type": "tool_use", "id": "toolu_1", "name": "web_search", "input": {}},
+            {"type": "tool_use", "id": "toolu_1", "name": "pkm_search", "input": {}},
         ]
     }
     blocks = response_content_blocks(response)

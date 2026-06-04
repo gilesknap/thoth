@@ -24,17 +24,14 @@ from thoth.git_sync import Divergence, GitSync, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.intent import IntentClassifier, IntentDecision
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
-from thoth.research import AskResult, ResearchEngine, ResearchError, WebCitation
 from thoth.slack_app import (
     DEDUPE_TTL_SECONDS,
     EventDedupe,
     Handlers,
-    PendingSaves,
     Responder,
     _build_handlers,
     build_app,
     parse_allowed_users,
-    render_ask_result,
     render_citation,
     render_ingest_report,
     render_query_result,
@@ -157,73 +154,12 @@ class FakeQueryEngine:
         return self._result
 
 
-class FakeResearch:
-    """Records ask/save calls and returns canned results (or raises canned errors)."""
-
-    def __init__(
-        self,
-        result: AskResult | None = None,
-        error: Exception | None = None,
-        *,
-        saved_path: str = "queries/saved-answer.md",
-        save_error: Exception | None = None,
-    ) -> None:
-        self.asks: list[str] = []
-        self.search_terms: list[list[str] | None] = []
-        self.saves: list[tuple[str, AskResult]] = []
-        self._result = result if result is not None else _ask_result()
-        self._error = error
-        self._saved_path = saved_path
-        self._save_error = save_error
-
-    def ask(
-        self,
-        question: str,
-        *,
-        force_web: bool = False,
-        max_pages: int = 5,
-        search_terms: list[str] | None = None,
-    ) -> AskResult:
-        """Record the question (+ keywords) and return the canned result (or raise)."""
-        self.asks.append(question)
-        self.search_terms.append(search_terms)
-        if self._error is not None:
-            raise self._error
-        return self._result
-
-    def save_answer(
-        self,
-        question: str,
-        result: AskResult,
-        *,
-        slug: str | None = None,
-        today: Any = None,
-    ) -> str:
-        """Record the save and return the canned path (or raise)."""
-        self.saves.append((question, result))
-        if self._save_error is not None:
-            raise self._save_error
-        return self._saved_path
-
-
-def _ask_result(**overrides: Any) -> AskResult:
-    """Build an AskResult with one vault citation and one web citation by default."""
-    base: dict[str, Any] = {
-        "answer": "Raft is a consensus algorithm.",
-        "vault_citations": [_citation()],
-        "web_citations": [WebCitation(url="https://example.com/raft", title="Raft")],
-        "used_web": True,
-    }
-    base.update(overrides)
-    return AskResult(**base)
-
-
 class FakeIntentClassifier:
     """Records classify calls and returns a canned routing decision (issue #5)."""
 
     def __init__(
         self,
-        intent: str = "ask",
+        intent: str = "query",
         confidence: str = "high",
         *,
         keywords: tuple[str, ...] = (),
@@ -350,23 +286,19 @@ def _handlers(
     *,
     ingestor: FakeIngestor | None = None,
     query_engine: FakeQueryEngine | None = None,
-    research: FakeResearch | None = None,
     intent_classifier: FakeIntentClassifier | None = None,
     allowed: frozenset[str] = frozenset({ALLOWED}),
     dedupe: EventDedupe | None = None,
-    pending_saves: PendingSaves | None = None,
     alerter: FakeAlerter | None = None,
     git: FakeGitSync | None = None,
     capture_channel: str = "",
 ) -> tuple[Handlers, FakeIngestor, FakeQueryEngine]:
     """Construct Handlers wired to fakes, returning the fakes for assertions.
 
-    When ``research`` is given the free-text path takes the blended ask; otherwise it is
-    ``None`` and the free-text path stays vault-only (the existing behaviour). The
-    research fake is reachable on the returned ``Handlers.research`` for assertions. An
-    ``alerter`` + ``git`` enable the unpushed-divergence alert (issue #15). An empty
-    ``capture_channel`` leaves the channel gate off (issue #61), so an event with any
-    channel id is handled -- set it to exercise the gate.
+    Free text is routed to the vault-only query. An ``alerter`` + ``git`` enable the
+    unpushed-divergence alert (issue #15). An empty ``capture_channel`` leaves the
+    channel gate off (issue #61), so an event with any channel id is handled -- set it
+    to exercise the gate.
     """
     ing = ingestor if ingestor is not None else FakeIngestor()
     qry = query_engine if query_engine is not None else FakeQueryEngine()
@@ -377,14 +309,10 @@ def _handlers(
         "allowed_users": allowed,
         "capture_channel": capture_channel,
     }
-    if research is not None:
-        kwargs["research"] = cast(ResearchEngine, research)
     if intent_classifier is not None:
         kwargs["intent_classifier"] = cast(IntentClassifier, intent_classifier)
     if dedupe is not None:
         kwargs["dedupe"] = dedupe
-    if pending_saves is not None:
-        kwargs["pending_saves"] = pending_saves
     if alerter is not None:
         kwargs["alerter"] = alerter
     if git is not None:
@@ -608,23 +536,6 @@ def test_handle_message_url_with_trailing_text_is_a_query(config: Config) -> Non
     assert qry.queries == ["what is https://example.com about?"]
 
 
-def test_handle_message_free_text_uses_research_when_wired(config: Config) -> None:
-    """With a research engine, free text takes the blended ask + offer-to-save."""
-    research = FakeResearch()
-    handlers, _, qry = _handlers(config, research=research)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "9.1"}, say
-    )
-    # The blended path was used, NOT the vault-only query path.
-    assert research.asks == ["explain raft"]
-    assert qry.queries == []
-    assert "Raft is a consensus algorithm." in say.messages[0]
-    # Both the web source and the offer-to-save surface.
-    assert "https://example.com/raft" in say.messages[0]
-    assert "Save this answer" in say.messages[0]
-
-
 # --------------------------------------------------------------------------------------
 # intent gate: bare free-text routing (issue #5)
 # --------------------------------------------------------------------------------------
@@ -632,17 +543,15 @@ def test_handle_message_free_text_uses_research_when_wired(config: Config) -> No
 
 def test_intent_gate_routes_capture_to_ingest_with_hint(config: Config) -> None:
     """A 'capture' verdict files bare prose as a note + a recoverable one-line hint."""
-    research = FakeResearch()
     gate = FakeIntentClassifier(intent="capture", confidence="high")
-    handlers, ing, qry = _handlers(config, research=research, intent_classifier=gate)
+    handlers, ing, qry = _handlers(config, intent_classifier=gate)
     say = Recorder()
     text = "remind me to call the dentist tomorrow"
     handlers.handle_message(
         {"user": ALLOWED, "text": text, "channel": "D1", "ts": "5.1"}, say
     )
-    # Filed as a note via ingest -- never answered/queried.
+    # Filed as a note via ingest -- never queried.
     assert gate.classified == [text]
-    assert research.asks == []
     assert qry.queries == []
     assert len(ing.captures) == 1
     assert ing.captures[0].text == text  # full text, no prefix stripped
@@ -652,41 +561,24 @@ def test_intent_gate_routes_capture_to_ingest_with_hint(config: Config) -> None:
     assert "If you meant to ask" in say.messages[0]
 
 
-def test_intent_gate_routes_query_to_vault_only(config: Config) -> None:
-    """A 'query' verdict runs the vault-only query even when research is wired."""
-    research = FakeResearch()
+def test_intent_gate_routes_query_to_vault(config: Config) -> None:
+    """A 'query' verdict runs the vault-only query."""
     gate = FakeIntentClassifier(intent="query", confidence="high")
-    handlers, ing, qry = _handlers(config, research=research, intent_classifier=gate)
+    handlers, ing, qry = _handlers(config, intent_classifier=gate)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "what did I save about exa?", "ts": "5.2"}, say
     )
     assert qry.queries == ["what did I save about exa?"]
-    assert research.asks == []  # the read-only vault path, not the blended ask
     assert ing.captures == []
-
-
-def test_intent_gate_routes_ask_to_blended(config: Config) -> None:
-    """An 'ask' verdict takes the blended web+vault path (with offer-to-save)."""
-    research = FakeResearch()
-    gate = FakeIntentClassifier(intent="ask", confidence="high")
-    handlers, _, qry = _handlers(config, research=research, intent_classifier=gate)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "what is raft?", "channel": "D1", "ts": "5.3"}, say
-    )
-    assert research.asks == ["what is raft?"]
-    assert qry.queries == []
-    assert "Save this answer" in say.messages[0]
 
 
 def test_intent_gate_query_passes_keywords_as_search_terms(config: Config) -> None:
     """A 'query' verdict threads the gate's keywords to the vault query (issue #102)."""
-    research = FakeResearch()
     gate = FakeIntentClassifier(
         intent="query", confidence="high", keywords=("dog", "pet")
     )
-    handlers, _, qry = _handlers(config, research=research, intent_classifier=gate)
+    handlers, _, qry = _handlers(config, intent_classifier=gate)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "list me the docs about dogs", "ts": "5.2c"}, say
@@ -697,27 +589,10 @@ def test_intent_gate_query_passes_keywords_as_search_terms(config: Config) -> No
     assert qry.search_terms == [["dog", "pet"]]
 
 
-def test_intent_gate_ask_passes_keywords_as_search_terms(config: Config) -> None:
-    """An 'ask' verdict threads the gate's keywords to the blended ask (issue #102)."""
-    research = FakeResearch()
-    gate = FakeIntentClassifier(
-        intent="ask", confidence="high", keywords=("raft", "consensus")
-    )
-    handlers, _, _ = _handlers(config, research=research, intent_classifier=gate)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "how does raft work?", "channel": "D1", "ts": "5.3c"},
-        say,
-    )
-    assert research.asks == ["how does raft work?"]
-    assert research.search_terms == [["raft", "consensus"]]
-
-
 def test_intent_gate_no_keywords_greps_raw_text(config: Config) -> None:
     """A verdict with no keywords falls back to grepping the raw text (issue #102)."""
-    research = FakeResearch()
     gate = FakeIntentClassifier(intent="query", confidence="high")  # no keywords
-    handlers, _, qry = _handlers(config, research=research, intent_classifier=gate)
+    handlers, _, qry = _handlers(config, intent_classifier=gate)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "what did I save about exa?", "ts": "5.2d"}, say
@@ -727,34 +602,12 @@ def test_intent_gate_no_keywords_greps_raw_text(config: Config) -> None:
     assert qry.search_terms == [[]]
 
 
-def test_research_prefix_greps_raw_question_no_keywords(config: Config) -> None:
-    """A 'research:'-forced ask bypasses the gate, so it greps the raw question.
-
-    The marker is a deterministic escape hatch (the gate is never consulted), so there
-    are no keywords and the blended ask greps the question verbatim -- unchanged.
-    """
-    research = FakeResearch()
-    gate = FakeIntentClassifier(
-        intent="capture", confidence="high", keywords=("ignored",)
-    )
-    handlers, _, _ = _handlers(config, research=research, intent_classifier=gate)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "research: who won the 2022 final?", "ts": "5.9c"},
-        say,
-    )
-    assert gate.classified == []  # gate bypassed entirely
-    assert research.asks == ["research: who won the 2022 final?"]
-    assert research.search_terms == [[]]  # no keywords -> grep raw question
-
-
 def test_handle_message_logs_free_text_route(
     config: Config, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A bare free-text message logs the engine it was routed to (issue #52)."""
-    research = FakeResearch()
     gate = FakeIntentClassifier(intent="query", confidence="high")
-    handlers, _, _ = _handlers(config, research=research, intent_classifier=gate)
+    handlers, _, _ = _handlers(config, intent_classifier=gate)
     say = Recorder()
     with caplog.at_level("INFO", logger="thoth.slack_app"):
         handlers.handle_message(
@@ -767,10 +620,10 @@ def test_handle_message_logs_free_text_route(
     assert "query" in records[0].getMessage()
 
 
-def test_intent_gate_capture_with_no_research_still_files(config: Config) -> None:
-    """A 'capture' verdict files even when no research engine is wired."""
+def test_intent_gate_capture_files_a_note(config: Config) -> None:
+    """A 'capture' verdict files the prose as a note."""
     gate = FakeIntentClassifier(intent="capture", confidence="high")
-    handlers, ing, qry = _handlers(config, intent_classifier=gate)  # research is None
+    handlers, ing, qry = _handlers(config, intent_classifier=gate)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "the wifi password is hunter2", "ts": "5.4"}, say
@@ -780,29 +633,27 @@ def test_intent_gate_capture_with_no_research_still_files(config: Config) -> Non
     assert qry.queries == []
 
 
-def test_intent_gate_low_confidence_routes_to_ask(config: Config) -> None:
-    """A low-confidence verdict (whatever the intent) falls back to the blended ask.
+def test_intent_gate_low_confidence_routes_to_query(config: Config) -> None:
+    """A low-confidence verdict (whatever the intent) falls back to the vault query.
 
     Answering a misfiled note is harmless; silently filing a real question is not, so
-    the gate defaults to ask when unsure -- the capture is NOT filed.
+    the gate defaults to query when unsure -- the capture is NOT filed.
     """
-    research = FakeResearch()
     gate = FakeIntentClassifier(intent="capture", confidence="low")
-    handlers, ing, _ = _handlers(config, research=research, intent_classifier=gate)
+    handlers, ing, qry = _handlers(config, intent_classifier=gate)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "is raft like paxos?", "channel": "D1", "ts": "5.5"},
         say,
     )
     assert ing.captures == []  # not filed despite the 'capture' guess
-    assert research.asks == ["is raft like paxos?"]
+    assert qry.queries == ["is raft like paxos?"]
 
 
 def test_intent_gate_prefix_capture_skips_gate_and_hint(config: Config) -> None:
     """An explicit 'note:' prefix is filed deterministically -- gate never consulted."""
-    research = FakeResearch()
-    gate = FakeIntentClassifier(intent="ask", confidence="high")
-    handlers, ing, _ = _handlers(config, research=research, intent_classifier=gate)
+    gate = FakeIntentClassifier(intent="query", confidence="high")
+    handlers, ing, _ = _handlers(config, intent_classifier=gate)
     say = Recorder()
     handlers.handle_message(
         {"user": ALLOWED, "text": "note: buy milk", "ts": "5.6"}, say
@@ -813,170 +664,13 @@ def test_intent_gate_prefix_capture_skips_gate_and_hint(config: Config) -> None:
     assert "If you meant to ask" not in say.messages[0]
 
 
-def test_intent_gate_research_prefix_bypasses_gate(config: Config) -> None:
-    """A 'research:' marker is a deterministic ask escape hatch -- gate is skipped."""
-    research = FakeResearch()
-    gate = FakeIntentClassifier(intent="capture", confidence="high")
-    handlers, ing, _ = _handlers(config, research=research, intent_classifier=gate)
-    say = Recorder()
+def test_free_text_without_gate_routes_to_vault_query(config: Config) -> None:
+    """With no classifier wired, bare free text runs the vault-only query."""
+    handlers, _, qry = _handlers(config)
     handlers.handle_message(
-        {"user": ALLOWED, "text": "research: who won the 2022 final?", "ts": "5.9"},
-        say,
-    )
-    assert gate.classified == []  # bypassed the gate
-    assert ing.captures == []  # not filed despite the 'capture' verdict the gate holds
-    assert research.asks == ["research: who won the 2022 final?"]
-
-
-def test_free_text_without_gate_preserves_pre_gate_default(config: Config) -> None:
-    """With no classifier wired, bare free text keeps the pre-gate behaviour.
-
-    Blended ask when a research engine is wired; vault-only query when it is not.
-    """
-    research = FakeResearch()
-    with_research, _, qry_a = _handlers(config, research=research)
-    say = Recorder()
-    with_research.handle_message(
-        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "5.7"}, say
-    )
-    assert research.asks == ["explain raft"]
-    assert qry_a.queries == []
-
-    no_research, _, qry_b = _handlers(config)
-    no_research.handle_message(
         {"user": ALLOWED, "text": "explain raft", "ts": "5.8"}, Recorder()
     )
-    assert qry_b.queries == ["explain raft"]
-
-
-def test_handle_message_confirm_save_files_last_answer(config: Config) -> None:
-    """A follow-up 'y' *in the answer's thread* files the blended answer (issue #61).
-
-    The top-level "explain raft" message keys (and the bot replies in) thread ``10.1``;
-    the confirming "y" is a reply inside that thread (``thread_ts == "10.1"``), so it
-    confirms the offer made there.
-    """
-    research = FakeResearch(saved_path="notes/explain-raft.md")
-    handlers, _, _ = _handlers(config, research=research)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "10.1"}, say
-    )
-    handlers.handle_message(
-        {
-            "user": ALLOWED,
-            "text": "y",
-            "channel": "D1",
-            "thread_ts": "10.1",
-            "ts": "10.2",
-        },
-        say,
-    )
-    # save_answer was called once, with the original question and the remembered result.
-    assert len(research.saves) == 1
-    assert research.saves[0][0] == "explain raft"
-    # The save reply is the one concise shared ref: clickable title only, no wikilink.
-    assert "obsidian://" in say.messages[-1]
-    assert "|Explain Raft>" in say.messages[-1]
-    assert ">: " not in say.messages[-1]  # title-only, no trailing path (issue #63)
-    assert "[[" not in say.messages[-1]
-    # The save confirmation was posted back into the same thread.
-    assert say.thread_ts[-1] == "10.1"
-    # A second 'y' in-thread has nothing pending and falls through to a fresh ask.
-    handlers.handle_message(
-        {
-            "user": ALLOWED,
-            "text": "y",
-            "channel": "D1",
-            "thread_ts": "10.1",
-            "ts": "10.3",
-        },
-        say,
-    )
-    assert len(research.saves) == 1
-    assert research.asks == ["explain raft", "y"]
-
-
-def test_handle_message_confirm_save_is_per_thread(config: Config) -> None:
-    """A 'y' in a different thread does not save another thread's answer (issue #61).
-
-    This is the load-bearing fix: in one shared channel, channel-keying made a 'y' apply
-    to whatever the most recent answer was; thread-keying scopes it to its own topic.
-    """
-    research = FakeResearch()
-    handlers, _, _ = _handlers(config, research=research)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "11.1"}, say
-    )
-    # 'y' arrives in a DIFFERENT thread of the SAME channel: no pending there -> falls
-    # through (the wart the issue removes: it no longer clobbers thread 11.1's save).
-    handlers.handle_message(
-        {
-            "user": ALLOWED,
-            "text": "y",
-            "channel": "D1",
-            "thread_ts": "99.9",
-            "ts": "11.2",
-        },
-        say,
-    )
-    assert research.saves == []
-    # The stray 'y' was treated as a fresh question instead.
-    assert research.asks == ["explain raft", "y"]
-
-
-def test_handle_message_channel_level_y_does_not_confirm(config: Config) -> None:
-    """A channel-level 'y' (a new top-level message) does not confirm (issue #61).
-
-    The offer says reply *in this thread*; a top-level 'y' keys to its own ts, finds no
-    pending offer, and falls through to a fresh ask -- recoverable, never data-loss.
-    """
-    research = FakeResearch()
-    handlers, _, _ = _handlers(config, research=research)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "40.1"}, say
-    )
-    # A bare top-level 'y' (no thread_ts) keys by its own ts -> nothing pending there.
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "40.2"}, say
-    )
-    assert research.saves == []
-    assert research.asks == ["explain raft", "y"]
-
-
-def test_handle_message_save_rejection_is_fail_loud(config: Config) -> None:
-    """A vault rejection on save is surfaced fail-loud, never swallowed."""
-    research = FakeResearch(save_error=ResearchError("invalid slug"))
-    handlers, _, _ = _handlers(config, research=research)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "explain raft", "channel": "D1", "ts": "12.1"}, say
-    )
-    handlers.handle_message(
-        {
-            "user": ALLOWED,
-            "text": "yes",
-            "channel": "D1",
-            "thread_ts": "12.1",
-            "ts": "12.2",
-        },
-        say,
-    )
-    assert ":x:" in say.messages[-1]
-    assert "invalid slug" in say.messages[-1]
-
-
-def test_handle_message_confirm_without_research_falls_through(config: Config) -> None:
-    """Without a research engine, a 'y' is a normal vault-only query (no save path)."""
-    handlers, _, qry = _handlers(config)  # research is None
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "y", "channel": "D1", "ts": "13.1"}, say
-    )
-    # It routed to the vault-only query path (the only one available).
-    assert qry.queries == ["y"]
+    assert qry.queries == ["explain raft"]
 
 
 def test_handle_message_redelivery_dropped(config: Config) -> None:
@@ -1225,18 +919,6 @@ def test_handle_message_query_budget_exceeded_is_fail_safe(config: Config) -> No
     assert len(say.messages) == 1
     assert "budget" in say.messages[0].lower()
     assert "still saved" in say.messages[0].lower()
-
-
-def test_handle_message_ask_budget_exceeded_is_fail_safe(config: Config) -> None:
-    """A budget trip on the blended-ask path replies fail-safe, not a crash (#16)."""
-    research = FakeResearch(error=BudgetExceededError("cap reached"))
-    handlers, _, _ = _handlers(config, research=research)
-    say = Recorder()
-    handlers.handle_message(
-        {"user": ALLOWED, "text": "what is raft?", "ts": "7.1"}, say
-    )
-    assert len(say.messages) == 1
-    assert "budget" in say.messages[0].lower()
 
 
 def test_handle_message_ingest_error_is_fail_loud(config: Config) -> None:
@@ -1797,63 +1479,15 @@ def test_render_query_result_no_citations_renders_no_note() -> None:
     assert "no vault sources" not in rendered.lower()
 
 
-def test_render_ask_result_combines_vault_and_web_with_offer() -> None:
-    """render_ask_result lists vault + web sources (concise) and the offer line."""
-    result = _ask_result()
-    rendered = render_ask_result(result)
-    assert rendered.startswith("Raft is a consensus algorithm.")
-    # Both vault and web sources are title-only clickable links (issue #63).
-    assert (
-        "<obsidian://open?vault=pkm-vault&file=concepts%2Fexa-search.md|Exa Search>"
-        in rendered
-    )
-    assert "<https://example.com/raft|Raft>" in rendered
-    assert "Save this answer" in rendered
-    # The offer directs the user to confirm IN THE THREAD (issue #61): a channel-level
-    # 'y' is a new top-level message and would not confirm.
-    assert "in this thread" in rendered
-    assert "[[" not in rendered
-    assert ">: " not in rendered  # no trailing path on any ref (issue #63)
-
-
-def test_render_ask_result_offer_suppressed_when_asked() -> None:
-    """offer_save=False omits the save line (used for an empty/edge answer)."""
-    rendered = render_ask_result(_ask_result(), offer_save=False)
-    assert "Save this answer" not in rendered
-
-
 def test_no_slack_renderer_emits_dead_wikilinks() -> None:
     """No Slack-facing renderer leaks an un-clickable [[wikilink]] (issue #53)."""
     outputs = [
         render_citation(_citation()),
         render_query_result(_result()),
-        render_ask_result(_ask_result()),
         render_ingest_report(_report()),
     ]
     for rendered in outputs:
         assert "[[" not in rendered
-
-
-def test_pending_saves_remember_take_is_one_shot() -> None:
-    """A remembered answer is returned once by take(), then gone."""
-    pending = PendingSaves()
-    result = _ask_result()
-    pending.remember("D1", "explain raft", result)
-    taken = pending.take("D1")
-    assert taken is not None
-    assert taken[0] == "explain raft"
-    assert taken[1] is result
-    # A second take finds nothing.
-    assert pending.take("D1") is None
-
-
-def test_pending_saves_prune_drops_expired_with_injected_clock() -> None:
-    """An offer older than the TTL is pruned and no longer takeable."""
-    clock = {"t": 1000.0}
-    pending = PendingSaves(ttl_seconds=100.0, clock=lambda: clock["t"])
-    pending.remember("D1", "q", _ask_result())
-    clock["t"] = 1101.0  # advance just past the TTL
-    assert pending.take("D1") is None
 
 
 def test_render_ingest_report_is_concise_with_clickable_ref() -> None:
@@ -2164,13 +1798,6 @@ def test_query_renders_concise_sources_no_wikilink(config: Config) -> None:
 def test_render_query_result_has_no_wikilink() -> None:
     """render_query_result keeps #53's concise, no-wikilink Sources block."""
     rendered = render_query_result(_result())
-    assert "*Sources:*" in rendered
-    assert "[[" not in rendered
-
-
-def test_render_ask_result_has_no_wikilink() -> None:
-    """render_ask_result keeps #53's concise Sources block -- no dead wikilink."""
-    rendered = render_ask_result(_ask_result())
     assert "*Sources:*" in rendered
     assert "[[" not in rendered
 

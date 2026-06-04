@@ -222,7 +222,7 @@ def _configure_logging(config: Config) -> None:
     """Configure root logging once at daemon start, honouring ``THOTH_LOG_LEVEL``.
 
     The appliance was silent on the happy path (issue #52): the per-operation success
-    lines emitted by ingest/query/research/intent only surface once the root logger has
+    lines emitted by ingest/query/intent only surface once the root logger has
     a handler. This calls :func:`logging.basicConfig` with the configured level
     (default ``INFO``) so a long-running daemon (``thoth slack``/``mcp``) and the cron
     entrypoints print concise operator-readable progress. An unknown level name falls
@@ -278,10 +278,9 @@ def run_init(namespace: Namespace, config: Config) -> None:
 def run_slack(namespace: Namespace, config: Config) -> None:
     """Construct the ingest/query graph and start the Slack daemon (``thoth slack``).
 
-    Builds the same collaborator graph as :func:`thoth.mcp_server.run` (so Slack
-    free-text questions can blend the web via :class:`~thoth.research.ResearchEngine`)
-    and hands it to :func:`thoth.slack_app.run`, which blocks serving Socket Mode. The
-    heavy imports happen here, not at module load.
+    Builds the same collaborator graph as :func:`thoth.mcp_server.run` and hands it to
+    :func:`thoth.slack_app.run`, which blocks serving Socket Mode. The heavy imports
+    happen here, not at module load.
     """
     from . import slack_app
 
@@ -290,7 +289,6 @@ def run_slack(namespace: Namespace, config: Config) -> None:
         config,
         graph.ingestor,
         graph.query_engine,
-        research=graph.research,
     )
 
 
@@ -709,27 +707,24 @@ def _cron_alerting(where: str, config: Config) -> Iterator[None]:
 
 
 class _Graph:
-    """The constructed ingest/query/research collaborator graph for the Slack daemon."""
+    """The constructed ingest/query collaborator graph for the Slack daemon."""
 
     def __init__(
         self,
         ingestor: Any,
         query_engine: Any,
-        research: Any,
     ) -> None:
         """Store the constructed collaborators."""
         self.ingestor = ingestor
         self.query_engine = query_engine
-        self.research = research
 
 
 def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
-    """Wire the full ingest/query/research collaborator graph from ``config``.
+    """Wire the full ingest/query collaborator graph from ``config``.
 
     Mirrors the graph :func:`thoth.mcp_server.run` builds (vault, llm, extractor,
-    hindsight, git, ingestor, query engine, research engine) so the Slack daemon and the
-    MCP server share one construction shape. All heavy imports are local to this
-    function.
+    hindsight, git, ingestor, query engine) so the Slack daemon and the MCP server share
+    one construction shape. All heavy imports are local to this function.
 
     ``guard`` lets a caller inject an already-built :class:`~thoth.budget.BudgetGuard`
     so the same cap reaches both the LLM (classify/analyse/curate) and Hindsight
@@ -745,7 +740,6 @@ def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
     from .ingest import Ingestor
     from .llm import LLM
     from .query import QueryEngine
-    from .research import ResearchEngine
     from .state import MarkerStore
     from .vault import Vault
 
@@ -778,8 +772,7 @@ def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
         markers=markers,
     )
     query_engine = QueryEngine(config, vault, hindsight, llm)
-    research = ResearchEngine(config, vault, query_engine, extractor, llm)
-    return _Graph(ingestor=ingestor, query_engine=query_engine, research=research)
+    return _Graph(ingestor=ingestor, query_engine=query_engine)
 
 
 def _make_vault(config: Config) -> Any:
