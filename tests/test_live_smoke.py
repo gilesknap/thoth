@@ -242,6 +242,7 @@ def test_live_hindsight_retain_recall_roundtrip(live_config: Config) -> None:
     finally:
         # Per-document delete leaves the live bank clean (best-effort, never raises).
         hindsight.forget(rel_path)
+        hindsight.close()
 
 
 def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> None:
@@ -292,6 +293,7 @@ def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> N
         )
     finally:
         hindsight.forget(rel_path)
+        hindsight.close()
 
 
 def test_live_hindsight_reset_bank_wipes_the_bank(live_config: Config) -> None:
@@ -313,19 +315,22 @@ def test_live_hindsight_reset_bank_wipes_the_bank(live_config: Config) -> None:
     rel_path = f"notes/reset-probe-{token}.md"
     query = f"reset bank wipe probe {token}"
 
-    hindsight.retain(rel_path, f"A reset-bank wipe probe fact tagged {token}.")
-    hits = hindsight.recall(query)
-    assert any(hit.path == rel_path for hit in hits), (
-        f"precondition failed: probe {rel_path!r} not recallable before reset"
-    )
+    try:
+        hindsight.retain(rel_path, f"A reset-bank wipe probe fact tagged {token}.")
+        hits = hindsight.recall(query)
+        assert any(hit.path == rel_path for hit in hits), (
+            f"precondition failed: probe {rel_path!r} not recallable before reset"
+        )
 
-    hindsight.reset_bank()
+        hindsight.reset_bank()
 
-    after = hindsight.recall(query)
-    assert all(hit.path != rel_path for hit in after), (
-        f"reset_bank did not wipe the bank; {rel_path!r} still recallable in "
-        f"{[hit.path for hit in after]!r}"
-    )
+        after = hindsight.recall(query)
+        assert all(hit.path != rel_path for hit in after), (
+            f"reset_bank did not wipe the bank; {rel_path!r} still recallable in "
+            f"{[hit.path for hit in after]!r}"
+        )
+    finally:
+        hindsight.close()
 
 
 # --------------------------------------------------------------------------------------
@@ -426,15 +431,19 @@ def test_live_reindex_incremental_runs(live_config: Config) -> None:
     from thoth.reindex_from_vault import Reindexer
     from thoth.vault import Vault
 
+    hindsight = Hindsight(live_config)
     reindexer = Reindexer(
         config=live_config,
         vault=Vault(live_config),
-        hindsight=Hindsight(live_config),
+        hindsight=hindsight,
     )
-    result = reindexer.run(full_rebuild=False)
-    # changed + skipped account for every page scanned; a non-negative count is success.
-    assert result.changed >= 0
-    assert result.skipped >= 0
+    try:
+        # changed + skipped cover every page scanned; non-negative counts = success.
+        result = reindexer.run(full_rebuild=False)
+        assert result.changed >= 0
+        assert result.skipped >= 0
+    finally:
+        hindsight.close()
 
 
 # --------------------------------------------------------------------------------------
@@ -509,8 +518,11 @@ def test_live_budget_guard_blocks_real_anthropic_call(
     )
     hs_guard.charge(KIND_HINDSIGHT)  # exhaust the single-call budget
     hindsight = Hindsight(live_config, guard=hs_guard)
-    with pytest.raises(BudgetExceededError):
-        hindsight.retain("notes/never-spent.md", "this must be blocked")
+    try:
+        with pytest.raises(BudgetExceededError):
+            hindsight.retain("notes/never-spent.md", "this must be blocked")
+    finally:
+        hindsight.close()
 
 
 # --------------------------------------------------------------------------------------
