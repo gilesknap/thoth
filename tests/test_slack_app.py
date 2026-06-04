@@ -2068,6 +2068,50 @@ def test_responder_update_edits_placeholder_in_place() -> None:
     assert say.messages == []
 
 
+def test_responder_progress_captures_ts_from_non_dict_response() -> None:
+    """progress() reads the ts from a SlackResponse-like object, not just a dict.
+
+    The real ``slack_sdk`` ``WebClient`` returns a ``SlackResponse`` -- dict-*like*
+    (``.get`` works) but NOT a ``dict`` subclass. A regression where progress() gated
+    the ts read on ``isinstance(response, dict)`` silently dropped the placeholder ts
+    against the live client, degrading every in-place edit to a separate message. This
+    pins the duck-typed read so a real-client placeholder is editable.
+    """
+
+    class SlackResponseLike:
+        """Dict-like but not a dict subclass -- mirrors slack_sdk's SlackResponse."""
+
+        def __init__(self, data: dict[str, Any]) -> None:
+            self._data = data
+
+        def get(self, key: str, default: Any = None) -> Any:
+            return self._data.get(key, default)
+
+    class NonDictClient:
+        def __init__(self) -> None:
+            self.updates: list[dict[str, str]] = []
+
+        def chat_postMessage(  # noqa: N802 - SDK name
+            self, *, channel: str, text: str, **kwargs: Any
+        ) -> SlackResponseLike:
+            return SlackResponseLike({"ok": True, "ts": "1700000000.000200"})
+
+        def chat_update(  # noqa: N802 - SDK name
+            self, *, channel: str, ts: str, text: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            self.updates.append({"ts": ts, "text": text})
+            return {"ok": True}
+
+    say = Recorder()
+    client = NonDictClient()
+    responder = Responder(say, client=cast(Any, client), channel="D1")
+    responder.progress(":hourglass_flowing_sand: Filing…")
+    responder.update(":hourglass_flowing_sand: Filing… — indexing")
+    # The ts was captured from the non-dict response, so the edit lands in place.
+    assert [u["ts"] for u in client.updates] == ["1700000000.000200"]
+    assert say.messages == []
+
+
 def test_responder_update_noops_without_placeholder_ts() -> None:
     """With no placeholder ts (post returned none) update() no-ops, never spams."""
     say = Recorder()
