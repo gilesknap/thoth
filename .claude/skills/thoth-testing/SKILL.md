@@ -35,6 +35,20 @@ fails, confirm it passes standalone before treating it as a real regression.
 sees two copies of every type. `build/` is gitignored, so just `rm -rf build`
 and re-run; it is never a real type error.
 
+**Docs inner loop (run after any docs edit).** The docs build is a GATE env, but
+to iterate without the full tox run:
+
+```bash
+uv run --group dev sphinx-build --fresh-env --fail-on-warning --keep-going docs build/html
+```
+
+Two non-obvious points: `dev` is a **dependency-group**, not an extra — `uv run
+--extra dev …` fails with "Extra `dev` is not defined". And `--fail-on-warning`
+is what makes it useful: it turns broken `{doc}` xrefs, **orphaned pages** (a new
+page not in any toctree), and bad cross-references into build failures instead of
+silent warnings. MyST cross-page **markdown** links need the `.md` extension
+(`[x](../reference/configuration.md)`) or a `{doc}` role, or they won't resolve.
+
 ## Rebasing a PR onto main before merge
 
 When `main` has moved under a PR (e.g. a sibling PR merged first), GitHub may
