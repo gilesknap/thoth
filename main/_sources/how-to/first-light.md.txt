@@ -1,7 +1,7 @@
 # First-light smoke checklist
 
 CI exercises every external boundary against an injected fake -- no real Slack,
-Anthropic, Hindsight, MCP, Exa, Firecrawl, Postgres, or git remote is touched (SPEC
+Anthropic, Hindsight, MCP, Firecrawl, Postgres, or git remote is touched (SPEC
 section 12). So the **first time** the appliance runs against the real services (on the
 VPS, after deploy) is the first time those seams are exercised for real. This page is the
 runbook for that *first light*: one happy-path check per real boundary, plus the single
@@ -77,8 +77,7 @@ Then, in the capture channel (from a `SLACK_ALLOWED_USERS` account):
 ```text
 - [ ] post "capture: first light test" -> bot replies IN A THREAD with an obsidian:// link
 - [ ] the page lands in the vault (check `git log` in /opt/pkm-vault)
-- [ ] post "research: what is first light" -> bot replies in-thread and offers to save
-- [ ] reply "y" IN THAT THREAD -> the answer is filed as a notes/ page
+- [ ] post "what is first light" -> bot replies in-thread with a vault-grounded answer
 - [ ] logs show "connected" (Socket Mode) and no auth errors
 ```
 
@@ -96,30 +95,28 @@ Code via `claude mcp add --transport http …`, or claude.ai through the tunnel)
 at it:
 
 ```text
-- [ ] tools/list returns the nine pkm_* tools (pkm_search, pkm_ask, pkm_ingest,
-      pkm_save_answer, pkm_todos, pkm_recent, pkm_write_page, pkm_read_page,
-      pkm_edit_page)
+- [ ] tools/list returns the seven pkm_* tools (pkm_search, pkm_ingest,
+      pkm_todos, pkm_recent, pkm_write_page, pkm_read_page, pkm_edit_page)
 - [ ] pkm_recent (days=7) executes and returns recent pages
 ```
 
-Expected: the nine tools enumerate and `pkm_recent` returns without error. The live suite
+Expected: the seven tools enumerate and `pkm_recent` returns without error. The live suite
 builds the server in-process and asserts the registered tool set:
 
 ```console
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k mcp
 ```
 
-## 5. Exa + Firecrawl -- one search and one extract
+## 5. Firecrawl -- one extract
 
-The blended research path uses Exa for discovery and Firecrawl for extraction.
+URL ingest uses Firecrawl to extract clean markdown from a public page.
 
 ```console
-$ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k "exa or firecrawl"
+$ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k firecrawl
 ```
 
-Expected: the Exa search returns at least one `WebHit`, and the Firecrawl extract returns
-non-empty markdown for a stable public URL. An `ExtractError` mentioning a missing key
-means `EXA_API_KEY` / `FIRECRAWL_API_KEY` is unset.
+Expected: the Firecrawl extract returns non-empty markdown for a stable public URL. An
+`ExtractError` mentioning a missing key means `FIRECRAWL_API_KEY` is unset.
 
 ## 6. Cron entrypoints -- incremental reindex and a summary post
 

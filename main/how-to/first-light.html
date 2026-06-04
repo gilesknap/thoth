@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>First-light smoke checklist &#8212; thoth 0.6.1.dev15+g84f901e04 documentation</title>
+    <title>First-light smoke checklist &#8212; thoth 0.6.1.dev17+g218a49e53 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=5a4dd130"></script>
+    <script src="../_static/documentation_options.js?v=620ae958"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -491,7 +491,7 @@
   <section id="first-light-smoke-checklist">
 <h1>First-light smoke checklist<a class="headerlink" href="#first-light-smoke-checklist" title="Link to this heading">#</a></h1>
 <p>CI exercises every external boundary against an injected fake – no real Slack,
-Anthropic, Hindsight, MCP, Exa, Firecrawl, Postgres, or git remote is touched (SPEC
+Anthropic, Hindsight, MCP, Firecrawl, Postgres, or git remote is touched (SPEC
 section 12). So the <strong>first time</strong> the appliance runs against the real services (on the
 VPS, after deploy) is the first time those seams are exercised for real. This page is the
 runbook for that <em>first light</em>: one happy-path check per real boundary, plus the single
@@ -555,8 +555,7 @@ manifest, turns on Socket Mode, creates the channel, and lists the env vars thot
 <p>Then, in the capture channel (from a <code class="docutils literal notranslate"><span class="pre">SLACK_ALLOWED_USERS</span></code> account):</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] post &quot;capture: first light test&quot; -&gt; bot replies IN A THREAD with an obsidian:// link
 - [ ] the page lands in the vault (check `git log` in /opt/pkm-vault)
-- [ ] post &quot;research: what is first light&quot; -&gt; bot replies in-thread and offers to save
-- [ ] reply &quot;y&quot; IN THAT THREAD -&gt; the answer is filed as a notes/ page
+- [ ] post &quot;what is first light&quot; -&gt; bot replies in-thread with a vault-grounded answer
 - [ ] logs show &quot;connected&quot; (Socket Mode) and no auth errors
 </pre></div>
 </div>
@@ -572,27 +571,25 @@ means the app token lacks Socket Mode, the bot was not invited to the channel, o
 running and a <code class="docutils literal notranslate"><span class="pre">THOTH_MCP_API_KEYS</span></code> bearer set, point a connected client (Claude
 Code via <code class="docutils literal notranslate"><span class="pre">claude</span> <span class="pre">mcp</span> <span class="pre">add</span> <span class="pre">--transport</span> <span class="pre">http</span> <span class="pre">…</span></code>, or claude.ai through the tunnel)
 at it:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] tools/list returns the nine pkm_* tools (pkm_search, pkm_ask, pkm_ingest,
-      pkm_save_answer, pkm_todos, pkm_recent, pkm_write_page, pkm_read_page,
-      pkm_edit_page)
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>- [ ] tools/list returns the seven pkm_* tools (pkm_search, pkm_ingest,
+      pkm_todos, pkm_recent, pkm_write_page, pkm_read_page, pkm_edit_page)
 - [ ] pkm_recent (days=7) executes and returns recent pages
 </pre></div>
 </div>
-<p>Expected: the nine tools enumerate and <code class="docutils literal notranslate"><span class="pre">pkm_recent</span></code> returns without error. The live suite
+<p>Expected: the seven tools enumerate and <code class="docutils literal notranslate"><span class="pre">pkm_recent</span></code> returns without error. The live suite
 builds the server in-process and asserts the registered tool set:</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span>mcp
 </pre></div>
 </div>
 </section>
-<section id="exa-firecrawl-one-search-and-one-extract">
-<h2>5. Exa + Firecrawl – one search and one extract<a class="headerlink" href="#exa-firecrawl-one-search-and-one-extract" title="Link to this heading">#</a></h2>
-<p>The blended research path uses Exa for discovery and Firecrawl for extraction.</p>
-<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span><span class="s2">&quot;exa or firecrawl&quot;</span>
+<section id="firecrawl-one-extract">
+<h2>5. Firecrawl – one extract<a class="headerlink" href="#firecrawl-one-extract" title="Link to this heading">#</a></h2>
+<p>URL ingest uses Firecrawl to extract clean markdown from a public page.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span><span class="nv">THOTH_LIVE_SMOKE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>live<span class="w"> </span>-k<span class="w"> </span>firecrawl
 </pre></div>
 </div>
-<p>Expected: the Exa search returns at least one <code class="docutils literal notranslate"><span class="pre">WebHit</span></code>, and the Firecrawl extract returns
-non-empty markdown for a stable public URL. An <code class="docutils literal notranslate"><span class="pre">ExtractError</span></code> mentioning a missing key
-means <code class="docutils literal notranslate"><span class="pre">EXA_API_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">FIRECRAWL_API_KEY</span></code> is unset.</p>
+<p>Expected: the Firecrawl extract returns non-empty markdown for a stable public URL. An
+<code class="docutils literal notranslate"><span class="pre">ExtractError</span></code> mentioning a missing key means <code class="docutils literal notranslate"><span class="pre">FIRECRAWL_API_KEY</span></code> is unset.</p>
 </section>
 <section id="cron-entrypoints-incremental-reindex-and-a-summary-post">
 <h2>6. Cron entrypoints – incremental reindex and a summary post<a class="headerlink" href="#cron-entrypoints-incremental-reindex-and-a-summary-post" title="Link to this heading">#</a></h2>
@@ -680,7 +677,7 @@ command in CI (or on a dev box) reports all-skipped and passes. Clean up the thr
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hindsight-retain-then-recall-round-trips-with-tag-provenance-recoverable">2. Hindsight – retain then recall round-trips, with tag-provenance recoverable</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-socket-mode-connects-and-a-channel-post-round-trips-capture-reply">3. Slack – Socket Mode connects and a channel post round-trips capture+reply</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-the-pkm-tools-list-and-one-executes-over-the-http-socket">4. MCP – the pkm_* tools list and one executes over the HTTP socket</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exa-firecrawl-one-search-and-one-extract">5. Exa + Firecrawl – one search and one extract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#firecrawl-one-extract">5. Firecrawl – one extract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cron-entrypoints-incremental-reindex-and-a-summary-post">6. Cron entrypoints – incremental reindex and a summary post</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-whole-live-suite">Running the whole live suite</a></li>
 </ul>

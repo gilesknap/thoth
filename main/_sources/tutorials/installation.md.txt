@@ -36,7 +36,7 @@ $ uv sync --extra runtime
 
 `uv sync` creates a `.venv/` and installs thoth as an **editable** install. The base
 install is import-safe and dependency-light; the `runtime` extra adds the live clients
-(`anthropic`, `slack-bolt`, `exa-py`, `firecrawl-py`, `mcp`) that the appliance needs at
+(`anthropic`, `slack-bolt`, `firecrawl-py`, `mcp`) that the appliance needs at
 run time but that CI does not install. Omit `--extra runtime` for a docs/test-only checkout.
 
 Confirm the CLI is on your path:

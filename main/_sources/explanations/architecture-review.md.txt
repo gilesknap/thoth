@@ -59,7 +59,7 @@ load-bearing.
 
 The heavy lifting is already delegated to widely used libraries rather than
 reinvented: `httpx`, `python-dotenv`, `python-frontmatter` + `pyyaml`,
-`anthropic`, `exa-py`, `firecrawl-py`, `mcp`/`FastMCP`, `slack-bolt`, plus stdlib
+`anthropic`, `firecrawl-py`, `mcp`/`FastMCP`, `slack-bolt`, plus stdlib
 `argparse`, `zoneinfo`, `hashlib`, and `importlib.resources`. The dependency list
 is small and the right shape. The review looked specifically for re-implemented
 wheels and found only minor ones (see *FOSS reuse* below) — the reuse discipline
@@ -92,7 +92,7 @@ buckets:
   gateways, browser automation, the shell + Tirith security layer, personas. All
   of these are the *point* of the redesign: they are what keep thoth small,
   auditable, and secure. The general-agent role moved to Claude Code / claude.ai.
-- **Planned but not yet built** — summaries, MCP server, blended web+vault Q&A,
+- **Planned but not yet built** — summaries, MCP server,
   full reindex→Hindsight wiring, system cron + systemd, lint, migration script,
   config backup. These are skeletoned on the Phase-3 branch; the real exposure is
   *unfinished work*, not lost capability.
@@ -112,17 +112,17 @@ matters**. The simplification is well-reasoned.
 Free-text routing over Slack today is a deterministic `if/elif` ladder, not an
 LLM dispatcher: explicit prefixes (`note:` / `capture:` / `save:`), bare URLs,
 and file uploads route to capture; everything else free-text is treated as a
-question. Sonnet *does* make decisions, but only *within* a branch (whether the
-ask path reaches out to the web; how to classify content during ingest) — never
-*across* branches to choose the feature.
+query. Sonnet *does* make decisions, but only *within* a branch (how to
+classify content during ingest) — never *across* branches to choose the feature.
 
 The consequence is a sharp edge: plain prose like "remind me to call the dentist"
-is answered, not filed, unless prefixed. The review judged a natural-language
+is treated as a query, not filed, unless prefixed. The review judged a natural-language
 **intent gate** a good enhancement — *Slack-only* (MCP already exposes explicit
 tools, so the calling agent dispatches there). The chosen design keeps the
-explicit prefixes as deterministic overrides and puts a cheap classifier in front
-of the bare free-text branch only, preserving the deliberate separation between
-the read-only ask engine and the write-capable ingest engine.
+explicit prefixes as deterministic overrides and puts a cheap two-way
+(capture/query) classifier in front of the bare free-text branch only — with
+query as the safe fallback — preserving the deliberate separation between the
+read-only retrieval path and the write-capable ingest engine.
 
 ### Hindsight: embedding, "chunking", and provenance
 

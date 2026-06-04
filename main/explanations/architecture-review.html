@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architecture review notes &#8212; thoth 0.6.1.dev15+g84f901e04 documentation</title>
+    <title>Architecture review notes &#8212; thoth 0.6.1.dev17+g218a49e53 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=5a4dd130"></script>
+    <script src="../_static/documentation_options.js?v=620ae958"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -557,7 +557,7 @@ load-bearing.</p>
 <h3>Lean, well-chosen FOSS reuse<a class="headerlink" href="#lean-well-chosen-foss-reuse" title="Link to this heading">#</a></h3>
 <p>The heavy lifting is already delegated to widely used libraries rather than
 reinvented: <code class="docutils literal notranslate"><span class="pre">httpx</span></code>, <code class="docutils literal notranslate"><span class="pre">python-dotenv</span></code>, <code class="docutils literal notranslate"><span class="pre">python-frontmatter</span></code> + <code class="docutils literal notranslate"><span class="pre">pyyaml</span></code>,
-<code class="docutils literal notranslate"><span class="pre">anthropic</span></code>, <code class="docutils literal notranslate"><span class="pre">exa-py</span></code>, <code class="docutils literal notranslate"><span class="pre">firecrawl-py</span></code>, <code class="docutils literal notranslate"><span class="pre">mcp</span></code>/<code class="docutils literal notranslate"><span class="pre">FastMCP</span></code>, <code class="docutils literal notranslate"><span class="pre">slack-bolt</span></code>, plus stdlib
+<code class="docutils literal notranslate"><span class="pre">anthropic</span></code>, <code class="docutils literal notranslate"><span class="pre">firecrawl-py</span></code>, <code class="docutils literal notranslate"><span class="pre">mcp</span></code>/<code class="docutils literal notranslate"><span class="pre">FastMCP</span></code>, <code class="docutils literal notranslate"><span class="pre">slack-bolt</span></code>, plus stdlib
 <code class="docutils literal notranslate"><span class="pre">argparse</span></code>, <code class="docutils literal notranslate"><span class="pre">zoneinfo</span></code>, <code class="docutils literal notranslate"><span class="pre">hashlib</span></code>, and <code class="docutils literal notranslate"><span class="pre">importlib.resources</span></code>. The dependency list
 is small and the right shape. The review looked specifically for re-implemented
 wheels and found only minor ones (see <em>FOSS reuse</em> below) — the reuse discipline
@@ -590,7 +590,7 @@ knowledge DB, skill ecosystem + curator, multi-provider routing, non-Slack
 gateways, browser automation, the shell + Tirith security layer, personas. All
 of these are the <em>point</em> of the redesign: they are what keep thoth small,
 auditable, and secure. The general-agent role moved to Claude Code / claude.ai.</p></li>
-<li><p><strong>Planned but not yet built</strong> — summaries, MCP server, blended web+vault Q&amp;A,
+<li><p><strong>Planned but not yet built</strong> — summaries, MCP server,
 full reindex→Hindsight wiring, system cron + systemd, lint, migration script,
 config backup. These are skeletoned on the Phase-3 branch; the real exposure is
 <em>unfinished work</em>, not lost capability.</p></li>
@@ -610,16 +610,16 @@ matters</strong>. The simplification is well-reasoned.</p>
 <p>Free-text routing over Slack today is a deterministic <code class="docutils literal notranslate"><span class="pre">if/elif</span></code> ladder, not an
 LLM dispatcher: explicit prefixes (<code class="docutils literal notranslate"><span class="pre">note:</span></code> / <code class="docutils literal notranslate"><span class="pre">capture:</span></code> / <code class="docutils literal notranslate"><span class="pre">save:</span></code>), bare URLs,
 and file uploads route to capture; everything else free-text is treated as a
-question. Sonnet <em>does</em> make decisions, but only <em>within</em> a branch (whether the
-ask path reaches out to the web; how to classify content during ingest) — never
-<em>across</em> branches to choose the feature.</p>
+query. Sonnet <em>does</em> make decisions, but only <em>within</em> a branch (how to
+classify content during ingest) — never <em>across</em> branches to choose the feature.</p>
 <p>The consequence is a sharp edge: plain prose like “remind me to call the dentist”
-is answered, not filed, unless prefixed. The review judged a natural-language
+is treated as a query, not filed, unless prefixed. The review judged a natural-language
 <strong>intent gate</strong> a good enhancement — <em>Slack-only</em> (MCP already exposes explicit
 tools, so the calling agent dispatches there). The chosen design keeps the
-explicit prefixes as deterministic overrides and puts a cheap classifier in front
-of the bare free-text branch only, preserving the deliberate separation between
-the read-only ask engine and the write-capable ingest engine.</p>
+explicit prefixes as deterministic overrides and puts a cheap two-way
+(capture/query) classifier in front of the bare free-text branch only — with
+query as the safe fallback — preserving the deliberate separation between the
+read-only retrieval path and the write-capable ingest engine.</p>
 </section>
 <section id="hindsight-embedding-chunking-and-provenance">
 <h3>Hindsight: embedding, “chunking”, and provenance<a class="headerlink" href="#hindsight-embedding-chunking-and-provenance" title="Link to this heading">#</a></h3>
