@@ -1,0 +1,33 @@
+# .dockerignore — the build stage does `COPY . /app`, so keep the build context
+# lean: virtualenvs, caches, test/docs build artefacts, the Helm chart, the test
+# suite, local secrets and editor/agent state never belong in the image.
+#
+# IMPORTANT: .git is intentionally NOT ignored. setuptools_scm derives the package
+# version from the git history during `uv sync`, so the .git directory MUST be in the
+# build context (CI checks out with fetch-depth: 0 for the same reason). Do not add
+# .git here.
+
+# Python virtualenvs / build outputs
+.venv
+build/
+dist/
+*.egg-info
+
+# Test / lint / type-check caches
+.tox
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+
+# Node (docs/tooling) and rendered docs
+node_modules
+docs/_build
+
+# Helm chart and tests are not needed in the runtime image
+Charts/
+tests/
+
+# Local secrets and editor / agent state
+.env
+.claude/

@@ -19,18 +19,25 @@ RUN chmod o+wrX .
 # Tell uv sync to install python in a known location so we can copy it out later
 ENV UV_PYTHON_INSTALL_DIR=/python
 
-# Sync the project without its dev dependencies
+# Sync the project without its dev dependencies, but WITH the runtime extra
+# (anthropic, slack-bolt, mcp, uvicorn, starlette, pyjwt[crypto], firecrawl-py,
+# pillow) so the slack / mcp / hindsight workloads have their clients in the image.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-editable --no-dev --managed-python
+    uv sync --locked --no-editable --no-dev --managed-python --extra runtime
 
 
 # The runtime stage copies the built venv into a runtime container
 FROM ubuntu:noble AS runtime
 
-# Add apt-get system dependecies for runtime here if needed
-# RUN apt-get update -y && apt-get install -y --no-install-recommends \
-#     some-library \
-#     && apt-get dist-clean
+# Runtime system dependencies: git + ca-certificates are needed by the vault git
+# wrappers (bin/vault-pull / bin/vault-commit) to pull/commit/push the Obsidian
+# vault over HTTPS using a GITHUB_PKM_VAULT_TOKEN inline credential helper. No gh
+# CLI is required (the helper feeds the token directly), and audio/whisper/hindsight
+# native deps are deliberately out of scope for this image.
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the python installation from the build stage
 COPY --from=build /python /python
@@ -38,6 +45,11 @@ COPY --from=build /python /python
 # Copy the environment, but not the source code
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH
+
+# Put the vault git wrappers on PATH (the runtime stage is a fresh FROM, so copy
+# them from the build stage's checked-out context). COPY preserves their executable
+# bit from the source tree.
+COPY --from=build /app/bin/vault-pull /app/bin/vault-commit /usr/local/bin/
 
 # change this entrypoint if it is not the same as the repo
 ENTRYPOINT ["thoth"]
