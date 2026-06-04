@@ -534,8 +534,10 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
     todo/overdue logic lives in exactly one place): open actions come from
     :meth:`~thoth.summary.SummaryEngine.open_actions`, with overdue items flagged via
     :meth:`~thoth.summary.SummaryEngine.overdue_actions`. Each item is rendered with its
-    status, due date, priority, and ``[[wikilink]]``. Done/cancelled actions are left
-    out unless ``include_done`` is true.
+    harness-built ``[title](obsidian-uri)`` link plus the plain vault path and the
+    ``[[wikilink]]`` (the MCP citation style the other tools use), then its status, due
+    date and priority. Done/cancelled actions are left out unless ``include_done`` is
+    true.
 
     Args:
         ctx: The injected collaborator bundle.
@@ -568,8 +570,8 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         lines.append("")
         lines.append("**Done/closed:**")
         lines.extend(
-            f"- {wikilink} {title} (status: {status})"
-            for title, status, wikilink in closed
+            f"- [{title}]({uri}) - `{path}` {wikilink} (status: {status})"
+            for title, status, wikilink, path, uri in closed
         )
 
     return ToolResult(
@@ -578,15 +580,15 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         data={
             "open": [item.path for item in open_actions],
             "overdue": sorted(overdue_paths),
-            "closed": [wikilink for _, _, wikilink in closed],
+            "closed": [wikilink for _, _, wikilink, _, _ in closed],
         },
     )
 
 
 def _scan_closed_actions(
     vault: Vault, *, open_statuses: set[str]
-) -> list[tuple[str, str, str]]:
-    """Read ``actions/*.md`` and return ``(title, status, wikilink)`` for closed items.
+) -> list[tuple[str, str, str, str, str]]:
+    """Read ``actions/*.md``; return ``(title, status, wikilink, path, obsidian_uri)``.
 
     A closed action is one whose frontmatter ``status`` is not in ``open_statuses`` (the
     open-action logic itself lives in :class:`thoth.summary.SummaryEngine`; this is the
@@ -597,7 +599,7 @@ def _scan_closed_actions(
     directory = vault.root / "actions"
     if not directory.is_dir():
         return []
-    closed: list[tuple[str, str, str]] = []
+    closed: list[tuple[str, str, str, str, str]] = []
     for entry in sorted(directory.glob("*.md")):
         rel = f"actions/{entry.name}"
         try:
@@ -613,19 +615,37 @@ def _scan_closed_actions(
         title = title_value if isinstance(title_value, str) and title_value else slug
         # Match SummaryEngine's folder-qualified wikilink form ([[actions/<slug>]]) so
         # the open and closed sections render identically.
-        closed.append((title, status, f"[[{rel.removesuffix('.md')}]]"))
+        closed.append(
+            (
+                title,
+                status,
+                f"[[{rel.removesuffix('.md')}]]",
+                rel,
+                vault.obsidian_uri(rel),
+            )
+        )
     return closed
 
 
 def _render_action(item: Any, *, overdue: bool) -> str:
-    """Render one action item as a Markdown bullet with status/due/priority/wikilink."""
+    """Render one action item as a Markdown bullet: link, path, wikilink, then status.
+
+    Matches the other tools' MCP citation style -- ``[title](obsidian-uri)`` plus the
+    plain vault path and the ``[[wikilink]]`` -- so the action stays usable when a host
+    will not make the custom ``obsidian://`` scheme clickable (SPEC Appendix). The link
+    target is the harness-built ``obsidian_uri`` carried on the ``ActionItem``; this
+    never constructs an ``obsidian://`` URI itself.
+    """
     bits: list[str] = [f"status: {item.status}"]
     if item.priority:
         bits.append(f"priority: {item.priority}")
     if item.due_date is not None:
         due = item.due_date.isoformat()
         bits.append(f"due: {due}{' (OVERDUE)' if overdue else ''}")
-    return f"- {item.wikilink} {item.title} ({', '.join(bits)})"
+    return (
+        f"- [{item.title}]({item.obsidian_uri}) - `{item.path}` "
+        f"{item.wikilink} ({', '.join(bits)})"
+    )
 
 
 def pkm_recent(ctx: ToolContext, *, days: int = 7, limit: int = 20) -> ToolResult:
