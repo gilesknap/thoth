@@ -14,7 +14,7 @@ true way to set it up — there is no migration path to preserve.
 
 ```text
                +----------------------- VPS (user: pkm) ------------------------+
-Slack  <-----> | thoth-slack.service  --(127.0.0.1:9277)-->  thoth-hindsight    |
+Slack  <-----> | thoth-slack.service  --(127.0.0.1:8888)-->  thoth-hindsight    |
 (private       |   (capture / retrieve)                      (semantic index)   |
  channel)      |        |                                                       |
                |        v   whisper | Firecrawl | Claude                        |
@@ -103,36 +103,41 @@ remote using the token from step 6 (never SSH, never a token-in-URL). If you are
 
 ## 4. Install the semantic index (Hindsight)
 
-[Hindsight](https://hindsight.vectorize.io) is the rebuildable vector index. Install its
-CLI **as `pkm`** with `uv tool` (it lands in `~/.local/bin`):
+[Hindsight](https://hindsight.vectorize.io) is the rebuildable vector index. thoth talks to
+it as a standalone **`hindsight-api`** HTTP server; install it **as `pkm`** with `uv tool`
+(it lands in `~/.local/bin`):
 
 ```bash
 # as pkm
-uv tool install hindsight-embed
-hindsight-embed --version          # e.g. hindsight-embed v0.7.1
+uv tool install hindsight-api
+hindsight-api --version
 ```
 
-Create the **`thoth` profile** on port **9277** (the port the Slack daemon talks to), with
-the LLM provider that does the embedding/fact-extraction. thoth's deployment uses Gemini:
+The server reads its LLM provider config (the backend that does embedding/fact-extraction)
+from the environment; thoth's deployment uses Gemini. Put the `HINDSIGHT_API_*` env in a
+locked-down EnvironmentFile that only the service reads (the `thoth-hindsight.service` unit
+references it, so the Gemini key never lands in thoth's own `.env`):
 
 ```bash
-# as pkm — paste your Gemini key (step 6) as the API key
-hindsight-embed profile create thoth --port 9277 \
-  --env HINDSIGHT_API_LLM_PROVIDER=gemini \
-  --env HINDSIGHT_API_LLM_MODEL=gemini-2.5-flash \
-  --env HINDSIGHT_API_LLM_API_KEY=<your-gemini-key>
+# as pkm — ~/.hindsight/api.env, chmod 600
+install -d -m700 ~/.hindsight
+cat > ~/.hindsight/api.env <<'EOF'
+HINDSIGHT_API_LLM_PROVIDER=gemini
+HINDSIGHT_API_LLM_MODEL=gemini-2.5-flash
+HINDSIGHT_API_LLM_API_KEY=<your-gemini-key>
+EOF
+chmod 600 ~/.hindsight/api.env
 ```
 
-This writes `~/.hindsight/profiles/thoth.env` (chmod 600 — the key lives only there, not in
-thoth's `.env`). The bank id is also `thoth` (a positional arg on every `memory
-retain`/`recall`). You do **not** start the daemon by hand — the `thoth-hindsight.service`
-unit (step 7) owns its lifecycle.
+You do **not** start the server by hand — the `thoth-hindsight.service` unit (step 7) owns
+its lifecycle and runs it as `hindsight-api --host 127.0.0.1 --port 8888`. The bank id is
+`thoth` (a path segment on every retain/recall/forget).
 
 ```{note}
 The exact provider/model strings follow the live deployment; check the
-[Hindsight CLI docs](https://hindsight.vectorize.io/sdks/cli) if you want a different
-embedding backend. thoth only requires: binary `hindsight-embed` on PATH, profile `thoth`,
-bank `thoth`, daemon reachable at `127.0.0.1:9277`.
+[Hindsight docs](https://hindsight.vectorize.io) if you want a different embedding backend.
+thoth only requires: `hindsight-api` on PATH, bank `thoth`, and the server reachable at the
+`THOTH_HINDSIGHT_BASE_URL` (default `http://127.0.0.1:8888`).
 ```
 
 ## 5. Install audio transcription (Whisper) — optional
@@ -190,8 +195,7 @@ Fill in these variables. **Where to get each key:**
 | `PKM_VAULT` | yes | Vault path — `/opt/pkm-vault`. |
 | `OBSIDIAN_VAULT_NAME` | yes | The vault folder name (`pkm-vault`); used to build `obsidian://` links. |
 | `THOTH_HOME` | yes | `/home/pkm/.thoth` (state, manifest). |
-| `THOTH_HINDSIGHT_BINARY` | yes | `/home/pkm/.local/bin/hindsight-embed` (from step 4). |
-| `THOTH_HINDSIGHT_PROFILE` | yes | `thoth`. |
+| `THOTH_HINDSIGHT_BASE_URL` | no | Base URL of the `hindsight-api` server (step 4). Default `http://127.0.0.1:8888`. |
 | `THOTH_HINDSIGHT_BANK` | yes | `thoth`. |
 | `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate. |
 | `ANTHROPIC_MODEL` | no | Override the default model for all calls. `THOTH_ANALYSE_MODEL` (vision), `THOTH_DIAGRAM_MODEL` (Excalidraw, worth an Opus), and `THOTH_INTENT_MODEL` (the intent gate, a cheap Haiku) override per-call. |
@@ -211,8 +215,8 @@ from a manifest, enables Socket Mode, mints both tokens, and creates the capture
 ```{warning}
 `~/.thoth/.env` holds every secret. It is `chmod 600`, owned by `pkm`, and **must never be
 committed** to either repo. The only other place a secret lives is Hindsight's
-`~/.hindsight/profiles/thoth.env`. Keep a copy of both in your password manager — that is the
-*only* backup of your secrets ({doc}`recovery`).
+`~/.hindsight/api.env` (the Gemini key for the index server, step 4). Keep a copy of both in
+your password manager — that is the *only* backup of your secrets ({doc}`recovery`).
 ```
 
 ## 7. Install and enable the systemd units + cron

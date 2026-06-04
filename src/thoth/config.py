@@ -34,6 +34,9 @@ Documented defaults (the single source of truth):
   then falls back to :data:`thoth.intent.DEFAULT_INTENT_MODEL` (a cheap Haiku). The gate
   is a one-shot routing call, so a cheap model is the point; override it to re-tier the
   gate without a redeploy.
+* ``THOTH_HINDSIGHT_BASE_URL`` defaults to :data:`DEFAULT_HINDSIGHT_BASE_URL`
+  (``http://127.0.0.1:8888``) -- the standalone ``hindsight-api`` server the
+  :mod:`thoth.hindsight` HTTP client talks to.
 * ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``); the daemon
   entrypoint passes it to :func:`logging.basicConfig` so the appliance is no longer
   silent on the happy path (issue #52).
@@ -72,6 +75,13 @@ without code changes; set ``THOTH_LOG_LEVEL=DEBUG`` for more, ``WARNING`` for le
 
 DEFAULT_THOTH_HOME: Path = Path.home() / ".thoth"
 """Default ``~/.thoth`` home, computed at import time (tests monkeypatch ``HOME``)."""
+
+DEFAULT_HINDSIGHT_BASE_URL: str = "http://127.0.0.1:8888"
+"""Default ``hindsight-api`` base URL; ``THOTH_HINDSIGHT_BASE_URL`` overrides it.
+
+The Hindsight seam (:mod:`thoth.hindsight`) is an HTTP client to a standalone
+``hindsight-api`` server, by default the loopback instance on ``:8888``.
+"""
 
 DEFAULT_DAILY_LLM_BUDGET: int = 200
 """Default combined daily LLM call budget (issue #16), sized for personal use.
@@ -132,6 +142,7 @@ class Config:
     slack_capture_channel: str | None
     firecrawl_api_key: str | None
     gemini_api_key: str | None
+    hindsight_base_url: str
     daily_llm_budget: int
     image_resize_threshold_bytes: int
     max_analyse_images: int
@@ -426,6 +437,8 @@ def load_config(
         slack_capture_channel=lookup("SLACK_CAPTURE_CHANNEL"),
         firecrawl_api_key=lookup("FIRECRAWL_API_KEY"),
         gemini_api_key=lookup("GEMINI_API_KEY"),
+        hindsight_base_url=lookup("THOTH_HINDSIGHT_BASE_URL")
+        or DEFAULT_HINDSIGHT_BASE_URL,
         daily_llm_budget=_int_opt(
             lookup("THOTH_DAILY_LLM_BUDGET"),
             default=DEFAULT_DAILY_LLM_BUDGET,

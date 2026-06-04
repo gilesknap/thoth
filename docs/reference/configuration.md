@@ -54,9 +54,8 @@ and so on). Blank counts as unset.
 |---|---|---|
 | `FIRECRAWL_API_KEY` | Firecrawl URL→Markdown key. Blank = vault-only. | — |
 | `GEMINI_API_KEY` | Gemini key for the Hindsight semantic index (embeddings + fact-extraction). | — |
-| `THOTH_HINDSIGHT_BINARY` | Path to the `hindsight-embed` CLI. | `hindsight` |
-| `THOTH_HINDSIGHT_PROFILE` | Named Hindsight profile (carries the index LLM key/port). | — |
-| `THOTH_HINDSIGHT_BANK` | Hindsight bank id (positional on retain/recall). | `thoth` |
+| `THOTH_HINDSIGHT_BASE_URL` | Base URL of the standalone `hindsight-api` HTTP server. | `http://127.0.0.1:8888` |
+| `THOTH_HINDSIGHT_BANK` | Hindsight bank id (a path segment on retain/recall/forget). | `thoth` |
 
 ## Vault git sync
 

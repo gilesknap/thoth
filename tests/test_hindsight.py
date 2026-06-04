@@ -1,118 +1,130 @@
 """Tests for :mod:`thoth.hindsight`.
 
-Every test isolates the external boundary: no real ``hindsight`` binary, no Postgres,
-no Gemini. A :class:`RecordingRunner` fake stands in for the
-:class:`~thoth.hindsight.SubprocessRunner` seam, recording the argv it is handed and
-returning a canned :class:`subprocess.CompletedProcess` (or raising), so the tests
-assert on the exact command line the wrapper builds, on how it classifies the result,
-and on the bounded retry around the checked calls -- all without spawning a process.
+Every test isolates the external boundary: no real ``hindsight-api`` server, no
+Postgres, no Gemini, and no socket. A :class:`RecordingTransport` fake stands in for
+the :class:`httpx.BaseTransport` seam, recording each :class:`httpx.Request` it is
+handed and returning a canned :class:`httpx.Response` (a chosen status + JSON, or
+raising a transport error), so the tests assert on the exact URL/body the client
+builds, on how it classifies the response, and on the bounded retry around the checked
+calls -- all without opening a connection.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-from collections.abc import Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 import pytest
 
 from thoth.config import Config, load_config
 from thoth.hindsight import (
     DEFAULT_BANK,
-    DEFAULT_BINARY,
-    FORGET_SUBCOMMAND,
-    RECALL_SUBCOMMAND,
-    RETAIN_SUBCOMMAND,
+    DEFAULT_BASE_URL,
     SOURCE_SENTINEL,
     Hindsight,
     HindsightError,
     HindsightTransientError,
     RecallHit,
-    base_args,
-    default_runner,
     parse_recall,
     retain_text,
 )
 
+Handler = Callable[[httpx.Request], httpx.Response]
+
 
 @dataclass
-class RecordingRunner:
-    """A fake :class:`~thoth.hindsight.SubprocessRunner` for tests.
+class RecordingTransport:
+    """A recording :class:`httpx.MockTransport` wrapper for tests.
 
-    It records every ``argv`` (and ``timeout``) it is called with and returns a
-    canned :class:`subprocess.CompletedProcess`, so a test can assert on the exact
-    command line built and on how the wrapper classifies the canned result.
+    Wraps an :class:`httpx.MockTransport` around a handler that records every
+    :class:`httpx.Request` it sees (so a test can assert on the exact method, URL, and
+    JSON body the client built) and returns a canned :class:`httpx.Response`. The
+    handler may instead raise to simulate a transport error.
 
     Attributes:
-        returncode: The exit code the canned result carries.
-        stdout: The canned standard output.
-        stderr: The canned standard error.
-        calls: Every ``argv`` list seen, in call order.
-        timeouts: Every ``timeout`` seen, in call order.
+        handler: Maps a recorded request to its canned response (or raises).
+        requests: Every :class:`httpx.Request` seen, in call order.
     """
 
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
-    calls: list[list[str]] = field(default_factory=list)
-    timeouts: list[float] = field(default_factory=list)
+    handler: Handler
+    requests: list[httpx.Request] = field(default_factory=list)
 
-    def __call__(
-        self, argv: Sequence[str], *, timeout: float
-    ) -> subprocess.CompletedProcess[str]:
-        """Record the call and return the canned completed process."""
-        self.calls.append(list(argv))
-        self.timeouts.append(timeout)
-        return subprocess.CompletedProcess(
-            args=list(argv),
-            returncode=self.returncode,
-            stdout=self.stdout,
-            stderr=self.stderr,
-        )
+    def __post_init__(self) -> None:
+        """Build the wrapped :class:`httpx.MockTransport`."""
+        self._mock = httpx.MockTransport(self._dispatch)
+
+    def _dispatch(self, request: httpx.Request) -> httpx.Response:
+        """Record the request, then delegate to the test's handler."""
+        # Read the body now so ``request.content`` is materialised for later assertions.
+        _ = request.content
+        self.requests.append(request)
+        return self.handler(request)
 
     @property
-    def last(self) -> list[str]:
-        """The most recently recorded argv."""
-        return self.calls[-1]
+    def transport(self) -> httpx.MockTransport:
+        """The wrapped transport to hand :class:`Hindsight`."""
+        return self._mock
+
+    @property
+    def last(self) -> httpx.Request:
+        """The most recently recorded request."""
+        return self.requests[-1]
+
+    @property
+    def last_json(self) -> object:
+        """The decoded JSON body of the most recently recorded request."""
+        return json.loads(self.last.content)
+
+
+def _ok(payload: object | None = None, *, status: int = 200) -> Handler:
+    """A handler that always returns ``status`` with an optional JSON ``payload``."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload if payload is not None else {})
+
+    return handler
+
+
+def _status(code: int, *, body: str = "boom") -> Handler:
+    """A handler that always returns ``code`` with a plain-text ``body``."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(code, text=body)
+
+    return handler
 
 
 @dataclass
-class ScriptedRunner:
-    """A runner that replays a scripted sequence of outcomes, recording every call.
+class ScriptedHandler:
+    """Replay a scripted sequence of outcomes, recording the request count.
 
-    Each entry is either an ``int`` exit code (returned as a completed process with that
-    ``returncode``) or an :class:`Exception` instance (raised, to simulate a spawn
-    error). The last entry is reused once the script is exhausted, so a single
-    success-or-failure can be repeated indefinitely.
+    Each entry is either an ``int`` HTTP status (returned with a plain-text body) or an
+    :class:`Exception` instance (raised, to simulate a transport error). The last entry
+    is reused once the script is exhausted, so a single outcome can repeat indefinitely.
 
     Attributes:
-        script: The outcomes to replay in order (exit code or exception to raise).
-        stdout: The canned stdout for the completed-process outcomes.
-        calls: Every ``argv`` list seen, in call order.
+        script: The outcomes to replay in order (HTTP status or exception to raise).
+        json_body: The JSON body returned with a 2xx status outcome.
+        count: How many requests have been dispatched.
     """
 
     script: list[int | Exception]
-    stdout: str = ""
-    calls: list[list[str]] = field(default_factory=list)
+    json_body: object = field(default_factory=dict)
+    count: int = 0
 
-    def __call__(
-        self, argv: Sequence[str], *, timeout: float
-    ) -> subprocess.CompletedProcess[str]:
-        """Record the call and replay the next scripted outcome (or raise it)."""
-        self.calls.append(list(argv))
-        index = min(len(self.calls) - 1, len(self.script) - 1)
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        """Replay the next scripted outcome (or raise it)."""
+        index = min(self.count, len(self.script) - 1)
+        self.count += 1
         outcome = self.script[index]
         if isinstance(outcome, Exception):
             raise outcome
-        return subprocess.CompletedProcess(
-            args=list(argv),
-            returncode=outcome,
-            stdout=self.stdout,
-            stderr="boom",
-        )
+        if outcome < 400:
+            return httpx.Response(outcome, json=self.json_body)
+        return httpx.Response(outcome, text="boom")
 
 
 @pytest.fixture
@@ -123,106 +135,82 @@ def config(tmp_path: Path) -> Config:
 
 def _make(
     config: Config,
-    runner: RecordingRunner | ScriptedRunner,
+    handler: Handler,
     *,
     timeout: float = 120.0,
     retries: int = 3,
-) -> Hindsight:
-    """Build a :class:`Hindsight` on a recording/scripted runner (zero backoff)."""
-    return Hindsight(
+) -> tuple[Hindsight, RecordingTransport]:
+    """Build a :class:`Hindsight` on a recording transport (zero backoff).
+
+    Returns the client and the recording transport so a test can assert on the requests.
+    """
+    recorder = RecordingTransport(handler)
+    hs = Hindsight(
         config,
-        runner=runner,
+        transport=recorder.transport,
         timeout=timeout,
         retries=retries,
         retry_wait_initial=0.0,
         retry_wait_max=0.0,
     )
+    return hs, recorder
 
 
-def _json_recall(*records: dict[str, object]) -> str:
-    """Render a ``-o json`` recall payload (a bare list of hit records)."""
-    return json.dumps(list(records))
+def _bank_prefix(bank: str = DEFAULT_BANK) -> str:
+    """The expected ``/v1/default/banks/{bank}`` URL path prefix."""
+    return f"/v1/default/banks/{bank}"
 
 
 # --------------------------------------------------------------------------- #
-# Official CLI surface: binary `hindsight`, profile via -p, bank positional.
+# Construction / defaults.
 # --------------------------------------------------------------------------- #
 
 
-def test_default_binary_and_bank_match_official_surface() -> None:
-    """The binary is `hindsight` and the bank is `thoth` (renamed off hermes)."""
-    assert DEFAULT_BINARY == "hindsight"
+def test_default_base_url_and_bank(config: Config) -> None:
+    """The base URL defaults to the standalone server and the bank to ``thoth``."""
+    assert DEFAULT_BASE_URL == "http://127.0.0.1:8888"
     assert DEFAULT_BANK == "thoth"
-
-
-def test_base_args_is_binary_only_without_a_profile() -> None:
-    """Without a profile, base_args is just the binary -- bank is NOT in the prefix."""
-    assert base_args() == ("hindsight",)
-    # `-p` is the profile, never the bank.
-    assert "-p" not in base_args()
-
-
-def test_base_args_includes_profile_when_supplied() -> None:
-    """A profile is emitted as `-p <profile>` (the profile, not the bank)."""
-    assert base_args(profile="work") == ("hindsight", "-p", "work")
-
-
-def test_binary_and_profile_are_env_overridable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """THOTH_HINDSIGHT_BINARY / _PROFILE re-point the prefix (VPS reconcile seam)."""
-    monkeypatch.setenv("THOTH_HINDSIGHT_BINARY", "hindsight-embed")
-    monkeypatch.setenv("THOTH_HINDSIGHT_PROFILE", "prod")
-    assert base_args() == ("hindsight-embed", "-p", "prod")
+    hs = Hindsight(config)
+    assert hs.base_url == config.hindsight_base_url
+    assert hs.bank == DEFAULT_BANK
 
 
 def test_bank_is_env_overridable(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """THOTH_HINDSIGHT_BANK overrides the positional bank id."""
+    """THOTH_HINDSIGHT_BANK overrides the bank path segment."""
     monkeypatch.setenv("THOTH_HINDSIGHT_BANK", "otherbank")
     hs = Hindsight(config)
     assert hs.bank == "otherbank"
 
 
-def test_base_args_and_bank_overrides_are_honoured(config: Config) -> None:
-    """Per-instance base_args + bank overrides re-point the CLI surface (VPS seam)."""
-    runner = RecordingRunner(stdout="[]")
-    hs = Hindsight(
-        config, base_args=("hindsight-embed", "-p", "prof"), bank="b1", runner=runner
+def test_base_url_and_bank_overrides_are_honoured(config: Config) -> None:
+    """Per-instance base_url + bank overrides re-point the request URL."""
+    hs, recorder = _make(config, _ok({"results": []}))
+    hs_override = Hindsight(
+        config,
+        base_url="http://example.test:9000",
+        bank="b1",
+        transport=recorder.transport,
+        retry_wait_initial=0.0,
+        retry_wait_max=0.0,
     )
-    assert hs.base_args == ("hindsight-embed", "-p", "prof")
-    assert hs.bank == "b1"
-    hs.recall("anything")
-    # The prefix is the override, then the verb tokens, then the positional bank id.
-    assert runner.last[:3] == ["hindsight-embed", "-p", "prof"]
-    assert runner.last[3 : 3 + len(RECALL_SUBCOMMAND)] == list(RECALL_SUBCOMMAND)
-    assert runner.last[3 + len(RECALL_SUBCOMMAND)] == "b1"
+    assert hs_override.base_url == "http://example.test:9000"
+    assert hs_override.bank == "b1"
+    hs_override.recall("anything")
+    assert recorder.last.url.host == "example.test"
+    assert recorder.last.url.path == f"{_bank_prefix('b1')}/memories/recall"
 
 
-def test_no_hermes_bank_reference_remains_in_module() -> None:
-    """No `hermes` *bank* reference survives in the module source (#9).
-
-    The only tolerated mention is the VPS-reconciliation note that the box currently has
-    the binary installed under the hermes *user* (a deployment fact, not the bank). A
-    bank-shaped reference -- a quoted ``"hermes"`` / ``'hermes'`` literal, ``bank
-    hermes``, or ``-p hermes`` (the old, wrong "profile == bank" spelling) -- is gone.
-    """
-    import thoth.hindsight as module
-
-    source = Path(module.__file__).read_text(encoding="utf-8").lower()
-    for forbidden in (
-        '"hermes"',
-        "'hermes'",
-        "bank hermes",
-        "-p hermes",
-        "bank_id: hermes",
-    ):
-        assert forbidden not in source, f"stale hermes bank reference: {forbidden!r}"
+def test_context_manager_closes_client(config: Config) -> None:
+    """The client is usable as a context manager and closes on exit."""
+    recorder = RecordingTransport(_ok({"results": []}))
+    with Hindsight(config, transport=recorder.transport) as hs:
+        assert hs.recall("q") == []
 
 
 # --------------------------------------------------------------------------- #
-# retain_text / parse_recall (pure helpers).
+# parse_recall / retain_text (pure helpers operating on the parsed dict).
 # --------------------------------------------------------------------------- #
 
 
@@ -233,110 +221,147 @@ def test_retain_text_prefixes_exactly_one_source_line() -> None:
     assert lines[0] == f"{SOURCE_SENTINEL} entities/foo.md"
     assert lines[1] == ""
     assert lines[2] == "Foo is a thing."
-    # Exactly one SOURCE: line in the whole blob.
     assert blob.count(SOURCE_SENTINEL) == 1
 
 
-def test_parse_recall_prefers_the_rel_tag_over_the_sentinel() -> None:
-    """The vault path is recovered from each hit's `rel` tag (primary channel, #7)."""
-    # The hit text is post-extraction atomic facts with NO SOURCE: line; the path
-    # survives only because it is tagged.
-    stdout = _json_recall(
-        {"text": "Foo is a coordinator.", "tags": ["entity", "entities/foo.md"]},
-        {"text": "Bar relates to CAP.", "tags": ["concept", "concepts/bar.md"]},
-    )
-    hits = parse_recall(stdout)
+def test_parse_recall_recovers_path_from_document_id() -> None:
+    """The PRIMARY channel: the hit's echoed ``document_id`` yields the vault path."""
+    payload: dict[str, object] = {
+        "results": [
+            {"text": "Foo is a coordinator.", "document_id": "entities/foo.md"},
+            {"text": "Bar relates to CAP.", "document_id": "concepts/bar.md"},
+        ]
+    }
+    hits = parse_recall(payload)
     assert [h.path for h in hits] == ["entities/foo.md", "concepts/bar.md"]
     assert all(isinstance(h, RecallHit) for h in hits)
 
 
-def test_parse_recall_recovers_the_page_type_tag() -> None:
-    """Each hit carries its page-type tag (the non-path tag) for scoping (#40)."""
-    stdout = _json_recall(
-        {"text": "Foo.", "tags": ["entity", "entities/foo.md"]},
-        {"text": "A memory.", "tags": ["memory", "memories/wifi.md"]},
-        {"text": "typed.", "tags": ["type:concept", "concepts/bar.md"]},
-    )
-    hits = parse_recall(stdout)
+def test_parse_recall_recovers_path_from_chunk_map() -> None:
+    """Channel 2: the hit's ``chunk_id`` resolves through the top-level ``chunks{}``."""
+    payload: dict[str, object] = {
+        "results": [{"text": "atomic fact", "chunk_id": "c1"}],
+        "chunks": {"c1": {"document_id": "entities/foo.md"}},
+    }
+    assert [h.path for h in parse_recall(payload)] == ["entities/foo.md"]
+
+
+def test_parse_recall_chunk_map_falls_back_to_context() -> None:
+    """The chunk entry's ``context`` resolves the path absent a ``document_id``."""
+    payload: dict[str, object] = {
+        "results": [{"text": "fact", "chunk_id": "c1"}],
+        "chunks": {"c1": {"context": "concepts/bar.md"}},
+    }
+    assert [h.path for h in parse_recall(payload)] == ["concepts/bar.md"]
+
+
+def test_parse_recall_recovers_path_from_context() -> None:
+    """Channel 3: the hit's echoed ``context`` yields the vault path."""
+    payload: dict[str, object] = {
+        "results": [{"text": "fact", "context": "memories/wifi.md"}],
+    }
+    assert [h.path for h in parse_recall(payload)] == ["memories/wifi.md"]
+
+
+def test_parse_recall_falls_back_to_sentinel_in_text() -> None:
+    """Channel 4: the ``SOURCE:`` line surviving in the hit text recovers the path."""
+    payload: dict[str, object] = {
+        "results": [
+            {"text": "SOURCE: entities/foo.md\n\nFoo is a thing."},
+            {"text": "no channel at all -> dropped"},
+        ]
+    }
+    assert [h.path for h in parse_recall(payload)] == ["entities/foo.md"]
+
+
+def test_parse_recall_channel_preference_order() -> None:
+    """``document_id`` wins over chunk-map, context, and the sentinel on one hit."""
+    payload: dict[str, object] = {
+        "results": [
+            {
+                "text": "SOURCE: from/text.md\n\nfact",
+                "document_id": "from/docid.md",
+                "context": "from/context.md",
+                "chunk_id": "c1",
+            }
+        ],
+        "chunks": {"c1": {"document_id": "from/chunk.md"}},
+    }
+    assert [h.path for h in parse_recall(payload)] == ["from/docid.md"]
+
+
+def test_parse_recall_recovers_page_type_from_hit_tags() -> None:
+    """The page type round-trips on the hit's ``document_tags`` (first token wins)."""
+    payload: dict[str, object] = {
+        "results": [
+            {"document_id": "entities/foo.md", "document_tags": ["entity"]},
+            {"document_id": "memories/wifi.md", "document_tags": ["memory"]},
+        ]
+    }
+    hits = parse_recall(payload)
     assert [(h.path, h.page_type) for h in hits] == [
         ("entities/foo.md", "entity"),
         ("memories/wifi.md", "memory"),
-        ("concepts/bar.md", "concept"),
     ]
 
 
-def test_parse_recall_page_type_is_empty_when_only_a_path_tag() -> None:
-    """A hit with no bare type token leaves page_type empty (no spurious match)."""
-    stdout = _json_recall({"text": "x", "tags": ["entities/foo.md"]})
-    hits = parse_recall(stdout)
-    assert hits[0].page_type == ""
+def test_parse_recall_recovers_page_type_from_chunk_entry() -> None:
+    """The page type falls back to the hit's ``chunks{}`` entry ``document_tags``."""
+    payload: dict[str, object] = {
+        "results": [{"chunk_id": "c1"}],
+        "chunks": {
+            "c1": {"document_id": "entities/foo.md", "document_tags": ["entity"]}
+        },
+    }
+    hits = parse_recall(payload)
+    assert [(h.path, h.page_type) for h in hits] == [("entities/foo.md", "entity")]
 
 
-def test_parse_recall_accepts_rel_prefixed_tags_and_dict_tags() -> None:
-    """Both `rel:<path>` string tags and a {'rel': <path>} mapping are honoured."""
-    prefixed = _json_recall({"text": "fact", "tags": ["entity", "rel:entities/foo.md"]})
-    assert [h.path for h in parse_recall(prefixed)] == ["entities/foo.md"]
-    mapped = _json_recall({"text": "fact", "tags": {"rel": "concepts/bar.md"}})
-    assert [h.path for h in parse_recall(mapped)] == ["concepts/bar.md"]
+def test_parse_recall_page_type_empty_when_no_tags() -> None:
+    """A hit with no ``document_tags`` anywhere leaves ``page_type`` empty."""
+    payload: dict[str, object] = {"results": [{"document_id": "entities/foo.md"}]}
+    assert parse_recall(payload)[0].page_type == ""
 
 
-def test_parse_recall_falls_back_to_sentinel_when_tags_absent() -> None:
-    """With no usable tag, the SOURCE: line in the hit text recovers the path (#7)."""
-    stdout = _json_recall(
-        {"text": "SOURCE: entities/foo.md\n\nFoo is a thing.", "tags": []},
-        {"text": "no tag, no sentinel -> dropped"},
-    )
-    hits = parse_recall(stdout)
-    assert [h.path for h in hits] == ["entities/foo.md"]
-
-
-def test_parse_recall_dedupes_across_tag_and_sentinel_order_preserving() -> None:
-    """Duplicate paths (from either channel) collapse, first-seen order preserved."""
-    stdout = _json_recall(
-        {"text": "a", "tags": ["entity", "entities/foo.md"]},
-        {"text": "b", "tags": ["concept", "concepts/bar.md"]},
-        {"text": "SOURCE: entities/foo.md\n\nrepeat"},  # duplicate via sentinel
-    )
-    assert [h.path for h in parse_recall(stdout)] == [
+def test_parse_recall_dedupes_preserving_first_seen_order() -> None:
+    """Duplicate paths collapse to the first occurrence, preserving order."""
+    payload: dict[str, object] = {
+        "results": [
+            {"document_id": "entities/foo.md", "text": "a"},
+            {"document_id": "concepts/bar.md", "text": "b"},
+            {"text": "SOURCE: entities/foo.md\n\nrepeat"},  # duplicate via sentinel
+        ]
+    }
+    assert [h.path for h in parse_recall(payload)] == [
         "entities/foo.md",
         "concepts/bar.md",
     ]
 
 
-def test_parse_recall_reads_wrapped_envelopes() -> None:
-    """A dict envelope wrapping the hit list (results/hits/...) is unwrapped."""
-    for key in ("results", "hits", "memories", "observations", "data"):
-        payload = json.dumps(
-            {key: [{"text": "x", "tags": ["entity", "entities/foo.md"]}]}
-        )
-        assert [h.path for h in parse_recall(payload)] == ["entities/foo.md"]
+def test_parse_recall_accepts_hits_alias() -> None:
+    """A ``hits`` list is honoured as an alias for ``results``."""
+    payload: dict[str, object] = {
+        "hits": [{"document_id": "entities/foo.md"}],
+    }
+    assert [h.path for h in parse_recall(payload)] == ["entities/foo.md"]
 
 
-def test_parse_recall_empty_json_returns_empty_list() -> None:
-    """An empty JSON list (or an envelope with none) yields [] without raising."""
-    assert parse_recall("[]") == []
-    assert parse_recall('{"results": []}') == []
+def test_parse_recall_empty_payload_returns_empty_list() -> None:
+    """An empty payload (or an envelope with no hits) yields [] without raising."""
+    assert parse_recall({}) == []
+    assert parse_recall({"results": []}) == []
 
 
-def test_parse_recall_non_json_falls_back_to_sentinel_scan() -> None:
-    """Non-JSON stdout (a CLI that ignored -o json) still yields SOURCE: provenance."""
-    stdout = (
-        "result 1 score=0.91\n"
-        "SOURCE: entities/foo.md\n"
-        "some fact text\n"
-        "SOURCE: concepts/bar.md\n"
-        "SOURCE: entities/foo.md\n"  # duplicate
-    )
-    hits = parse_recall(stdout)
-    assert [h.path for h in hits] == ["entities/foo.md", "concepts/bar.md"]
-    assert all(h.text.startswith(SOURCE_SENTINEL) for h in hits)
-
-
-def test_parse_recall_non_json_no_markers_returns_empty() -> None:
-    """Non-JSON stdout with no SOURCE: lines yields []."""
-    assert parse_recall("no markers here\njust prose\n") == []
-    # A 'SOURCE:' not at line start is not a marker (anchored at line start).
-    assert parse_recall("see SOURCE: entities/foo.md inline\n") == []
+def test_parse_recall_skips_unrecoverable_and_malformed_hits() -> None:
+    """Non-dict records and hits with no recoverable path are skipped."""
+    payload: dict[str, object] = {
+        "results": [
+            "not a dict",
+            {"text": "no provenance"},
+            {"document_id": "entities/foo.md"},
+        ]
+    }
+    assert [h.path for h in parse_recall(payload)] == ["entities/foo.md"]
 
 
 # --------------------------------------------------------------------------- #
@@ -344,86 +369,64 @@ def test_parse_recall_non_json_no_markers_returns_empty() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_retain_builds_official_argv_with_bank_positional_and_tags(
-    config: Config,
-) -> None:
-    """retain builds base_args + retain + <bank> + <text>, then --document-tags."""
-    runner = RecordingRunner()
-    hs = _make(config, runner)
-
+def test_retain_posts_to_memories_with_expected_body(config: Config) -> None:
+    """retain POSTs the item to ``.../memories`` with content/document_id/context."""
+    hs, recorder = _make(config, _ok())
     hs.retain("entities/foo.md", "Foo facts.", tags=["entity"])
 
-    argv = runner.last
-    prefix = list(base_args())
-    assert argv[: len(prefix)] == prefix
-    verb = argv[len(prefix) : len(prefix) + len(RETAIN_SUBCOMMAND)]
-    assert verb == list(RETAIN_SUBCOMMAND)
-    # The bank id is the first positional after the verb.
-    assert argv[len(prefix) + len(RETAIN_SUBCOMMAND)] == DEFAULT_BANK
-    # The text (with the SOURCE: sentinel) is the next positional -- NOT behind --text.
-    text_value = argv[len(prefix) + len(RETAIN_SUBCOMMAND) + 1]
-    assert text_value.startswith(f"{SOURCE_SENTINEL} entities/foo.md")
-    assert "Foo facts." in text_value
+    assert recorder.last.method == "POST"
+    assert recorder.last.url.path == f"{_bank_prefix()}/memories"
+    body = recorder.last_json
+    assert isinstance(body, dict)
+    assert body["async"] is False
+    items = body["items"]
+    assert isinstance(items, list)
+    item = items[0]
+    assert item["document_id"] == "entities/foo.md"
+    assert item["context"] == "entities/foo.md"
+    assert item["content"].startswith(f"{SOURCE_SENTINEL} entities/foo.md")
+    assert "Foo facts." in item["content"]
+    assert item["document_tags"] == ["entity"]
 
 
-def test_retain_adds_the_rel_path_as_a_provenance_tag(config: Config) -> None:
-    """The vault path is always added to --document-tags as primary provenance (#7)."""
-    runner = RecordingRunner()
-    hs = _make(config, runner)
-
-    hs.retain("entities/foo.md", "facts", tags=["entity"])
-    tag_value = runner.last[runner.last.index("--document-tags") + 1]
-    tags = tag_value.split(",")
-    # Both the page type and the rel path are present; rel path is the provenance tag.
-    assert tags == ["entity", "entities/foo.md"]
-
-
-def test_retain_dedupes_rel_path_when_caller_already_passes_it(
-    config: Config,
-) -> None:
-    """If the caller already includes the rel path, it is not duplicated in tags."""
-    runner = RecordingRunner()
-    hs = _make(config, runner)
-    # ingest/reindex pass tags=[page_type, rel]; the rel must appear exactly once.
+def test_retain_document_tags_excludes_rel_path(config: Config) -> None:
+    """The vault path is never put into ``document_tags`` (page-type axis only)."""
+    hs, recorder = _make(config, _ok())
     hs.retain("entities/foo.md", "facts", tags=["entity", "entities/foo.md"])
-    tag_value = runner.last[runner.last.index("--document-tags") + 1]
-    assert tag_value == "entity,entities/foo.md"
-    assert tag_value.count("entities/foo.md") == 1
+    item = recorder.last_json["items"][0]  # type: ignore[index]
+    assert item["document_tags"] == ["entity"]
 
 
-def test_retain_drops_empty_tags_but_always_keeps_rel_path(config: Config) -> None:
-    """Empty tag strings are filtered; the rel path tag is always present."""
-    runner = RecordingRunner()
-    hs = _make(config, runner)
+def test_retain_omits_document_tags_when_empty(config: Config) -> None:
+    """No ``document_tags`` key is sent when only the rel path / blanks were passed."""
+    hs, recorder = _make(config, _ok())
+    hs.retain("concepts/bar.md", "facts", tags=["", "concepts/bar.md"])
+    item = recorder.last_json["items"][0]  # type: ignore[index]
+    assert "document_tags" not in item
 
-    hs.retain("concepts/bar.md", "facts", tags=["", "concept", ""])
-    idx = runner.last.index("--document-tags")
-    assert runner.last[idx + 1] == "concept,concepts/bar.md"
-
-    # Even with no caller tags, the rel path tag is emitted (provenance must survive).
     hs.retain("concepts/baz.md", "facts")
-    assert runner.last[runner.last.index("--document-tags") + 1] == "concepts/baz.md"
+    item = recorder.last_json["items"][0]  # type: ignore[index]
+    assert "document_tags" not in item
 
 
-def test_retain_raises_on_permanent_exit_without_retry(config: Config) -> None:
-    """A permanent (bad-usage exit 2) failure raises and is NOT retried."""
-    runner = ScriptedRunner(script=[2])
-    hs = _make(config, runner)
+def test_retain_raises_on_permanent_4xx_without_retry(config: Config) -> None:
+    """A 4xx (permanent) retain failure raises HindsightError and is NOT retried."""
+    handler = ScriptedHandler(script=[400])
+    recorder = RecordingTransport(handler)
+    hs = Hindsight(
+        config,
+        transport=recorder.transport,
+        retries=3,
+        retry_wait_initial=0.0,
+        retry_wait_max=0.0,
+    )
     with pytest.raises(HindsightError) as exc_info:
         hs.retain("entities/foo.md", "facts")
     msg = str(exc_info.value)
     assert "retain" in msg
     assert "entities/foo.md" in msg
-    # Fail-fast: exactly one spawn, no retry on a permanent error.
-    assert len(runner.calls) == 1
-
-
-def test_retain_passes_configured_timeout_to_runner(config: Config) -> None:
-    """The configured timeout reaches the runner unchanged."""
-    runner = RecordingRunner()
-    hs = _make(config, runner, timeout=7.5)
-    hs.retain("entities/foo.md", "facts")
-    assert runner.timeouts[-1] == 7.5
+    assert not isinstance(exc_info.value, HindsightTransientError)
+    assert handler.count == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -431,62 +434,56 @@ def test_retain_passes_configured_timeout_to_runner(config: Config) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_recall_builds_argv_with_json_output_and_parses_tag_paths(
-    config: Config,
-) -> None:
-    """recall sends <bank> <query> -o json (no --limit) and maps tag paths into hits."""
-    runner = RecordingRunner(
-        stdout=_json_recall(
-            {"text": "fact", "tags": ["entity", "entities/foo.md"]},
-            {"text": "fact2", "tags": ["concept", "concepts/bar.md"]},
-        )
-    )
-    hs = _make(config, runner)
-
+def test_recall_posts_query_and_parses_document_id_paths(config: Config) -> None:
+    """recall POSTs ``{"query": ...}`` (no tags filter) and maps hit paths."""
+    payload = {
+        "results": [
+            {
+                "text": "fact",
+                "document_id": "entities/foo.md",
+                "document_tags": ["entity"],
+            },
+            {
+                "text": "fact2",
+                "document_id": "concepts/bar.md",
+                "document_tags": ["concept"],
+            },
+        ]
+    }
+    hs, recorder = _make(config, _ok(payload))
     hits = hs.recall("how does foo work", limit=3)
 
-    argv = runner.last
-    prefix = list(base_args())
-    assert argv[: len(prefix)] == prefix
-    verb = argv[len(prefix) : len(prefix) + len(RECALL_SUBCOMMAND)]
-    assert verb == list(RECALL_SUBCOMMAND)
-    assert argv[len(prefix) + len(RECALL_SUBCOMMAND)] == DEFAULT_BANK
-    assert "how does foo work" in argv
-    # Structured output requested, not pretty-stdout scraping.
-    assert argv[argv.index("-o") + 1] == "json"
-    # VPS-confirmed: hindsight-embed recall has no --limit; the cap is client-side.
-    assert "--limit" not in argv
+    assert recorder.last.method == "POST"
+    assert recorder.last.url.path == f"{_bank_prefix()}/memories/recall"
+    body = recorder.last_json
+    assert body == {"query": "how does foo work"}
     assert [h.path for h in hits] == ["entities/foo.md", "concepts/bar.md"]
 
 
 def test_recall_caps_results_client_side_to_limit(config: Config) -> None:
-    """With no CLI --limit, recall truncates the parsed hits to ``limit`` itself."""
-    runner = RecordingRunner(
-        stdout=_json_recall(
-            {"text": "a", "tags": ["entity", "entities/a.md"]},
-            {"text": "b", "tags": ["concept", "concepts/b.md"]},
-            {"text": "c", "tags": ["entity", "entities/c.md"]},
-        )
-    )
-    hs = _make(config, runner)
-
+    """recall truncates the parsed hits to ``limit`` client-side."""
+    payload = {
+        "results": [
+            {"text": "a", "document_id": "entities/a.md"},
+            {"text": "b", "document_id": "concepts/b.md"},
+            {"text": "c", "document_id": "entities/c.md"},
+        ]
+    }
+    hs, _ = _make(config, _ok(payload))
     hits = hs.recall("everything", limit=2)
-
-    # Three hits parsed, but the client-side cap keeps only the first two (in order).
-    assert "--limit" not in runner.last
     assert [h.path for h in hits] == ["entities/a.md", "concepts/b.md"]
 
 
 def test_recall_scopes_by_page_type_when_types_given(config: Config) -> None:
     """``types`` keeps only hits whose page_type tag is in the set (ADR 0004, #40)."""
-    runner = RecordingRunner(
-        stdout=_json_recall(
-            {"text": "a", "tags": ["entity", "entities/a.md"]},
-            {"text": "m", "tags": ["memory", "memories/m.md"]},
-            {"text": "c", "tags": ["concept", "concepts/c.md"]},
-        )
-    )
-    hs = _make(config, runner)
+    payload = {
+        "results": [
+            {"text": "a", "document_id": "entities/a.md", "document_tags": ["entity"]},
+            {"text": "m", "document_id": "memories/m.md", "document_tags": ["memory"]},
+            {"text": "c", "document_id": "concepts/c.md", "document_tags": ["concept"]},
+        ]
+    }
+    hs, _ = _make(config, _ok(payload))
 
     knowledge = hs.recall("q", types=frozenset({"entity", "concept"}))
     assert [h.path for h in knowledge] == ["entities/a.md", "concepts/c.md"]
@@ -494,7 +491,6 @@ def test_recall_scopes_by_page_type_when_types_given(config: Config) -> None:
     memories = hs.recall("q", types=frozenset({"memory"}))
     assert [h.path for h in memories] == ["memories/m.md"]
 
-    # No filter -> every hit, regardless of type (the "search everything" default).
     assert [h.path for h in hs.recall("q")] == [
         "entities/a.md",
         "memories/m.md",
@@ -504,33 +500,52 @@ def test_recall_scopes_by_page_type_when_types_given(config: Config) -> None:
 
 def test_recall_filters_by_type_before_the_limit_cap(config: Config) -> None:
     """The type scope is applied before truncation, so the cap counts kept hits only."""
-    runner = RecordingRunner(
-        stdout=_json_recall(
-            {"text": "m1", "tags": ["memory", "memories/m1.md"]},
-            {"text": "e", "tags": ["entity", "entities/e.md"]},
-            {"text": "m2", "tags": ["memory", "memories/m2.md"]},
-        )
-    )
-    hs = _make(config, runner)
+    payload = {
+        "results": [
+            {
+                "text": "m1",
+                "document_id": "memories/m1.md",
+                "document_tags": ["memory"],
+            },
+            {"text": "e", "document_id": "entities/e.md", "document_tags": ["entity"]},
+            {
+                "text": "m2",
+                "document_id": "memories/m2.md",
+                "document_tags": ["memory"],
+            },
+        ]
+    }
+    hs, _ = _make(config, _ok(payload))
     hits = hs.recall("q", limit=2, types=frozenset({"memory"}))
     assert [h.path for h in hits] == ["memories/m1.md", "memories/m2.md"]
 
 
-def test_recall_empty_json_returns_empty_and_does_not_raise(config: Config) -> None:
-    """A clean run with an empty JSON list yields [] (no results is normal)."""
-    runner = RecordingRunner(returncode=0, stdout="[]")
-    hs = _make(config, runner)
+def test_recall_empty_results_returns_empty_and_does_not_raise(config: Config) -> None:
+    """A 2xx with an empty result set yields [] (no results is normal)."""
+    hs, _ = _make(config, _ok({"results": []}))
     assert hs.recall("nothing matches") == []
 
 
-def test_recall_raises_on_permanent_exit(config: Config) -> None:
-    """A permanent (exit 2) recall failure raises HindsightError, fail-fast."""
-    runner = ScriptedRunner(script=[2])
-    hs = _make(config, runner)
+def test_recall_undecodable_body_returns_empty(config: Config) -> None:
+    """A 2xx with a non-JSON body yields [] rather than raising."""
+    hs, _ = _make(config, _status(200, body="not json at all"))
+    assert hs.recall("q") == []
+
+
+def test_recall_raises_on_permanent_4xx(config: Config) -> None:
+    """A 4xx recall failure raises HindsightError, fail-fast."""
+    handler = ScriptedHandler(script=[400])
+    recorder = RecordingTransport(handler)
+    hs = Hindsight(
+        config,
+        transport=recorder.transport,
+        retry_wait_initial=0.0,
+        retry_wait_max=0.0,
+    )
     with pytest.raises(HindsightError) as exc_info:
         hs.recall("q")
     assert "recall" in str(exc_info.value)
-    assert len(runner.calls) == 1
+    assert handler.count == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -538,65 +553,94 @@ def test_recall_raises_on_permanent_exit(config: Config) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_retain_retries_transient_failure_then_succeeds(config: Config) -> None:
-    """A transient non-zero exit is retried and the eventual success is accepted."""
-    # First two attempts fail with a transient (non-permanent) exit, third succeeds.
-    runner = ScriptedRunner(script=[1, 1, 0])
-    hs = _make(config, runner, retries=3)
-    hs.retain("entities/foo.md", "facts")  # must not raise
-    assert len(runner.calls) == 3
-
-
-def test_recall_retries_transient_failure_then_succeeds(config: Config) -> None:
-    """recall retries a transient failure and parses the successful attempt's stdout."""
-    runner = ScriptedRunner(
-        script=[1, 0],
-        stdout=_json_recall({"text": "x", "tags": ["entity", "entities/foo.md"]}),
+def _scripted(
+    config: Config,
+    script: list[int | Exception],
+    *,
+    json_body: object | None = None,
+    retries: int = 3,
+) -> tuple[Hindsight, ScriptedHandler]:
+    """Build a :class:`Hindsight` on a :class:`ScriptedHandler` (zero backoff)."""
+    handler = ScriptedHandler(
+        script=script, json_body={} if json_body is None else json_body
     )
-    hs = _make(config, runner, retries=3)
+    recorder = RecordingTransport(handler)
+    hs = Hindsight(
+        config,
+        transport=recorder.transport,
+        retries=retries,
+        retry_wait_initial=0.0,
+        retry_wait_max=0.0,
+    )
+    return hs, handler
+
+
+def test_retain_retries_5xx_then_succeeds(config: Config) -> None:
+    """A transient 5xx is retried and the eventual 2xx is accepted."""
+    hs, handler = _scripted(config, [500, 503, 200])
+    hs.retain("entities/foo.md", "facts")  # must not raise
+    assert handler.count == 3
+
+
+def test_recall_retries_5xx_then_parses_success(config: Config) -> None:
+    """recall retries a 5xx and parses the successful attempt's body."""
+    hs, handler = _scripted(
+        config,
+        [500, 200],
+        json_body={"results": [{"document_id": "entities/foo.md"}]},
+    )
     hits = hs.recall("q")
     assert [h.path for h in hits] == ["entities/foo.md"]
-    assert len(runner.calls) == 2
+    assert handler.count == 2
 
 
-def test_retain_spawn_error_is_treated_as_transient_and_retried(
-    config: Config,
-) -> None:
-    """An OSError spawn failure (daemon socket not up) is transient and retried."""
-    runner = ScriptedRunner(script=[OSError("no such file"), OSError("nope"), 0])
-    hs = _make(config, runner, retries=3)
+def test_retain_retries_connect_error_then_succeeds(config: Config) -> None:
+    """An httpx.ConnectError (server socket not up) is transient and retried."""
+    hs, handler = _scripted(
+        config, [httpx.ConnectError("no route"), httpx.ConnectError("nope"), 200]
+    )
     hs.retain("entities/foo.md", "facts")
-    assert len(runner.calls) == 3
+    assert handler.count == 3
+
+
+def test_retain_retries_timeout_then_succeeds(config: Config) -> None:
+    """An httpx timeout is a transport error: transient and retried."""
+    hs, handler = _scripted(config, [httpx.ReadTimeout("slow"), 200])
+    hs.retain("entities/foo.md", "facts")
+    assert handler.count == 2
 
 
 def test_retain_exhausts_retries_then_raises_transient_error(config: Config) -> None:
-    """A persistently transient failure raises after exactly `retries` attempts."""
-    runner = ScriptedRunner(script=[1])  # always exit 1
-    hs = _make(config, runner, retries=3)
+    """A persistent 5xx raises HindsightTransientError after exactly ``retries``."""
+    hs, handler = _scripted(config, [500], retries=3)
     with pytest.raises(HindsightTransientError):
         hs.retain("entities/foo.md", "facts")
-    assert len(runner.calls) == 3
+    assert handler.count == 3
 
 
-def test_permanent_failure_fails_fast_without_spawning_retries(
-    config: Config,
-) -> None:
-    """A permanent (exit 2) failure raises immediately, no second spawn (#11)."""
-    runner = ScriptedRunner(script=[2, 0])  # would succeed on a retry, but must not
-    hs = _make(config, runner, retries=5)
+def test_connect_error_exhausts_retries_as_transient(config: Config) -> None:
+    """A persistent transport error raises HindsightTransientError after retries."""
+    hs, handler = _scripted(config, [httpx.ConnectError("down")], retries=3)
+    with pytest.raises(HindsightTransientError):
+        hs.retain("entities/foo.md", "facts")
+    assert handler.count == 3
+
+
+def test_permanent_4xx_fails_fast_without_retry(config: Config) -> None:
+    """A 4xx raises immediately, with no second request even when a retry would win."""
+    hs, handler = _scripted(config, [400, 200], retries=5)
     with pytest.raises(HindsightError) as exc_info:
         hs.retain("entities/foo.md", "facts")
     assert not isinstance(exc_info.value, HindsightTransientError)
-    assert len(runner.calls) == 1
+    assert handler.count == 1
 
 
 def test_retry_count_is_configurable_at_construction(config: Config) -> None:
     """The attempt count is configurable; retries=1 disables retry entirely."""
-    runner = ScriptedRunner(script=[1])
-    hs = _make(config, runner, retries=1)
-    with pytest.raises(HindsightError):
+    hs, handler = _scripted(config, [500], retries=1)
+    with pytest.raises(HindsightTransientError):
         hs.retain("entities/foo.md", "facts")
-    assert len(runner.calls) == 1  # no retry when retries=1
+    assert handler.count == 1
 
 
 def test_transient_error_is_a_hindsight_error_subclass() -> None:
@@ -605,36 +649,67 @@ def test_transient_error_is_a_hindsight_error_subclass() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# forget()  (check=False semantics, NO retry)
+# reset_bank()  (DELETE the bank, checked).
 # --------------------------------------------------------------------------- #
 
 
-def test_forget_builds_expected_argv_with_bank_positional(config: Config) -> None:
-    """forget builds base_args + FORGET_SUBCOMMAND + [bank, rel_path]."""
-    runner = RecordingRunner()
-    hs = _make(config, runner)
+def test_reset_bank_deletes_the_bank_url(config: Config) -> None:
+    """reset_bank issues a DELETE to the bank segment itself."""
+    hs, recorder = _make(config, _ok())
+    hs.reset_bank()
+    assert recorder.last.method == "DELETE"
+    assert recorder.last.url.path == _bank_prefix()
+
+
+def test_reset_bank_raises_on_4xx(config: Config) -> None:
+    """A non-2xx reset_bank raises HindsightError (4xx fails fast)."""
+    hs, handler = _scripted(config, [404])
+    with pytest.raises(HindsightError) as exc_info:
+        hs.reset_bank()
+    assert "reset_bank" in str(exc_info.value)
+    assert handler.count == 1
+
+
+def test_reset_bank_retries_5xx_then_raises_transient(config: Config) -> None:
+    """A persistent 5xx reset_bank retries then raises HindsightTransientError."""
+    hs, handler = _scripted(config, [500], retries=3)
+    with pytest.raises(HindsightTransientError):
+        hs.reset_bank()
+    assert handler.count == 3
+
+
+# --------------------------------------------------------------------------- #
+# forget()  (best-effort DELETE, NO retry, swallows everything).
+# --------------------------------------------------------------------------- #
+
+
+def test_forget_targets_the_document_url(config: Config) -> None:
+    """forget DELETEs ``.../documents/{rel_path}`` keeping the path separators."""
+    hs, recorder = _make(config, _ok())
     hs.forget("entities/foo.md")
-    argv = runner.last
-    assert argv == [*base_args(), *FORGET_SUBCOMMAND, DEFAULT_BANK, "entities/foo.md"]
+    assert recorder.last.method == "DELETE"
+    assert recorder.last.url.path == f"{_bank_prefix()}/documents/entities/foo.md"
 
 
-def test_forget_does_not_raise_on_nonzero_exit_and_does_not_retry(
-    config: Config,
-) -> None:
-    """forget swallows a non-zero exit (full-rebuild is the authoritative reset)."""
-    runner = ScriptedRunner(script=[3])  # would be 'transient' for a checked call
-    hs = _make(config, runner)
+def test_forget_swallows_non_2xx_and_does_not_retry(config: Config) -> None:
+    """forget swallows a 5xx (would-be-transient for a checked call) with no retry."""
+    hs, handler = _scripted(config, [500])
     hs.forget("entities/missing.md")  # must not raise
-    # Best-effort: exactly one call, no retry even on a would-be-transient exit.
-    assert len(runner.calls) == 1
+    assert handler.count == 1
 
 
-def test_forget_swallows_spawn_errors(config: Config) -> None:
-    """forget swallows an OSError spawn failure too (best-effort)."""
-    runner = ScriptedRunner(script=[OSError("missing binary")])
-    hs = _make(config, runner)
+def test_forget_swallows_4xx(config: Config) -> None:
+    """forget swallows a 4xx too (best-effort delete)."""
+    hs, handler = _scripted(config, [404])
     hs.forget("entities/missing.md")  # must not raise
-    assert len(runner.calls) == 1
+    assert handler.count == 1
+
+
+def test_forget_swallows_transport_errors(config: Config) -> None:
+    """forget swallows a transport error (server socket not up) too."""
+    hs, handler = _scripted(config, [httpx.ConnectError("down")])
+    hs.forget("entities/missing.md")  # must not raise
+    assert handler.count == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -644,57 +719,30 @@ def test_forget_swallows_spawn_errors(config: Config) -> None:
 
 def test_probe_true_when_path_among_hits(config: Config) -> None:
     """probe returns True when the recalled hits include the path."""
-    runner = RecordingRunner(
-        stdout=_json_recall(
-            {"text": "fact", "tags": ["entity", "entities/foo.md"]},
-            {"text": "fact2", "tags": ["concept", "concepts/bar.md"]},
-        )
-    )
-    hs = _make(config, runner)
+    payload = {
+        "results": [
+            {"text": "fact", "document_id": "entities/foo.md"},
+            {"text": "fact2", "document_id": "concepts/bar.md"},
+        ]
+    }
+    hs, _ = _make(config, _ok(payload))
     assert hs.probe("concepts/bar.md", "anything") is True
 
 
 def test_probe_false_when_path_absent(config: Config) -> None:
     """probe returns False when the path is not among the recalled hits."""
-    runner = RecordingRunner(
-        stdout=_json_recall({"text": "fact", "tags": ["entity", "entities/foo.md"]})
-    )
-    hs = _make(config, runner)
+    payload = {"results": [{"text": "fact", "document_id": "entities/foo.md"}]}
+    hs, _ = _make(config, _ok(payload))
     assert hs.probe("entities/missing.md", "anything") is False
 
 
 def test_probe_false_on_empty_recall(config: Config) -> None:
-    """probe on an empty recall result is False (and issues exactly one call)."""
-    runner = RecordingRunner(stdout="[]")
-    hs = _make(config, runner)
+    """probe on an empty recall result is False (and issues exactly one request)."""
+    handler = ScriptedHandler(script=[200], json_body={"results": []})
+    recorder = RecordingTransport(handler)
+    hs = Hindsight(config, transport=recorder.transport)
     assert hs.probe("entities/foo.md", "q") is False
-    assert len(runner.calls) == 1
-
-
-# --------------------------------------------------------------------------- #
-# default_runner (the real seam, exercised without the absent CLI).
-# --------------------------------------------------------------------------- #
-
-
-def test_default_runner_captures_text_and_does_not_raise_on_nonzero() -> None:
-    """default_runner returns a text CompletedProcess and never raises on exit code.
-
-    Runs a tiny in-process Python child (always available) instead of the absent
-    ``hindsight`` binary, proving capture_output/text/check=False semantics.
-    """
-    argv = [sys.executable, "-c", "import sys; print('hi'); sys.exit(5)"]
-    result = default_runner(argv, timeout=30.0)
-    assert isinstance(result, subprocess.CompletedProcess)
-    assert result.returncode == 5
-    assert result.stdout.strip() == "hi"
-    assert isinstance(result.stdout, str)  # text mode
-
-
-def test_hindsight_uses_default_runner_when_none_injected(config: Config) -> None:
-    """With no runner injected, Hindsight wires up default_runner."""
-    hs = Hindsight(config)
-    # Access the private seam only in tests (SLF001 allowed here).
-    assert hs._runner is default_runner  # noqa: SLF001
+    assert len(recorder.requests) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -705,11 +753,13 @@ def test_hindsight_uses_default_runner_when_none_injected(config: Config) -> Non
 def test_module_import_pulls_in_no_hindsight_package() -> None:
     """Importing thoth.hindsight must not import any 'hindsight' Python package.
 
-    The wrapper is pure subprocess; only stdlib, tenacity, and thoth.config may appear
+    The client is pure httpx; only stdlib, httpx, tenacity, and thoth.config may appear
     at top level. A stray ``import hindsight`` would break collection in CI where the
     package is absent.
     """
-    import thoth.hindsight  # noqa: F401  (already imported; this asserts on sys.modules)
+    import sys
+
+    import thoth.hindsight  # noqa: F401  (already imported; asserts on sys.modules)
 
     leaked = [
         name

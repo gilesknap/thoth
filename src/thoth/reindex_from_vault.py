@@ -18,32 +18,29 @@ Two facts from the SPEC shape the design:
   (:func:`manifest_path` -> ``<thoth_home>/hindsight/reindex-manifest.json``, which is
   ``.gitignore``d), so a reindex never churns curated pages' ``updated:`` dates.
 
-* **The full-rebuild bank wipe is ``bank delete <bank> -y`` (VPS-confirmed).**
+* **The full-rebuild bank wipe is an HTTP DELETE of the bank.**
   Incremental runs reuse the :meth:`~thoth.hindsight.Hindsight.forget` /
   :meth:`~thoth.hindsight.Hindsight.retain` surface (forget-then-retain per changed
-  page; forget-and-prune per deleted page). The one operation ``hindsight.py`` does not
-  expose -- the full-rebuild wipe -- is isolated in :meth:`Reindexer.reset_bank` behind
-  the same injectable :class:`~thoth.hindsight.SubprocessRunner` seam, driving
-  ``base_args + RESET_SUBCOMMAND + [-y, bank]`` (``bank delete`` deletes the bank and
-  all its data; the next retain auto-recreates it, with the bank id positional like
-  every other subcommand and overridable in one edit), so tests assert the exact argv
-  without spawning anything.
+  page; forget-and-prune per deleted page). The full-rebuild wipe delegates to
+  :meth:`~thoth.hindsight.Hindsight.reset_bank` (a ``DELETE`` of the bank, which removes
+  the bank and all its data; the next retain auto-recreates it), so the reindexer never
+  touches the Hindsight transport directly and tests substitute a fake
+  :class:`~thoth.hindsight.Hindsight`.
 
 The three reindex triggers (SPEC section 8) are: per-ingest incremental (handled by the
 ingest pass, not here), nightly catch-up for out-of-band Obsidian edits (``thoth
 reindex``), and a manual/on-recovery full rebuild (``thoth reindex --full-rebuild``).
 
-Only the standard library plus :class:`thoth.config.Config`, :class:`thoth.hindsight`
-seams, and :class:`thoth.vault.Vault` are imported at module top level; no ``hindsight``
-Python package is ever imported, so importing this module at pytest collection is always
-CI-safe even where the ``hindsight`` binary and its backend are absent.
+Only the standard library plus :class:`thoth.config.Config`,
+:class:`thoth.hindsight.Hindsight`, and :class:`thoth.vault.Vault` are imported at
+module top level, so importing this module at pytest collection is always CI-safe even
+where the ``hindsight-api`` server is absent.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,20 +49,12 @@ import frontmatter
 
 from thoth.budget import BudgetExceededError
 from thoth.config import Config
-from thoth.hindsight import (
-    Hindsight,
-    HindsightError,
-    SubprocessRunner,
-    default_runner,
-)
-from thoth.hindsight import base_args as default_base_args
+from thoth.hindsight import Hindsight, HindsightError
 from thoth.state import MARKER_REINDEX, MarkerStore
 from thoth.vault import ACTIONABLE_DIRS, CURATED_DIRS, Vault
 
 __all__ = [
     "INDEXED_DIRS",
-    "RESET_CONFIRM_FLAG",
-    "RESET_SUBCOMMAND",
     "SKIP_FILES",
     "ReindexError",
     "ReindexResult",
@@ -99,19 +88,6 @@ SKIP_FILES: frozenset[str] = frozenset({"SCHEMA.md", "index.md", "log.md"})
 holds conventions and ``log.md`` is the append-only action log. All three are structure,
 not curated knowledge.
 """
-
-# VPS-confirmed bank-reset subcommand. hindsight-embed's full-rebuild wipe is
-# ``bank delete <bank> -y``: it deletes the bank AND all its data (memory units,
-# entities, observations), and the next ``memory retain`` auto-recreates the bank.
-# ``clear-observations`` was rejected -- it clears only the observation layer, leaving
-# raw memory units and entity nodes behind, so it is not a clean wipe. Isolated as a
-# module constant (mirroring hindsight.py's *_SUBCOMMAND pattern); reset_bank() builds
-# base_args + RESET_SUBCOMMAND + [-y, bank] (the bank id positional, as for every verb).
-RESET_SUBCOMMAND: tuple[str, ...] = ("bank", "delete")
-"""Subcommand words for the full-rebuild bank wipe (``bank delete``, VPS-confirmed)."""
-
-RESET_CONFIRM_FLAG: str = "-y"
-"""Skip the interactive confirmation prompt on the ``bank delete`` reset."""
 
 # Capture a leading "type:" value from frontmatter; multiline so it is found anywhere in
 # the leading block. Used only as a retain tag (page_type), never for confinement.
@@ -210,11 +186,9 @@ class Reindexer:
 
     Construct it from the frozen :class:`~thoth.config.Config`, a real
     :class:`~thoth.vault.Vault` (for the root walk and the body-hash key), and a
-    :class:`~thoth.hindsight.Hindsight` (for ``retain``/``forget``). The ``runner`` and
-    ``base_args`` are used only by :meth:`reset_bank` for the full-rebuild wipe -- the
-    one operation ``hindsight.py`` does not expose -- so the same injectable
-    :class:`~thoth.hindsight.SubprocessRunner` seam covers every process spawn and tests
-    substitute a fake. No ``hindsight`` Python package is ever imported.
+    :class:`~thoth.hindsight.Hindsight` (for ``retain``/``forget`` and the full-rebuild
+    :meth:`~thoth.hindsight.Hindsight.reset_bank` wipe). Every Hindsight operation goes
+    through that injected wrapper, so tests substitute a fake.
     """
 
     def __init__(
@@ -223,10 +197,6 @@ class Reindexer:
         vault: Vault,
         hindsight: Hindsight,
         *,
-        runner: SubprocessRunner | None = None,
-        base_args: Sequence[str] | None = None,
-        bank: str | None = None,
-        timeout: float = 120.0,
         markers: MarkerStore | None = None,
     ) -> None:
         """Build a :class:`Reindexer`.
@@ -236,17 +206,8 @@ class Reindexer:
                 manifest path).
             vault: The path-confined vault facade; provides the root to walk and the
                 body-hash idempotency key.
-            hindsight: The semantic-index wrapper used for ``retain`` and ``forget``.
-            runner: The :class:`~thoth.hindsight.SubprocessRunner` seam used by
-                :meth:`reset_bank`; defaults to
-                :func:`thoth.hindsight.default_runner`.
-            base_args: The CLI prefix (binary + optional ``-p <profile>``) the reset
-                subcommand is appended to; defaults to the env-driven
-                :func:`thoth.hindsight.base_args`.
-            bank: The Hindsight bank id (positional, like every verb); defaults to the
-                supplied ``hindsight`` instance's ``bank``.
-            timeout: Seconds to allow the reset CLI call before
-                :class:`subprocess.TimeoutExpired`.
+            hindsight: The semantic-index wrapper used for ``retain``, ``forget``, and
+                the full-rebuild ``reset_bank`` wipe.
             markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired, a
                 successful :meth:`run` records a ``reindex`` marker so the daily
                 heartbeat can report "last reindex at T" (issue #15). ``None`` (the
@@ -255,12 +216,6 @@ class Reindexer:
         self._config = config
         self._vault = vault
         self._hindsight = hindsight
-        self._runner: SubprocessRunner = default_runner if runner is None else runner
-        self._base_args: tuple[str, ...] = (
-            tuple(base_args) if base_args is not None else default_base_args()
-        )
-        self._bank: str = bank if bank is not None else hindsight.bank
-        self._timeout = timeout
         self._markers = markers
 
     @property
@@ -324,30 +279,21 @@ class Reindexer:
         tmp.replace(path)
 
     def reset_bank(self) -> None:
-        """Wipe the Hindsight bank for a full rebuild (the one op ``hindsight`` lacks).
+        """Wipe the Hindsight bank for a full rebuild.
 
-        Runs ``base_args + RESET_SUBCOMMAND + [-y, bank]`` through the injected runner
-        (``bank delete -y <bank>``; the bank id positional, like every verb). ``-y``
-        skips the interactive confirmation so the call is non-interactive. The delete
-        removes the bank and all its data; the subsequent re-retain auto-recreates it. A
-        non-zero exit is a hard failure because a full rebuild that cannot wipe must not
-        proceed to re-retain on top of stale facts.
+        Delegates to :meth:`~thoth.hindsight.Hindsight.reset_bank`, which issues a
+        ``DELETE`` of the bank: it removes the bank and all its data, and the next
+        re-retain auto-recreates it. A failed wipe is a hard error because a full
+        rebuild must not re-retain on top of stale facts.
 
         Raises:
-            ReindexError: if the reset CLI exits non-zero (stderr surfaced).
+            ReindexError: if the wipe fails (wrapping
+                :class:`~thoth.hindsight.HindsightError`).
         """
-        argv: list[str] = [
-            *self._base_args,
-            *RESET_SUBCOMMAND,
-            RESET_CONFIRM_FLAG,
-            self._bank,
-        ]
-        result = self._runner(argv, timeout=self._timeout)
-        if result.returncode != 0:
-            raise ReindexError(
-                f"hindsight bank reset failed (exit {result.returncode}). "
-                f"stdout: {result.stdout.strip()!r} stderr: {result.stderr.strip()!r}"
-            )
+        try:
+            self._hindsight.reset_bank()
+        except HindsightError as exc:
+            raise ReindexError(f"hindsight bank reset failed: {exc}") from exc
 
     def run(self, *, full_rebuild: bool = False) -> ReindexResult:
         """Reindex the vault, retaining changed pages and pruning deleted ones.
