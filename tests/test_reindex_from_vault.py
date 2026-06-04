@@ -6,19 +6,16 @@ manifest is a **real** JSON file under a tmp ``THOTH_HOME`` (the config is built
 ``THOTH_HOME`` pointed into ``tmp_path``), so the body-hash idempotency key, the folder
 walk, and the manifest round-trip are exercised for real. Hindsight is a
 :class:`RecordingHindsight` fake recording every ``forget(rel)`` and
-``retain(rel, facts, tags)`` call (and their order), and the bank-reset spawn goes
-through a :class:`RecordingRunner` standing in for the
-:class:`~thoth.hindsight.SubprocessRunner` seam -- so no ``hindsight-embed`` binary,
-Postgres, or Gemini is touched and tests assert the exact argv and call sequence.
+``retain(rel, facts, tags)`` call (and their order), plus each ``reset_bank()`` wipe --
+so no ``hindsight-api`` server, Postgres, or Gemini is touched and tests assert the
+exact call sequence (including the full-rebuild reset-then-retain ordering).
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -26,11 +23,9 @@ import pytest
 
 from thoth.budget import BudgetExceededError
 from thoth.config import Config, load_config
-from thoth.hindsight import DEFAULT_BANK, Hindsight, HindsightError, base_args
+from thoth.hindsight import DEFAULT_BANK, Hindsight, HindsightError
 from thoth.reindex_from_vault import (
     INDEXED_DIRS,
-    RESET_CONFIRM_FLAG,
-    RESET_SUBCOMMAND,
     SKIP_FILES,
     Reindexer,
     ReindexError,
@@ -60,31 +55,39 @@ def test_indexed_dirs_derive_from_canonical_vault_dirs() -> None:
 
 
 class RecordingHindsight(Hindsight):
-    """A fake :class:`~thoth.hindsight.Hindsight` recording retain/forget calls.
+    """A fake :class:`~thoth.hindsight.Hindsight` recording retain/forget/reset calls.
 
     It subclasses :class:`~thoth.hindsight.Hindsight` so it is a drop-in *type* (no
     ``# type: ignore`` at call sites) yet overrides ``__init__`` to construct nothing
-    and spawns no subprocess. ``retain`` records ``(rel, facts, tuple(tags))`` and
-    ``forget`` records ``rel``; a single ``events`` list preserves the interleaved call
-    order so a test can assert forget-then-retain. ``retain`` can be made to raise
-    :class:`~thoth.hindsight.HindsightError` for a chosen path to exercise the
-    error-wrapping path.
+    and opens no HTTP client. ``retain`` records ``(rel, facts, tuple(tags))``,
+    ``forget`` records ``rel``, and ``reset_bank`` is counted; a single ``events`` list
+    preserves the interleaved call order so a test can assert forget-then-retain and
+    reset-before-retain. ``retain`` can be made to raise
+    :class:`~thoth.hindsight.HindsightError` for a chosen path, and ``reset_bank`` can
+    be made to raise one, to exercise the error-wrapping paths.
 
     Attributes:
         retains: Every ``(rel, facts, tags)`` retained, in call order.
         forgets: Every ``rel`` forgotten, in call order.
-        events: Interleaved ``("retain"|"forget", rel)`` log preserving call order.
+        resets: The number of ``reset_bank`` calls.
+        events: Interleaved ``("retain"|"forget"|"reset", rel)`` log preserving order
+            (``rel`` is ``""`` for a reset, which has no path).
         fail_retain_for: A vault path for which ``retain`` raises HindsightError.
+        fail_reset: When ``True``, ``reset_bank`` raises HindsightError.
     """
 
-    def __init__(self, *, fail_retain_for: str | None = None) -> None:
-        """Build the recorder; no config or runner is needed (nothing is spawned)."""
+    def __init__(
+        self, *, fail_retain_for: str | None = None, fail_reset: bool = False
+    ) -> None:
+        """Build the recorder; no config is needed (nothing is constructed)."""
         self.retains: list[tuple[str, str, tuple[str, ...]]] = []
         self.forgets: list[str] = []
+        self.resets = 0
         self.events: list[tuple[str, str]] = []
         self.fail_retain_for = fail_retain_for
-        # The Reindexer reads ``hindsight.bank`` to position the reset bank id; the real
-        # __init__ is skipped here, so set the attribute the property reads.
+        self.fail_reset = fail_reset
+        # The real __init__ (which builds an httpx client) is skipped here, so set the
+        # attribute the ``bank`` property reads in case a test inspects it.
         self._bank = DEFAULT_BANK
 
     def retain(self, rel_path: str, facts: str, *, tags: Sequence[str] = ()) -> None:
@@ -99,40 +102,12 @@ class RecordingHindsight(Hindsight):
         self.events.append(("forget", rel_path))
         self.forgets.append(rel_path)
 
-
-@dataclass
-class RecordingRunner:
-    """A fake :class:`~thoth.hindsight.SubprocessRunner` for ``reset_bank``.
-
-    Records every ``argv``/``timeout`` and returns a canned completed process, so a test
-    asserts the exact reset command line without spawning anything.
-
-    Attributes:
-        returncode: The exit code the canned result carries.
-        stdout: The canned standard output.
-        stderr: The canned standard error.
-        calls: Every ``argv`` list seen, in call order.
-        timeouts: Every ``timeout`` seen, in call order.
-    """
-
-    returncode: int = 0
-    stdout: str = ""
-    stderr: str = ""
-    calls: list[list[str]] = field(default_factory=list)
-    timeouts: list[float] = field(default_factory=list)
-
-    def __call__(
-        self, argv: Sequence[str], *, timeout: float
-    ) -> subprocess.CompletedProcess[str]:
-        """Record the call and return the canned completed process."""
-        self.calls.append(list(argv))
-        self.timeouts.append(timeout)
-        return subprocess.CompletedProcess(
-            args=list(argv),
-            returncode=self.returncode,
-            stdout=self.stdout,
-            stderr=self.stderr,
-        )
+    def reset_bank(self) -> None:
+        """Record the bank wipe (or raise the configured HindsightError)."""
+        self.events.append(("reset", ""))
+        self.resets += 1
+        if self.fail_reset:
+            raise HindsightError("backend unreachable for reset")
 
 
 # --------------------------------------------------------------------------- #
@@ -589,24 +564,30 @@ def test_deleting_a_page_prunes_it_from_manifest(vault: Vault, config: Config) -
 def test_full_rebuild_resets_bank_then_re_retains_every_page(
     vault: Vault, config: Config
 ) -> None:
-    """--full-rebuild wipes the bank (exact argv) then re-retains every live page."""
+    """--full-rebuild wipes the bank (once) then re-retains every live page."""
     pages = _seed_vault(vault.root)
     # Prime the manifest so a plain run would skip everything.
     Reindexer(config, vault, RecordingHindsight()).run()
 
-    runner = RecordingRunner()
     hs2 = RecordingHindsight()
-    result = Reindexer(config, vault, hs2, runner=runner).run(full_rebuild=True)
+    result = Reindexer(config, vault, hs2).run(full_rebuild=True)
 
     assert result.full_rebuild is True
-    # The reset ran exactly once with base_args + RESET_SUBCOMMAND + [-y, bank].
-    assert runner.calls == [
-        [*base_args(), *RESET_SUBCOMMAND, RESET_CONFIRM_FLAG, DEFAULT_BANK]
-    ]
+    # The bank was reset exactly once via Hindsight.reset_bank().
+    assert hs2.resets == 1
     # Every page re-retained despite matching manifest hashes.
     assert result.changed == len(pages)
     assert result.skipped == 0
     assert sorted(rel for rel, _, _ in hs2.retains) == sorted(pages.values())
+
+
+def test_plain_run_does_not_reset_the_bank(vault: Vault, config: Config) -> None:
+    """An incremental (non-full-rebuild) run never wipes the bank."""
+    _seed_vault(vault.root)
+    hs = RecordingHindsight()
+    Reindexer(config, vault, hs).run()
+    assert hs.resets == 0
+    assert all(kind != "reset" for kind, _ in hs.events)
 
 
 def test_full_rebuild_reset_runs_before_any_retain(
@@ -615,106 +596,40 @@ def test_full_rebuild_reset_runs_before_any_retain(
     """reset_bank is invoked before the first retain on a full rebuild."""
     _seed_vault(vault.root)
 
-    order: list[str] = []
+    hs = RecordingHindsight()
+    Reindexer(config, vault, hs).run(full_rebuild=True)
 
-    class _OrderRunner(RecordingRunner):
-        def __call__(
-            self, argv: Sequence[str], *, timeout: float
-        ) -> subprocess.CompletedProcess[str]:
-            order.append("reset")
-            return super().__call__(argv, timeout=timeout)
-
-    class _OrderHindsight(RecordingHindsight):
-        def retain(
-            self, rel_path: str, facts: str, *, tags: Sequence[str] = ()
-        ) -> None:
-            order.append("retain")
-            super().retain(rel_path, facts, tags=tags)
-
-    Reindexer(config, vault, _OrderHindsight(), runner=_OrderRunner()).run(
-        full_rebuild=True
-    )
-    assert order[0] == "reset"
-    assert "retain" in order
+    kinds = [kind for kind, _ in hs.events]
+    assert kinds[0] == "reset"
+    assert "retain" in kinds
+    # The single reset precedes every retain in the interleaved event log.
+    first_retain = kinds.index("retain")
+    assert "reset" not in kinds[first_retain:]
 
 
-def test_reset_bank_nonzero_exit_raises_reindexerror(
+def test_reset_bank_hindsighterror_raises_reindexerror(
     vault: Vault, config: Config
 ) -> None:
-    """A non-zero bank-reset exit raises ReindexError (full rebuild aborts)."""
+    """A failing Hindsight.reset_bank surfaces as ReindexError."""
     _seed_vault(vault.root)
-    runner = RecordingRunner(returncode=2, stderr="backend unreachable")
-    reindexer = Reindexer(config, vault, RecordingHindsight(), runner=runner)
+    hs = RecordingHindsight(fail_reset=True)
+    reindexer = Reindexer(config, vault, hs)
     with pytest.raises(ReindexError) as exc_info:
         reindexer.reset_bank()
     assert "backend unreachable" in str(exc_info.value)
 
 
-def test_reset_bank_passes_configured_timeout(vault: Vault, config: Config) -> None:
-    """The configured timeout reaches the reset runner unchanged."""
-    runner = RecordingRunner()
-    reindexer = Reindexer(
-        config,
-        vault,
-        RecordingHindsight(),
-        runner=runner,
-        timeout=9.5,
-    )
-    reindexer.reset_bank()
-    assert runner.timeouts == [9.5]
-
-
-def test_reset_bank_honours_base_args_override(vault: Vault, config: Config) -> None:
-    """A base_args override re-points the reset CLI prefix (VPS-time seam)."""
-    runner = RecordingRunner()
-    reindexer = Reindexer(
-        config,
-        vault,
-        RecordingHindsight(),
-        runner=runner,
-        base_args=("hindsight-embed", "-p", "other"),
-    )
-    reindexer.reset_bank()
-    # The bank id stays positional after the (overridden) prefix + reset verb + -y.
-    assert runner.calls == [
-        [
-            "hindsight-embed",
-            "-p",
-            "other",
-            *RESET_SUBCOMMAND,
-            RESET_CONFIRM_FLAG,
-            DEFAULT_BANK,
-        ]
-    ]
-
-
-def test_reset_bank_honours_bank_override(vault: Vault, config: Config) -> None:
-    """A bank override re-points the positional bank id of the reset call."""
-    runner = RecordingRunner()
-    reindexer = Reindexer(
-        config,
-        vault,
-        RecordingHindsight(),
-        runner=runner,
-        bank="otherbank",
-    )
-    reindexer.reset_bank()
-    assert runner.calls == [
-        [*base_args(), *RESET_SUBCOMMAND, RESET_CONFIRM_FLAG, "otherbank"]
-    ]
-
-
-def test_reset_bank_defaults_bank_to_the_hindsight_wrapper(
+def test_full_rebuild_aborts_when_reset_bank_fails(
     vault: Vault, config: Config
 ) -> None:
-    """When no bank override is given, the reset uses the wrapper's bank."""
-    runner = RecordingRunner()
-    hs = Hindsight(config, bank="wrapperbank")
-    reindexer = Reindexer(config, vault, hs, runner=runner)
-    reindexer.reset_bank()
-    assert runner.calls == [
-        [*base_args(), *RESET_SUBCOMMAND, RESET_CONFIRM_FLAG, "wrapperbank"]
-    ]
+    """A reset failure aborts the full rebuild before any page is retained."""
+    _seed_vault(vault.root)
+    hs = RecordingHindsight(fail_reset=True)
+    reindexer = Reindexer(config, vault, hs)
+    with pytest.raises(ReindexError):
+        reindexer.run(full_rebuild=True)
+    # The wipe failed up front, so nothing was retained on top of stale facts.
+    assert hs.retains == []
 
 
 # --------------------------------------------------------------------------- #

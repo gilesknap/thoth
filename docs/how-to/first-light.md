@@ -35,25 +35,28 @@ Expected: the live test sends a one-line note, gets back a `Classification` with
 non-empty `type` and `slug`, and passes. A `ConfigError` means `ANTHROPIC_API_KEY` is
 unset; a 404 means `ANTHROPIC_MODEL` is a retired id (use the dated fallback).
 
-## 2. Hindsight -- retain then recall round-trips, with tag-provenance recoverable
+## 2. Hindsight -- retain then recall round-trips, with the vault path recoverable
 
-Provenance is **tag-keyed** (SPEC section 8): `retain` carries the vault-relative path as
-a `rel` tag (the in-band `SOURCE:` sentinel is only a fallback, because LLM
-fact-extraction can split a page into atomic facts and strand the sentinel). This check
-confirms the round-trip *and* that recall recovers the path.
+The Hindsight seam is an HTTP client to the standalone `hindsight-api` server
+(`THOTH_HINDSIGHT_BASE_URL`, default `http://127.0.0.1:8888`). `retain` carries the
+vault-relative path as the memory's `document_id` (the in-band `SOURCE:` sentinel is only
+a fallback, because LLM fact-extraction can split a page into atomic facts and strand the
+sentinel). This check confirms the round-trip *and* that recall recovers the path.
 
 ```console
-$ hindsight memory retain thoth "SOURCE: concepts/first-light.md
-
-first light smoke probe" --tags concepts,concepts/first-light.md
-$ hindsight memory recall thoth "first light smoke probe" -o json
+$ curl -s -X POST "$THOTH_HINDSIGHT_BASE_URL/v1/default/banks/thoth/memories" \
+    -H 'content-type: application/json' \
+    -d '{"items":[{"content":"SOURCE: concepts/first-light.md\n\nfirst light smoke probe","document_id":"concepts/first-light.md","context":"concepts/first-light.md","document_tags":["concepts"]}],"async":false}'
+$ curl -s -X POST "$THOTH_HINDSIGHT_BASE_URL/v1/default/banks/thoth/memories/recall" \
+    -H 'content-type: application/json' \
+    -d '{"query":"first light smoke probe"}'
 ```
 
-Expected: the recall JSON contains a hit whose tags include
-`concepts/first-light.md`, so `thoth.hindsight.parse_recall` recovers that path
-(tags-first). Confirm the installed binary name/verbs match (`THOTH_HINDSIGHT_BINARY`,
-`THOTH_HINDSIGHT_BANK`) -- the VPS may still have `hindsight-embed` installed. The live
-suite does the same round-trip through `thoth.hindsight.Hindsight`:
+Expected: the recall JSON contains a hit whose `document_id` is
+`concepts/first-light.md`, so `thoth.hindsight.parse_recall` recovers that path. Confirm
+the server is reachable on `THOTH_HINDSIGHT_BASE_URL` and the bank id matches
+`THOTH_HINDSIGHT_BANK`. The live suite does the same round-trip through
+`thoth.hindsight.Hindsight`:
 
 ```console
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k hindsight

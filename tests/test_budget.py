@@ -9,12 +9,12 @@ always injected so the Europe/London day boundary and the alert are deterministi
 from __future__ import annotations
 
 import datetime as _dt
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from thoth.budget import (
@@ -79,19 +79,23 @@ class _FakeClient:
 
 
 @dataclass
-class _RecordingRunner:
-    """A Hindsight :class:`~thoth.hindsight.SubprocessRunner` that records argv."""
+class _RecordingTransport:
+    """A Hindsight HTTP seam that records each request and returns a clean 200.
 
-    calls: list[list[str]] = field(default_factory=list)
+    Wraps an :class:`httpx.MockTransport` so the budget chokepoint can be exercised
+    without opening a socket; :attr:`calls` counts the requests Hindsight actually
+    issued (a retain/recall round-trip translates to exactly one HTTP request).
+    """
 
-    def __call__(
-        self, argv: Any, *, timeout: float
-    ) -> subprocess.CompletedProcess[str]:
-        """Record the call and return a clean completed process."""
-        self.calls.append(list(argv))
-        return subprocess.CompletedProcess(
-            args=list(argv), returncode=0, stdout="[]", stderr=""
-        )
+    calls: list[httpx.Request] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.transport = httpx.MockTransport(self._handle)
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        """Record the request and answer with an empty-results 200."""
+        self.calls.append(request)
+        return httpx.Response(200, json={"results": []})
 
 
 def _store(tmp_path: Path) -> BudgetStore:
@@ -327,24 +331,24 @@ def test_llm_complete_without_guard_never_charges(tmp_path: Path) -> None:
 def test_hindsight_retain_charges_and_blocks(tmp_path: Path) -> None:
     """retain spends one Hindsight charge per call and blocks at the cap."""
     config = load_config({"PKM_VAULT": str(tmp_path)})
-    runner = _RecordingRunner()
+    transport = _RecordingTransport()
     guard = BudgetGuard(store=_store(tmp_path), limit=1, clock=_Clock(_utc(2026, 6, 1)))
-    hs = Hindsight(config, runner=runner, guard=guard)
+    hs = Hindsight(config, transport=transport.transport, guard=guard)
     hs.retain("entities/a.md", "a fact")
-    assert len(runner.calls) == 1
+    assert len(transport.calls) == 1
     with pytest.raises(BudgetExceededError):
         hs.retain("entities/b.md", "another fact")
-    # Blocked before spawning the CLI.
-    assert len(runner.calls) == 1
+    # Blocked before issuing the HTTP retain.
+    assert len(transport.calls) == 1
 
 
 def test_hindsight_recall_does_not_charge(tmp_path: Path) -> None:
     """Only retain (Gemini extraction) is metered; recall (embedding-only) is free."""
     config = load_config({"PKM_VAULT": str(tmp_path)})
-    runner = _RecordingRunner()
+    transport = _RecordingTransport()
     store = _store(tmp_path)
     guard = BudgetGuard(store=store, limit=1, clock=_Clock(_utc(2026, 6, 1)))
-    hs = Hindsight(config, runner=runner, guard=guard)
+    hs = Hindsight(config, transport=transport.transport, guard=guard)
     hs.recall("anything")
     hs.recall("more")
     assert store.total(guard.today()) == 0

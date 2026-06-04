@@ -14,12 +14,11 @@ registered ``live`` marker (declared in ``pyproject.toml`` so no
     THOTH_LIVE_SMOKE=1 uv run pytest -m live
 
 Import safety (the pytest-collection trap): the heavy/absent runtime clients
-(``anthropic`` / ``slack_bolt`` / ``mcp`` / ``firecrawl``, and the
-``hindsight`` CLI) are **never** imported at this module's top level. Each is pulled in
-**lazily inside its test function** -- either directly or (the common case) by the
-``thoth`` entry point the test calls, which already imports its client lazily. So this
-module imports cleanly at collection on a bare CI checkout where those libraries are
-absent, and every test is collected-but-skipped there.
+(``anthropic`` / ``slack_bolt`` / ``mcp`` / ``firecrawl``) are **never** imported at
+this module's top level. Each is pulled in **lazily inside its test function** -- either
+directly or (the common case) by the ``thoth`` entry point the test calls, which already
+imports its client lazily. So this module imports cleanly at collection on a bare CI
+checkout where those libraries are absent, and every test is collected-then-skipped.
 
 No fixture and no top-level statement here performs network, subprocess, or service I/O:
 all real I/O happens *inside* a test body, and every test body is skipped unless the
@@ -206,19 +205,21 @@ def test_live_curate_repair_turn_round_trips_after_tool_use_rejection(
 
 
 # --------------------------------------------------------------------------------------
-# 2. Hindsight -- retain then recall round-trip, tag-provenance recoverable (#7/#13)
+# 2. Hindsight -- retain/recall round-trip + page-type provenance over the real HTTP API
 # --------------------------------------------------------------------------------------
 
 
 def test_live_hindsight_retain_recall_roundtrip(live_config: Config) -> None:
-    """``retain`` then ``recall`` round-trips and recall recovers the rel-tag path (#7).
+    """``retain`` then ``recall`` round-trips and recall recovers the vault path (#7).
 
-    Drives the real ``hindsight`` CLI through :class:`thoth.hindsight.Hindsight`:
-    retains a uniquely-tagged probe fact (the vault path carried as the primary ``rel``
-    tag), then recalls it and asserts the path is recovered tag-first via
+    Drives the real standalone ``hindsight-api`` HTTP server through
+    :class:`thoth.hindsight.Hindsight` (base URL from ``THOTH_HINDSIGHT_BASE_URL``):
+    retains a uniquely-tagged probe fact (the vault path carried as ``document_id`` /
+    ``context``), then recalls it and asserts the path is recovered via
     :func:`thoth.hindsight.parse_recall`. This is the executable proof that recall
-    provenance is tag-keyed (SPEC section 8). The bank/binary are env-overridable
-    (``THOTH_HINDSIGHT_BANK`` / ``THOTH_HINDSIGHT_BINARY``) for the VPS surface.
+    provenance round-trips over the HTTP contract -- the central risk #157 cannot verify
+    under mocked CI. The bank is env-overridable (``THOTH_HINDSIGHT_BANK``) for the VPS
+    surface. ``forget`` cleans the probe doc out of the bank afterwards.
     """
     import uuid
 
@@ -230,25 +231,32 @@ def test_live_hindsight_retain_recall_roundtrip(live_config: Config) -> None:
     rel_path = f"notes/first-light-{token}.md"
     query = f"first light smoke probe {token}"
 
-    hindsight.retain(rel_path, f"A first-light smoke probe fact tagged {token}.")
-    hits = hindsight.recall(query)
+    try:
+        hindsight.retain(rel_path, f"A first-light smoke probe fact tagged {token}.")
+        hits = hindsight.recall(query)
 
-    assert any(hit.path == rel_path for hit in hits), (
-        f"recall did not recover the rel-tag path {rel_path!r} from hits "
-        f"{[hit.path for hit in hits]!r}"
-    )
+        assert any(hit.path == rel_path for hit in hits), (
+            f"recall did not recover the vault path {rel_path!r} from hits "
+            f"{[hit.path for hit in hits]!r}"
+        )
+    finally:
+        # Per-document delete leaves the live bank clean (best-effort, never raises).
+        hindsight.forget(rel_path)
+        hindsight.close()
 
 
 def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> None:
     """The ``page_type`` tag round-trips through recall and scopes results (ADR 0004).
 
-    Issue #40 indexes all content and partitions recall **by the page-type tag at query
-    time**. CI mocks the CLI, so the live risk is whether the real ``hindsight-embed``
-    round-trips that tag back in recall JSON. This retains a uniquely-tagged ``entity``
-    probe, recalls it, and asserts the recovered
+    Issue #40 indexes all content and partitions recall **by the page-type tag at
+    query time**. CI mocks the boundary, so the live risk is whether the real
+    ``hindsight-api`` server round-trips that tag back in the recall JSON (as
+    ``tags`` on
+    retain, recovered by :func:`thoth.hindsight.parse_recall`). This retains a
+    uniquely-tagged ``entity`` probe, recalls it, and asserts the recovered
     :attr:`~thoth.hindsight.RecallHit.page_type` is ``entity`` -- then that a
     reference-type scope keeps the hit while an actionable-only scope filters it out
-    (ADR 0005).
+    (ADR 0005, filtered client-side). ``forget`` cleans the probe afterwards.
     """
     import uuid
 
@@ -259,26 +267,70 @@ def test_live_hindsight_recall_scopes_by_page_type_tag(live_config: Config) -> N
     token = uuid.uuid4().hex
     rel_path = f"entities/scope-probe-{token}.md"
     # Keep the query lexically close to the fact so the probe reliably surfaces among
-    # real bank content (recall is semantic + token-bounded), as the rel-tag round-trip
+    # real bank content (recall is semantic + token-bounded), as the path round-trip
     # test above does -- this test is about the tag round-trip, not recall ranking.
     query = f"tag scope probe entity fact {token}"
-    hindsight.retain(
-        rel_path, f"A tag scope probe entity fact tagged {token}.", tags=["entity"]
-    )
 
-    match = next((h for h in hindsight.recall(query) if h.path == rel_path), None)
-    assert match is not None, f"recall did not recover {rel_path!r}"
-    assert match.page_type == "entity", (
-        f"page_type tag did not round-trip; got {match.page_type!r}"
-    )
+    try:
+        hindsight.retain(
+            rel_path, f"A tag scope probe entity fact tagged {token}.", tags=["entity"]
+        )
 
-    # Reference scope keeps the entity hit; an actionable-only scope filters it out.
-    reference = hindsight.recall(query, types=REFERENCE_TYPES)
-    assert any(h.path == rel_path for h in reference), "reference scope dropped a hit"
-    actionable = hindsight.recall(query, types=frozenset({"action"}))
-    assert all(h.path != rel_path for h in actionable), (
-        "actionable scope wrongly kept an entity hit"
-    )
+        match = next((h for h in hindsight.recall(query) if h.path == rel_path), None)
+        assert match is not None, f"recall did not recover {rel_path!r}"
+        assert match.page_type == "entity", (
+            f"page_type tag did not round-trip; got {match.page_type!r}"
+        )
+
+        # Reference scope keeps the entity hit; an actionable-only scope filters it out.
+        reference = hindsight.recall(query, types=REFERENCE_TYPES)
+        assert any(h.path == rel_path for h in reference), (
+            "reference scope dropped a hit"
+        )
+        actionable = hindsight.recall(query, types=frozenset({"action"}))
+        assert all(h.path != rel_path for h in actionable), (
+            "actionable scope wrongly kept an entity hit"
+        )
+    finally:
+        hindsight.forget(rel_path)
+        hindsight.close()
+
+
+def test_live_hindsight_reset_bank_wipes_the_bank(live_config: Config) -> None:
+    """``reset_bank`` DELETEs the whole bank over the real ``hindsight-api`` server.
+
+    This is the HTTP wipe behind ``reindex --full-rebuild``: retain a uniquely-tagged
+    probe, prove it is recallable, then ``reset_bank`` and assert the probe no longer
+    surfaces. CI mocks the boundary, so only the live server proves the bank DELETE is
+    honoured. **Destructive: empties the configured bank**, so it runs only under the
+    live gate against a throwaway/test bank (override ``THOTH_HINDSIGHT_BANK`` on the
+    box if the default bank holds content the owner cares about).
+    """
+    import uuid
+
+    from thoth.hindsight import Hindsight
+
+    hindsight = Hindsight(live_config)
+    token = uuid.uuid4().hex
+    rel_path = f"notes/reset-probe-{token}.md"
+    query = f"reset bank wipe probe {token}"
+
+    try:
+        hindsight.retain(rel_path, f"A reset-bank wipe probe fact tagged {token}.")
+        hits = hindsight.recall(query)
+        assert any(hit.path == rel_path for hit in hits), (
+            f"precondition failed: probe {rel_path!r} not recallable before reset"
+        )
+
+        hindsight.reset_bank()
+
+        after = hindsight.recall(query)
+        assert all(hit.path != rel_path for hit in after), (
+            f"reset_bank did not wipe the bank; {rel_path!r} still recallable in "
+            f"{[hit.path for hit in after]!r}"
+        )
+    finally:
+        hindsight.close()
 
 
 # --------------------------------------------------------------------------------------
@@ -379,15 +431,19 @@ def test_live_reindex_incremental_runs(live_config: Config) -> None:
     from thoth.reindex_from_vault import Reindexer
     from thoth.vault import Vault
 
+    hindsight = Hindsight(live_config)
     reindexer = Reindexer(
         config=live_config,
         vault=Vault(live_config),
-        hindsight=Hindsight(live_config),
+        hindsight=hindsight,
     )
-    result = reindexer.run(full_rebuild=False)
-    # changed + skipped account for every page scanned; a non-negative count is success.
-    assert result.changed >= 0
-    assert result.skipped >= 0
+    try:
+        # changed + skipped cover every page scanned; non-negative counts = success.
+        result = reindexer.run(full_rebuild=False)
+        assert result.changed >= 0
+        assert result.skipped >= 0
+    finally:
+        hindsight.close()
 
 
 # --------------------------------------------------------------------------------------
@@ -422,7 +478,7 @@ def test_live_budget_guard_blocks_real_anthropic_call(
     cap-reached alert is emitted. The real ``~/.thoth/state.db`` is never touched.
 
     The Hindsight (Gemini) chokepoint is exercised without spending: a guard pre-charged
-    to its cap makes ``retain`` raise before the CLI is ever spawned, so no bank is
+    to its cap makes ``retain`` raise before the HTTP call is ever issued, so no bank is
     touched -- proof of the wiring with zero side effects.
     """
     import dataclasses
@@ -455,15 +511,18 @@ def test_live_budget_guard_blocks_real_anthropic_call(
         llm.complete([Message(role="user", content="this must be blocked")])
     assert len(alerter.calls) == 1, "the cap-reached alert must fire exactly once"
 
-    # Hindsight chokepoint: a pre-exhausted guard blocks retain before any CLI spawn, so
+    # Hindsight chokepoint: a pre-exhausted guard blocks retain before any HTTP call, so
     # no Gemini extraction is spent and no bank is touched.
     hs_guard = make_budget_guard(
         dataclasses.replace(live_config, daily_llm_budget=1, thoth_home=tmp_path / "hs")
     )
     hs_guard.charge(KIND_HINDSIGHT)  # exhaust the single-call budget
     hindsight = Hindsight(live_config, guard=hs_guard)
-    with pytest.raises(BudgetExceededError):
-        hindsight.retain("notes/never-spent.md", "this must be blocked")
+    try:
+        with pytest.raises(BudgetExceededError):
+            hindsight.retain("notes/never-spent.md", "this must be blocked")
+    finally:
+        hindsight.close()
 
 
 # --------------------------------------------------------------------------------------

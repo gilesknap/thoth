@@ -357,13 +357,13 @@ def test_systemd_unit_documents_how_flapping_surfaces() -> None:
 # --- deploy/thoth-hindsight.service -----------------------------------------------
 
 
-def test_hindsight_unit_is_oneshot_remain_after_exit_and_unprivileged() -> None:
-    """The hindsight daemon ships as a oneshot+RemainAfterExit unit run as pkm.
+def test_hindsight_unit_is_a_supervised_http_server_run_as_pkm() -> None:
+    """The hindsight-api server ships as a directly-supervised unit run as pkm.
 
-    The `hindsight-embed daemon` CLI has no foreground mode and double-forks, so the
-    unit starts/stops the self-detaching daemon rather than supervising it (Type=oneshot
-    + RemainAfterExit=yes). It must run unprivileged (embedded Postgres initdb refuses
-    to run as root).
+    `hindsight-api` is a normal long-running foreground HTTP server, so systemd
+    supervises it directly (Type=simple) rather than start/stop-ing a self-detaching
+    daemon: a crash is visible and `systemctl restart` works. It binds loopback only and
+    runs unprivileged.
     """
     import configparser
 
@@ -372,13 +372,15 @@ def test_hindsight_unit_is_oneshot_remain_after_exit_and_unprivileged() -> None:
     text = unit.read_text(encoding="utf-8")
     parser = configparser.ConfigParser(strict=False)
     parser.read_string(text)
-    assert parser.get("Service", "Type") == "oneshot"
-    assert parser.getboolean("Service", "RemainAfterExit") is True
+    assert parser.get("Service", "Type") == "simple"
     assert parser.get("Service", "User") == "pkm"
-    assert "daemon start" in parser.get("Service", "ExecStart")
-    assert "daemon stop" in parser.get("Service", "ExecStop")
-    # No secret is inlined: the Gemini key lives in the per-profile ~/.hindsight env.
+    exec_start = parser.get("Service", "ExecStart")
+    assert "hindsight-api" in exec_start
+    # Loopback-only bind: nothing external should reach the index server.
+    assert "--host 127.0.0.1" in exec_start
+    # No secret is inlined: HINDSIGHT_API_* (incl. the LLM key) load from the env file.
     assert "API_KEY" not in text
+    assert parser.get("Service", "EnvironmentFile")
 
 
 def test_slack_unit_orders_after_and_wants_hindsight() -> None:

@@ -54,19 +54,19 @@ snapshot.
 Estimated recovery time ~1-2 h, dominated by package installs and the reindex pass; the
 knowledge itself is restored the instant the vault clone completes.
 
-## Recall provenance is tag-keyed after a restore
+## Recall provenance round-trips by `document_id` after a restore
 
 `thoth reindex --full-rebuild` re-stores every vault page with the vault-relative path
-carried as the primary `rel` **tag** (alongside the page type). Recall recovers the source
-path from each hit's `rel` tag, falling back to the in-band `SOURCE: <rel-path>` sentinel
-line only when tags are absent (Hindsight runs LLM fact-extraction, so the sentinel can be
-stranded on one atomic fact or none -- tags are therefore preferred; SPEC section 8). Both
-channels are restored by the rebuild, so retrieval keeps citing the right vault page after
-recovery.
+carried as the memory's `document_id` (with the page type carried as a `document_tag`).
+Recall recovers the source path from each hit's `document_id`, falling back to the in-band
+`SOURCE: <rel-path>` sentinel line only when it is absent (Hindsight runs LLM
+fact-extraction, so the sentinel can be stranded on one atomic fact or none -- the
+`document_id` is therefore preferred; SPEC section 8). Both channels are restored by the
+rebuild, so retrieval keeps citing the right vault page after recovery.
 
 ```text
-- [ ] confirm the restore by checking `thoth reindex --full-rebuild` completed (tags
-      re-attached) -- not by grepping for SOURCE: lines
+- [ ] confirm the restore by checking `thoth reindex --full-rebuild` completed
+      (document_id re-attached) -- not by grepping for SOURCE: lines
 ```
 
 ## Optional fast restore (an optimisation, never a substitute)

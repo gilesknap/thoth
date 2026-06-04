@@ -14,7 +14,7 @@ true way to set it up — there is no migration path to preserve.
 
 ```text
                +----------------------- VPS (user: pkm) ------------------------+
-Slack  <-----> | thoth-slack.service  --(127.0.0.1:9277)-->  thoth-hindsight    |
+Slack  <-----> | thoth-slack.service  --(127.0.0.1:8888)-->  thoth-hindsight    |
 (private       |   (capture / retrieve)                      (semantic index)   |
  channel)      |        |                                                       |
                |        v   whisper | Firecrawl | Claude                        |
@@ -33,8 +33,8 @@ Slack  <-----> | thoth-slack.service  --(127.0.0.1:9277)-->  thoth-hindsight    
 ```text
 - [ ] A VPS: Ubuntu 24.04+ (24.04/26.04 tested), 2 vCPU, ~8 GB RAM, 50 GB+ disk. CPU-only is fine.
 - [ ] Two GitHub repos: this one (thoth) and your own empty `pkm-vault` (your knowledge).
-- [ ] API keys (created in step 6): Anthropic (required), Gemini (for the index),
-      Firecrawl (optional, for URL ingest), a GitHub PAT (to push the vault).
+- [ ] API keys (created in step 6): Anthropic (required — used by both thoth and the index),
+      Exa + Firecrawl (optional, for research/URL ingest), a GitHub PAT (to push the vault).
 - [ ] A Slack workspace where you can create an app ({doc}`slack-setup`).
 ```
 
@@ -103,36 +103,44 @@ remote using the token from step 6 (never SSH, never a token-in-URL). If you are
 
 ## 4. Install the semantic index (Hindsight)
 
-[Hindsight](https://hindsight.vectorize.io) is the rebuildable vector index. Install its
-CLI **as `pkm`** with `uv tool` (it lands in `~/.local/bin`):
+[Hindsight](https://hindsight.vectorize.io) is the rebuildable vector index. thoth talks to
+it as a standalone **`hindsight-api`** HTTP server; install it **as `pkm`** with `uv tool`
+(it lands in `~/.local/bin`):
 
 ```bash
 # as pkm
-uv tool install hindsight-embed
-hindsight-embed --version          # e.g. hindsight-embed v0.7.1
+uv tool install hindsight-api
+hindsight-api --version
 ```
 
-Create the **`thoth` profile** on port **9277** (the port the Slack daemon talks to), with
-the LLM provider that does the embedding/fact-extraction. thoth's deployment uses Gemini:
+The server reads its backend config from the environment: **fact-extraction runs on
+Anthropic Claude** (the same vendor thoth uses — reuse your `ANTHROPIC_API_KEY` value),
+**embeddings run locally on the box** (no external embedding calls), and the database is
+hindsight-api's **own embedded Postgres** addressed by the `pg0://` scheme (no separate DB
+service to run). Put the `HINDSIGHT_API_*` env in a locked-down EnvironmentFile that only
+the service reads (the `thoth-hindsight.service` unit references
+`<THOTH_HOME>/hindsight-api.env`, so these keys never land in thoth's own `.env`). Copy the
+template and fill it in:
 
 ```bash
-# as pkm — paste your Gemini key (step 6) as the API key
-hindsight-embed profile create thoth --port 9277 \
-  --env HINDSIGHT_API_LLM_PROVIDER=gemini \
-  --env HINDSIGHT_API_LLM_MODEL=gemini-2.5-flash \
-  --env HINDSIGHT_API_LLM_API_KEY=<your-gemini-key>
+# as pkm — installs at <THOTH_HOME>/hindsight-api.env, chmod 600
+install -m600 /opt/thoth/deploy/hindsight-api.env.example /home/pkm/.thoth/hindsight-api.env
+$EDITOR /home/pkm/.thoth/hindsight-api.env   # set HINDSIGHT_API_LLM_API_KEY = your Anthropic key
 ```
 
-This writes `~/.hindsight/profiles/thoth.env` (chmod 600 — the key lives only there, not in
-thoth's `.env`). The bank id is also `thoth` (a positional arg on every `memory
-retain`/`recall`). You do **not** start the daemon by hand — the `thoth-hindsight.service`
-unit (step 7) owns its lifecycle.
+The template ships the live values: `HINDSIGHT_API_LLM_PROVIDER=anthropic`,
+`HINDSIGHT_API_LLM_MODEL=claude-haiku-4-5`, `HINDSIGHT_API_EMBEDDINGS_PROVIDER=local`, and
+`HINDSIGHT_API_DATABASE_URL=pg0://hindsight-embed-thoth`. Only the API key needs filling in.
+
+You do **not** start the server by hand — the `thoth-hindsight.service` unit (step 7) owns
+its lifecycle and runs it as `hindsight-api --host 127.0.0.1 --port 8888`. The bank id is
+`thoth` (a path segment on every retain/recall/forget).
 
 ```{note}
-The exact provider/model strings follow the live deployment; check the
-[Hindsight CLI docs](https://hindsight.vectorize.io/sdks/cli) if you want a different
-embedding backend. thoth only requires: binary `hindsight-embed` on PATH, profile `thoth`,
-bank `thoth`, daemon reachable at `127.0.0.1:9277`.
+The provider/model/embeddings strings above follow the live deployment; the LLM provider is
+configurable (check the [Hindsight docs](https://hindsight.vectorize.io) for alternatives).
+thoth only requires: `hindsight-api` on PATH, bank `thoth`, and the server reachable at the
+`THOTH_HINDSIGHT_BASE_URL` (default `http://127.0.0.1:8888`).
 ```
 
 ## 5. Install audio transcription (Whisper) — optional
@@ -190,13 +198,12 @@ Fill in these variables. **Where to get each key:**
 | `PKM_VAULT` | yes | Vault path — `/opt/pkm-vault`. |
 | `OBSIDIAN_VAULT_NAME` | yes | The vault folder name (`pkm-vault`); used to build `obsidian://` links. |
 | `THOTH_HOME` | yes | `/home/pkm/.thoth` (state, manifest). |
-| `THOTH_HINDSIGHT_BINARY` | yes | `/home/pkm/.local/bin/hindsight-embed` (from step 4). |
-| `THOTH_HINDSIGHT_PROFILE` | yes | `thoth`. |
+| `THOTH_HINDSIGHT_BASE_URL` | no | Base URL of the `hindsight-api` server (step 4). Default `http://127.0.0.1:8888`. |
 | `THOTH_HINDSIGHT_BANK` | yes | `thoth`. |
-| `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate. |
+| `ANTHROPIC_API_KEY` | **yes** | [console.anthropic.com](https://console.anthropic.com) → **Settings → API Keys**. Powers classify / curate — and the **same value** goes in Hindsight's `hindsight-api.env` (step 4) for fact-extraction. |
 | `ANTHROPIC_MODEL` | no | Override the default model for all calls. `THOTH_ANALYSE_MODEL` (vision), `THOTH_DIAGRAM_MODEL` (Excalidraw, worth an Opus), and `THOTH_INTENT_MODEL` (the intent gate, a cheap Haiku) override per-call. |
 | `THOTH_IMAGE_RESIZE_THRESHOLD_BYTES` | no | Captured images larger than this are downscaled (longest edge capped at ~1568px, aspect ratio preserved) before they are stored in `raw/assets/` *and* before they reach the vision model. Default `2097152` (2 MB); a non-positive value disables resizing. |
-| `GEMINI_API_KEY` | yes (for the index) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey). The **same key** you gave Hindsight in step 4; it powers embeddings + fact-extraction. |
+| `EXA_API_KEY` | no | [exa.ai](https://exa.ai) → dashboard → API keys. Web search for the blended `research:` path. Blank ⇒ vault-only. |
 | `FIRECRAWL_API_KEY` | no | [firecrawl.dev](https://www.firecrawl.dev) → dashboard → API keys. URL→Markdown **extraction** for URL ingest. Blank ⇒ URLs stored without fetched content. |
 | `GITHUB_PKM_VAULT_TOKEN` | yes | A GitHub **fine-grained PAT** scoped to the `pkm-vault` repo with **Contents: Read and write** ([github.com/settings/tokens](https://github.com/settings/tokens)). thoth feeds it to git as an `x-access-token` HTTPS credential to push the vault. |
 | `SLACK_BOT_TOKEN` | yes | `xoxb-…` — see {doc}`slack-setup`. |
@@ -211,8 +218,9 @@ from a manifest, enables Socket Mode, mints both tokens, and creates the capture
 ```{warning}
 `~/.thoth/.env` holds every secret. It is `chmod 600`, owned by `pkm`, and **must never be
 committed** to either repo. The only other place a secret lives is Hindsight's
-`~/.hindsight/profiles/thoth.env`. Keep a copy of both in your password manager — that is the
-*only* backup of your secrets ({doc}`recovery`).
+`<THOTH_HOME>/hindsight-api.env` (the Anthropic key for the index server, step 4). Keep a
+copy of both in your password manager — that is the *only* backup of your secrets
+({doc}`recovery`).
 ```
 
 ## 7. Install and enable the systemd units + cron

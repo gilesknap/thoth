@@ -39,7 +39,8 @@ import datetime as _dt
 import os
 import subprocess
 import threading
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
@@ -62,6 +63,66 @@ _CONFLICT_SENTINEL: str = "VAULT CONFLICT"
 # Stdout marker emitted by vault-commit when `git diff --cached --quiet` finds no
 # staged changes (verbatim from the script). Used to set GitResult.committed.
 _NOTHING_TO_COMMIT: str = "nothing to commit"
+
+# Bounded retry on `.git/index.lock` contention. The Slack daemon dispatches each
+# capture on a worker thread sharing one working tree, and :attr:`GitSync.capture_lock`
+# only serialises *this* process's tree-mutating sections; a concurrent ``obsidian-git``
+# commit (or any other client) can still hold the index lock for a sub-second window.
+# git does not block on the lock, it fails immediately, so a transient collision must
+# be retried here. The signal is git's own diagnostic on stderr; matching is
+# substring-based so wording drift ("Unable to create index.lock") still classifies.
+_INDEX_LOCK_SIGNALS: tuple[str, ...] = ("unable to lock index", "index.lock")
+_LOCK_RETRY_ATTEMPTS: int = 5
+_LOCK_RETRY_BACKOFF: float = 0.1
+
+
+def _is_index_lock_failure(returncode: int, stderr: str) -> bool:
+    """Return ``True`` when a git invocation failed on ``.git/index.lock`` contention.
+
+    A non-zero exit whose ``stderr`` carries one of :data:`_INDEX_LOCK_SIGNALS`
+    (case-insensitively) is a transient lock collision worth retrying; everything else
+    (including success) is not.
+
+    Args:
+        returncode: The git process exit code.
+        stderr: The captured standard error text.
+
+    Returns:
+        ``True`` only for a non-zero exit that names the index lock.
+    """
+    if returncode == 0:
+        return False
+    lowered = stderr.lower()
+    return any(signal in lowered for signal in _INDEX_LOCK_SIGNALS)
+
+
+def _run_with_lock_retry(
+    run: Callable[[], subprocess.CompletedProcess[str]],
+) -> subprocess.CompletedProcess[str]:
+    """Run ``run`` and re-run it on a transient ``.git/index.lock`` collision.
+
+    Re-invokes ``run`` up to :data:`_LOCK_RETRY_ATTEMPTS` times while the result is an
+    index-lock failure (see :func:`_is_index_lock_failure`), sleeping a short, growing
+    backoff between tries to let the competing client release the lock. ANY other
+    outcome (success, or a non-lock failure) is returned to the caller unchanged on the
+    first occurrence, so the caller's own classification is untouched. The last
+    attempt's result is returned even if it is still a lock failure, so an exhausted
+    retry surfaces git's stderr exactly as a single run would.
+
+    Args:
+        run: A zero-argument callable that performs one ``subprocess.run`` (already
+            configured with ``check=False`` so a failure returns rather than raises).
+
+    Returns:
+        The :class:`subprocess.CompletedProcess` of the final attempt.
+    """
+    completed = run()
+    for attempt in range(1, _LOCK_RETRY_ATTEMPTS):
+        if not _is_index_lock_failure(completed.returncode, completed.stderr):
+            return completed
+        time.sleep(_LOCK_RETRY_BACKOFF * attempt)
+        completed = run()
+    return completed
 
 
 class GitSyncError(Exception):
@@ -279,14 +340,18 @@ class GitSync:
         stageable = self._stageable(paths, timeout=timeout)
         if not stageable:
             return
-        completed = subprocess.run(
-            ["git", "add", "--", *stageable],
-            cwd=str(self._vault_root),
-            env=self._child_env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+        # Retried on `.git/index.lock` contention from a concurrent client (see
+        # :func:`_run_with_lock_retry`); a non-lock failure raises below unchanged.
+        completed = _run_with_lock_retry(
+            lambda: subprocess.run(
+                ["git", "add", "--", *stageable],
+                cwd=str(self._vault_root),
+                env=self._child_env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
         )
         if completed.returncode != 0:
             raise GitSyncError(
@@ -452,14 +517,20 @@ class GitSync:
         script_path = self._bin_path / script
         # Fixed argv (no shell=True); the script name is a module constant and the
         # vault root comes from the frozen Config, so there is no injection surface.
-        completed = subprocess.run(
-            ["bash", str(script_path), *args],
-            cwd=str(self._vault_root),
-            env=self._child_env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+        # Retried on `.git/index.lock` contention (see :func:`_run_with_lock_retry`):
+        # the commit/pull scripts stage and rebase, so a concurrent client holding the
+        # index lock would otherwise fail the whole capture; a non-lock non-zero exit is
+        # returned unchanged for the caller's own conflict/error classification.
+        completed = _run_with_lock_retry(
+            lambda: subprocess.run(
+                ["bash", str(script_path), *args],
+                cwd=str(self._vault_root),
+                env=self._child_env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
         )
         committed = (
             completed.returncode == 0 and _NOTHING_TO_COMMIT not in completed.stdout
