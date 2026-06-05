@@ -62,6 +62,21 @@ changes, document only the new way and assume a clean slate. The vault itself is
 disposable test data during this phase — never write backfill/migration code for
 existing vault content.
 
+## Live config/code is the source of truth — not a stale issue body or plan
+
+Issue bodies and saved plans capture intent *at the time they were written* and go
+stale as the code moves. When authoring anything that mirrors a real boundary's
+configuration (a Helm chart, a deploy manifest, env wiring), read the **current**
+source — `src/thoth/config.py` for which keys `Config` actually reads (and which are
+required vs optional), and `deploy/*.env.example` / the systemd units for live
+provider/model/key choices — and let those win over an older issue/plan when they
+disagree. A real foot-gun: the #158 chart shipped `HINDSIGHT_API_LLM_PROVIDER=gemini`
++ a `GEMINI_API_KEY` `secretKeyRef` because it followed the issue body, but
+`deploy/hindsight-api.env.example` had already moved Hindsight to Anthropic
+(`claude-haiku-4-5`, reusing `ANTHROPIC_API_KEY`) and `GEMINI_API_KEY` is read into
+`Config` yet used nowhere — so the deploy demanded a dead key. When in doubt, grep
+for where a value is *consumed*, not just where it's mentioned.
+
 ## The MCP surface must stand alone — never use the vault as a retrieval backdoor
 
 thoth is partly a **prototype for an organizational-memory system** where, in the
