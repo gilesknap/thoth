@@ -41,12 +41,13 @@ spec:
               value: {{ .Values.hindsight.llmModel | quote }}
             - name: HINDSIGHT_API_WORKER_ID
               value: {{ .Values.hindsight.workerId | quote }}
-            # The extraction LLM key reuses GEMINI_API_KEY from the thoth Secret.
+            # Fact-extraction runs on Anthropic (same vendor as thoth), so the LLM key
+            # reuses ANTHROPIC_API_KEY from the thoth Secret.
             - name: HINDSIGHT_API_LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secretName }}
-                  key: GEMINI_API_KEY
+                  key: ANTHROPIC_API_KEY
             {{- if .Values.hindsight.databaseUrl }}
             - name: HINDSIGHT_API_DATABASE_URL
               value: {{ .Values.hindsight.databaseUrl | quote }}

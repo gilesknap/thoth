@@ -116,10 +116,13 @@ The keys thoth's `Config` reads are:
 
 ```text
 ANTHROPIC_API_KEY        GITHUB_PKM_VAULT_TOKEN   SLACK_ALLOWED_USERS
-GEMINI_API_KEY           SLACK_BOT_TOKEN          SLACK_CAPTURE_CHANNEL
-FIRECRAWL_API_KEY        SLACK_APP_TOKEN          SLACK_SUMMARY_CHANNEL
-THOTH_MCP_API_KEYS       SLACK_ALERT_CHANNEL
+FIRECRAWL_API_KEY        SLACK_BOT_TOKEN          SLACK_CAPTURE_CHANNEL
+THOTH_MCP_API_KEYS       SLACK_APP_TOKEN          SLACK_SUMMARY_CHANNEL
 ```
+
+`SLACK_ALERT_CHANNEL` is **optional** (unattended error/heartbeat target; falls back to
+the capture channel when unset). All of the above are secret/sensitive, so they live in
+the Secret rather than the ConfigMap.
 
 Build the plaintext Secret from a `.env` file, pipe it straight through `kubeseal`, and
 keep only the sealed output:
@@ -137,10 +140,9 @@ kubectl create secret generic thoth-env \
   > thoth-env.sealed.yaml          # this file is safe to commit to the overlay repo
 ```
 
-The Hindsight pod additionally needs `GEMINI_API_KEY` (its fact-extraction LLM key); it is
-pulled from the same Secret via an explicit `secretKeyRef`, so just include it in the
-`.env` above. Channel and member IDs only ever live inside this Secret — never in chart
-values.
+The Hindsight pod runs fact-extraction on Anthropic, so it reuses `ANTHROPIC_API_KEY` as
+its LLM key — pulled from the same Secret via an explicit `secretKeyRef`, no extra key
+needed. Channel and member IDs only ever live inside this Secret — never in chart values.
 
 ## 4. Storage and node pinning (via values)
 

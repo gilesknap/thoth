@@ -26,9 +26,10 @@ image:
   pullPolicy: IfNotPresent
 
 # @schema description: Name of the pre-existing (e.g. SealedSecret-managed) Secret
-#   holding ALL secret env (ANTHROPIC_API_KEY, GEMINI_API_KEY, FIRECRAWL_API_KEY,
-#   GITHUB_PKM_VAULT_TOKEN, SLACK_* tokens/IDs, THOTH_MCP_API_KEYS, ...). The chart
-#   does NOT template this Secret; every workload mounts it via envFrom.secretRef.
+#   holding ALL secret env (ANTHROPIC_API_KEY, FIRECRAWL_API_KEY, GITHUB_PKM_VAULT_TOKEN,
+#   SLACK_* tokens/IDs, THOTH_MCP_API_KEYS, ...). The Hindsight pod reuses
+#   ANTHROPIC_API_KEY as its fact-extraction LLM key. The chart does NOT template this
+#   Secret; every workload mounts it via envFrom.secretRef.
 secretName: thoth-env
 
 # @schema description: Node placement. Default pins to amd64 (the image is single-arch).
@@ -122,9 +123,9 @@ hindsight:
   # @schema description: Port the Hindsight API listens on.
   port: 8888
   # @schema description: Hindsight LLM provider for fact extraction.
-  llmProvider: gemini
+  llmProvider: anthropic
   # @schema description: Hindsight LLM model for fact extraction.
-  llmModel: gemini-2.5-flash
+  llmModel: claude-haiku-4-5
   # @schema description: Stable Hindsight worker id (keeps the bank attributable across restarts).
   workerId: thoth
   # @schema description: External Postgres URL for Hindsight. When set, Hindsight uses
