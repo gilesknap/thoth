@@ -11,9 +11,14 @@ on:
 jobs:
 
   lint:
+    # pre-commit runs the helm-schema hook, so it needs helm + the plugin —
+    # _precommit.yml installs them (the generic _tox runner does not have helm).
+    uses: ./.github/workflows/_precommit.yml
+
+  type-checking:
     uses: ./.github/workflows/_tox.yml
     with:
-      tox: pre-commit,type-checking
+      tox: type-checking
 
   test:
     strategy:

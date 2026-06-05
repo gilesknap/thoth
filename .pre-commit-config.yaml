@@ -36,12 +36,16 @@ repos:
         entry: uv sync
         files: ^(uv\.lock|pyproject\.toml)$
 
-  # Charts/thoth/values.schema.json is committed and kept current by hand. The
-  # losisin/helm-values-schema-json pre-commit hook is intentionally NOT wired in:
-  # it shells out to the `helm schema` plugin, which isn't present in the generic
-  # CI tox runner. To regenerate the schema locally after editing values.yaml,
-  # install the plugin (`helm plugin install https://github.com/losisin/helm-values-schema-json`)
-  # and run: `helm schema --config Charts/thoth/.schema.config.yaml`.
+  # Regenerates Charts/thoth/values.schema.json from values.yaml. Needs the helm
+  # `schema` plugin on PATH (in the devcontainer via the Dockerfile, and in CI via
+  # the _precommit.yml workflow which installs helm + this plugin before running).
+  - repo: https://github.com/losisin/helm-values-schema-json
+    rev: v2.3.1
+    hooks:
+      - id: helm-schema
+        args:
+          - --config
+          - Charts/thoth/.schema.config.yaml
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.28.0

@@ -48,7 +48,7 @@ resources: {}
 #   embedded Hindsight Postgres. Sizes/classes are host-agnostic defaults; the
 #   deploying overlay sets a concrete storageClassName (e.g. local-path).
 storage:
-  # @schema description: The Obsidian/PKM vault working tree PVC (RWO; one writer).
+  # @schema description: The Obsidian/PKM vault working tree PVC (RWO, one writer).
   vault:
     # @schema description: Requested size for the vault PVC.
     size: 5Gi
