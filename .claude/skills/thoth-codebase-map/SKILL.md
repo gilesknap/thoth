@@ -79,38 +79,18 @@ declarative, not a task.
 Hindsight is a **fact-extraction** engine (entities/observations/chunks for a
 query), **not** token-chunking, and it exposes **no page-level embeddings or
 pairwise cosine**. Features framed as "reuse Hindsight embeddings + a cosine
-threshold" (near-duplicate detection, idea-mining similarity) are therefore not
-buildable as written — they need a separate embedding-access decision first. The
-index is a rebuildable projection; recall is the last/most-expensive query pass.
+threshold" (near-duplicate detection, idea-mining similarity) are not buildable as
+written — they need a separate embedding-access decision first. The index is a
+rebuildable projection; recall is the last/most-expensive query pass.
 
-### The two retrieval modalities are complementary, not redundant
-
-`QueryEngine.answer` (behind `pkm_search`) runs cost-ordered passes with a
-short-circuit: **grep** over the
+**The two retrieval modalities are complementary, not redundant.**
+`QueryEngine.answer` (behind `pkm_search`) runs cost-ordered passes: **grep** over
 curated folders → **wikilink** graph-follow → **semantic recall** via Hindsight,
-where recall fires **only when the cheap passes returned fewer than `max_pages`
-candidates** (the #107 "thin top-up" — grep hits always lead the rank; recall
-appends to fill). So a query that gets enough grep hits never consults Hindsight
-at all (`used_recall: false`).
-
-Do **not** assume "#98 put title+body in Hindsight, so grep is now redundant."
-It isn't, for durable reasons:
-
-- **grep queries the store of record (the vault bytes); Hindsight is a derived,
-  lossy, eventually-consistent index.** `retain` runs **LLM fact-extraction**, so
-  Hindsight holds *extracted facts*, not the text — exact tokens (policy numbers,
-  IDs, filenames, exact names) may not survive into a retrievable fact, and
-  embedding recall is weak at rare exact strings anyway. grep matches the actual
-  bytes.
-- **Freshness/coverage windows where a filed page is grep-only:** a retain
-  deferred on a budget trip (left for the next reindex), the reindex/rebuild
-  window, a just-written page, or Hindsight down / subprocess failure (recall is a
-  `subprocess`-spawned CLI, ~120 s timeout, retried).
-
-So grep = exact / authoritative / always-fresh; Hindsight = semantic /
-vocabulary-bridging but derived and lossy. #98 closed the *coverage* gap (every
-curated page now retains ≥1 recallable unit); it did **not** make Hindsight
-lossless or synchronous. The open design direction (issue #143) is to **blend**
-both candidate sets (e.g. Reciprocal Rank Fusion, `k=60` — fuse on rank so grep's
-token-count score and Hindsight's similarity needn't be normalised) rather than
-keep grep as a gate that suppresses recall.
+where recall fires only when the cheap passes returned fewer than `max_pages`
+candidates (#107 thin top-up). grep = exact / authoritative / always-fresh on the
+vault bytes; Hindsight = semantic / vocabulary-bridging but **derived, lossy,
+eventually-consistent** (it holds LLM-extracted *facts*, not text — exact tokens
+like IDs/filenames may not survive, and a just-written or budget-deferred page is
+grep-only until reindex). Don't treat grep as redundant. The open design direction
+(#143) is to **blend** both candidate sets via Reciprocal Rank Fusion (`k=60`,
+fuse on rank) rather than gate recall behind grep.

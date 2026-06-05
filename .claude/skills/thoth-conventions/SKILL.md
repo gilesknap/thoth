@@ -26,31 +26,25 @@ transforms, not for cleaning up model prose.
 ### Force structured output via tool-use, not free-text JSON
 
 The strongest form of the rule above: when a call must return a structured object,
-**force it through Anthropic tool-use** rather than asking for JSON as free text and
-parsing it. Define a tool whose `input_schema` mirrors the contract, set
-`tool_choice={"type": "tool", "name": "<tool>"}`, and read the structured
-`tool_use.input` dict (the SDK/transport handles all escaping). Keep the existing
-validator as the post-call gate — tool-use guarantees *valid JSON*, not a *valid
-plan*. Curate's `submit_file_plan` does this (issue #110); the loop helpers
-(`_tool_use_blocks` / `_block_id` / `tool_result_block` /
-`assistant_blocks_message`) live in `llm.py`.
+**force it through Anthropic tool-use** rather than parsing free-text JSON. Define a
+tool whose `input_schema` mirrors the contract, set `tool_choice={"type": "tool",
+"name": "<tool>"}`, and read the `tool_use.input` dict (the transport handles
+escaping). Keep the validator as the post-call gate — tool-use guarantees *valid
+JSON*, not a *valid plan*. Curate's `submit_file_plan` does this (#110); the loop
+helpers (`_tool_use_blocks` / `_block_id` / `tool_result_block` /
+`assistant_blocks_message`) live in `llm.py`. This was a real fix: hand-serialized
+JSON aborted with "Unterminated string" on ~39% of a real import, because the model
+emitted raw control chars (newlines, tabs, U+00A0) inside the JSON string.
 
-This was a real fix, not a stylistic one: hand-serialized JSON aborted with
-"Unterminated string" on bodies containing newlines, tabs, or non-breaking spaces
-(U+00A0) — ~39% of a real import — because the model emitted raw control characters
-inside the JSON string. Tool-use eliminates that whole failure class.
-
-**Foot-gun — the repair/retry turn after a tool call.** When you re-ask the model
-after a rejected tool call (e.g. the plan failed validation), the follow-up **user
-turn must lead with a `tool_result` block keyed to the prior `tool_use` id** — a
-plain-text user turn there makes the *live* Messages API reject the request with
-HTTP 400 ("tool_use ids were found without tool_result blocks immediately after").
-Mirror curate's repair turn: echo the assistant's `tool_use` turn, then a user turn
-whose first block is `tool_result_block(<tool_use_id>, <repair_text>, is_error=True)`.
-Only the no-tool-call branch (model declined the tool) takes a plain-text follow-up.
-Injected fakes ignore this precondition, so this bug passes CI and only shows up
-live — see the `thoth-testing` skill for how to test the repair path against the
-real API.
+**Foot-gun — the repair/retry turn after a tool call.** When re-asking the model
+after a rejected tool call (e.g. plan failed validation), the follow-up **user turn
+must lead with a `tool_result` block keyed to the prior `tool_use` id** — a
+plain-text user turn there makes the live Messages API reject with HTTP 400. Mirror
+curate's repair turn: echo the assistant's `tool_use` turn, then a user turn whose
+first block is `tool_result_block(<id>, <repair_text>, is_error=True)`. Only the
+no-tool-call branch (model declined the tool) takes a plain-text follow-up. Injected
+fakes ignore this, so it passes CI and only shows up live — see `thoth-testing` for
+how to test it.
 
 ## Clean slate — no backward-compat or migration prose
 
@@ -64,18 +58,15 @@ existing vault content.
 
 ## Live config/code is the source of truth — not a stale issue body or plan
 
-Issue bodies and saved plans capture intent *at the time they were written* and go
-stale as the code moves. When authoring anything that mirrors a real boundary's
-configuration (a Helm chart, a deploy manifest, env wiring), read the **current**
-source — `src/thoth/config.py` for which keys `Config` actually reads (and which are
-required vs optional), and `deploy/*.env.example` / the systemd units for live
-provider/model/key choices — and let those win over an older issue/plan when they
-disagree. A real foot-gun: the #158 chart shipped `HINDSIGHT_API_LLM_PROVIDER=gemini`
-+ a `GEMINI_API_KEY` `secretKeyRef` because it followed the issue body, but
-`deploy/hindsight-api.env.example` had already moved Hindsight to Anthropic
-(`claude-haiku-4-5`, reusing `ANTHROPIC_API_KEY`) and `GEMINI_API_KEY` is read into
-`Config` yet used nowhere — so the deploy demanded a dead key. When in doubt, grep
-for where a value is *consumed*, not just where it's mentioned.
+Issue bodies and saved plans capture intent *when written* and go stale as the code
+moves. When authoring anything that mirrors a real boundary's configuration (a Helm
+chart, deploy manifest, env wiring), read the **current** source — `src/thoth/config.py`
+for which keys `Config` actually reads (required vs optional), and
+`deploy/*.env.example` / the systemd units for live provider/model/key choices — and
+let those win over an older issue/plan. Grep for where a value is *consumed*, not just
+mentioned: the #158 chart demanded a dead `GEMINI_API_KEY` (read into `Config` but used
+nowhere) because it followed the issue body instead of the env example that had already
+moved Hindsight to Anthropic.
 
 ## The MCP surface must stand alone — never use the vault as a retrieval backdoor
 
