@@ -160,6 +160,7 @@ ingress:
   # @schema description: Public host for the MCP endpoint. The deploying overlay sets this.
   host: ""
   # @schema description: Extra annotations for the Ingress.
+  # @schema additionalProperties: {"type": "string"}
   annotations: {}
   # @schema description: TLS configuration for the Ingress.
   tls:

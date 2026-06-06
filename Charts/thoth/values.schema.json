@@ -157,7 +157,9 @@
                 "annotations": {
                     "description": "Extra annotations for the Ingress.",
                     "type": "object",
-                    "additionalProperties": false
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 },
                 "className": {
                     "description": "IngressClass name (e.g. nginx).",
