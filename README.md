@@ -16,6 +16,7 @@ AI assistants over [MCP](https://modelcontextprotocol.io).
 What            | Where
 :---:           | :---:
 Source          | <https://github.com/gilesknap/thoth>
+Docker          | `docker run ghcr.io/gilesknap/thoth:latest`
 Documentation   | <https://gilesknap.github.io/thoth>
 Releases        | <https://github.com/gilesknap/thoth/releases>
 

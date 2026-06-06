@@ -72,8 +72,10 @@ lockfiles/
 
 # api keys
 .env
+.hindsight.env
 
 # claude
 .claude/worktrees
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+*.env

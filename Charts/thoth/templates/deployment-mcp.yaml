@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-mcp" (include "thoth.fullname" .) }}
+  labels:
+    app.kubernetes.io/component: mcp
+    {{- include "thoth.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mcp
+      {{- include "thoth.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: mcp
+        {{- include "thoth.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "{{ .Values.mcp.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.port }}
+          envFrom:
+            {{- include "thoth.envFrom" . | nindent 12 }}
+          volumeMounts:
+            {{- include "thoth.volumeMounts" . | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.mcp.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- include "thoth.volumes" . | nindent 8 }}

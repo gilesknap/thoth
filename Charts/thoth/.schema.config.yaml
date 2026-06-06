@@ -1,0 +1,27 @@
+# .schema.config.yaml — config for https://github.com/losisin/helm-values-schema-json
+#
+# Regenerate Charts/thoth/values.schema.json from values.yaml with the pre-commit
+# hook (or `helm schema --config Charts/thoth/.schema.config.yaml`). Paths are
+# relative to the repository root so the pre-commit hook resolves them correctly.
+
+values:
+  - Charts/thoth/values.yaml
+
+output: Charts/thoth/values.schema.json
+
+# Bundle up references (don't do this as K8S refs are 500kb+).
+bundleRoot: Charts
+bundle: false
+
+# Include comments for the helm-docs plugin into the schema.
+useHelmDocs: false
+
+# Disallow unknown keys so typos in an overlay fail validation early.
+noAdditionalProperties: true
+
+schemaRoot:
+  title: thoth Helm chart
+  description: Helm chart for deploying thoth (Slack daemon + MCP server + Hindsight index + cron)
+  additionalProperties: false
+
+k8sSchemaVersion: v1.33.3

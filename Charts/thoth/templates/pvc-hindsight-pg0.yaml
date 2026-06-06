@@ -1,0 +1,17 @@
+{{- if not .Values.hindsight.databaseUrl }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "thoth.pg0PvcName" . }}
+  labels:
+    {{- include "thoth.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.storage.pg0.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.pg0.size | quote }}
+  {{- if .Values.storage.pg0.storageClassName }}
+  storageClassName: {{ .Values.storage.pg0.storageClassName | quote }}
+  {{- end }}
+{{- end }}

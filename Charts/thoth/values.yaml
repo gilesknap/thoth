@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=values.schema.json
+
+# Default values for the thoth chart.
+#
+# HOST-AGNOSTIC: this file (and the whole chart) is committed to a PUBLIC repo, so
+# it MUST NOT contain any cluster-specific or personal infrastructure — no concrete
+# hostnames, IP addresses, cluster domains, node names, Slack channel/member IDs,
+# vault paths, or tokens. Those belong only in the deploying cluster's own values
+# overlay and in the (sealed) Secret referenced by `secretName`.
+#
+# With annotations for building values.schema.json using:
+#   https://github.com/losisin/helm-values-schema-json
+
+# @schema description: Override the chart name used in resource names.
+nameOverride: ""
+# @schema description: Override the fully-qualified release name.
+fullnameOverride: ""
+
+# @schema description: Container image for the thoth Slack/MCP/cron workloads.
+image:
+  # @schema description: thoth image repository.
+  repository: ghcr.io/gilesknap/thoth
+  # @schema description: Image tag. The deploying overlay pins this to a release tag.
+  tag: latest
+  # @schema description: Image pull policy.
+  pullPolicy: IfNotPresent
+
+# @schema description: Name of the pre-existing (e.g. SealedSecret-managed) Secret
+#   holding ALL secret env (ANTHROPIC_API_KEY, FIRECRAWL_API_KEY, GITHUB_PKM_VAULT_TOKEN,
+#   SLACK_* tokens/IDs, THOTH_MCP_API_KEYS, ...). The Hindsight pod reuses
+#   ANTHROPIC_API_KEY as its fact-extraction LLM key. The chart does NOT template this
+#   Secret; every workload mounts it via envFrom.secretRef.
+secretName: thoth-env
+
+# @schema description: Node placement. Default pins to amd64 (the image is single-arch).
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+# @schema description: Pod-level securityContext applied to every workload.
+podSecurityContext: {}
+
+# @schema description: Container-level securityContext applied to every workload.
+securityContext: {}
+
+# @schema description: Resource requests/limits applied to the thoth workloads.
+resources: {}
+
+# @schema description: Persistent storage for the vault, the thoth home, and the
+#   embedded Hindsight Postgres. Sizes/classes are host-agnostic defaults; the
+#   deploying overlay sets a concrete storageClassName (e.g. local-path).
+storage:
+  # @schema description: The Obsidian/PKM vault working tree PVC (RWO, one writer).
+  vault:
+    # @schema description: Requested size for the vault PVC.
+    size: 5Gi
+    # @schema description: Access mode for the vault PVC.
+    accessMode: ReadWriteOnce
+    # @schema description: StorageClass for the vault PVC. Empty = cluster default.
+    storageClassName: ""
+  # @schema description: The THOTH_HOME state PVC (.env, runtime state, budget ledger).
+  thothHome:
+    # @schema description: Requested size for the thoth-home PVC.
+    size: 1Gi
+    # @schema description: Access mode for the thoth-home PVC.
+    accessMode: ReadWriteOnce
+    # @schema description: StorageClass for the thoth-home PVC. Empty = cluster default.
+    storageClassName: ""
+  # @schema description: The embedded Hindsight Postgres data PVC. Only created when
+  #   hindsight.databaseUrl is empty (i.e. Hindsight runs its own Postgres).
+  pg0:
+    # @schema description: Requested size for the Hindsight Postgres PVC.
+    size: 10Gi
+    # @schema description: Access mode for the Hindsight Postgres PVC.
+    accessMode: ReadWriteOnce
+    # @schema description: StorageClass for the Hindsight Postgres PVC. Empty = cluster default.
+    storageClassName: ""
+
+# @schema description: Non-secret thoth configuration. These are rendered into a
+#   ConfigMap and exposed to every workload via envFrom. Secret values live only in
+#   the Secret named by `secretName`.
+config:
+  # @schema description: Vault path inside the container (mount point of the vault PVC).
+  pkmVault: /vault
+  # @schema description: THOTH_HOME path inside the container (mount point of the home PVC).
+  thothHome: /thoth-home
+  # @schema description: Obsidian vault name (the vault folder / app display name).
+  obsidianVaultName: pkm-vault
+  # @schema description: Log level for the thoth daemons.
+  logLevel: INFO
+  # @schema description: Default Anthropic model for thoth's LLM calls.
+  anthropicModel: claude-sonnet-4-6
+  # @schema description: Optional override model for the analyse/kind/transcription call. Empty = use anthropicModel.
+  analyseModel: ""
+  # @schema description: Optional override model for the Excalidraw diagram call. Empty = use anthropicModel.
+  diagramModel: ""
+  # @schema description: Optional override model for the intent gate. Empty = use anthropicModel.
+  intentModel: ""
+  # @schema description: Daily LLM spend budget (USD) per Europe/London day. Empty = chart default unset.
+  dailyLlmBudget: ""
+  # @schema description: Git remote name the vault wrappers push/pull against.
+  gitRemote: origin
+  # @schema description: Git branch the vault wrappers push/pull against.
+  gitBranch: main
+  # @schema description: Comma-separated Host header allow-list for the MCP server
+  #   (defends the streamable-HTTP transport against a 421 when behind ingress).
+  #   The deploying overlay sets the public MCP hostname here.
+  mcpAllowedHosts: ""
+  # @schema description: Comma-separated Origin allow-list for the MCP server.
+  #   The deploying overlay sets the public MCP origin(s) here.
+  mcpAllowedOrigins: ""
+
+# @schema description: The HTTP MCP server.
+mcp:
+  # @schema description: Container/Service port the MCP server listens on.
+  port: 8765
+
+# @schema description: The networked Hindsight semantic-index Service.
+hindsight:
+  # @schema description: Hindsight container image.
+  image: ghcr.io/vectorize-io/hindsight:latest
+  # @schema description: Image pull policy for the Hindsight image.
+  pullPolicy: IfNotPresent
+  # @schema description: Port the Hindsight API listens on.
+  port: 8888
+  # @schema description: Hindsight LLM provider for fact extraction.
+  llmProvider: anthropic
+  # @schema description: Hindsight LLM model for fact extraction.
+  llmModel: claude-haiku-4-5
+  # @schema description: Stable Hindsight worker id (keeps the bank attributable across restarts).
+  workerId: thoth
+  # @schema description: External Postgres URL for Hindsight. When set, Hindsight uses
+  #   it (HINDSIGHT_API_DATABASE_URL from the Secret is preferred for credentials) and
+  #   the embedded pg0 PVC is NOT created. Empty = embedded Postgres on the pg0 PVC.
+  databaseUrl: ""
+  # @schema description: Mount point for the embedded Hindsight Postgres data directory.
+  pgDataDir: /var/lib/postgresql/data
+  # @schema description: Resource requests/limits for the Hindsight pod.
+  resources: {}
+
+# @schema description: Optional ingress exposing the MCP Service (bearer-auth at the app).
+ingress:
+  # @schema description: Whether to create an Ingress for the MCP Service.
+  enabled: false
+  # @schema description: IngressClass name (e.g. nginx).
+  className: nginx
+  # @schema description: Public host for the MCP endpoint. The deploying overlay sets this.
+  host: ""
+  # @schema description: Extra annotations for the Ingress.
+  annotations: {}
+  # @schema description: TLS configuration for the Ingress.
+  tls:
+    # @schema description: Whether to enable TLS on the Ingress.
+    enabled: false
+    # @schema description: Name of the TLS Secret. The deploying overlay sets this.
+    secretName: ""

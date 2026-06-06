@@ -11,9 +11,14 @@ on:
 jobs:
 
   lint:
+    # pre-commit runs the helm-schema hook, so it needs helm + the plugin —
+    # _precommit.yml installs them (the generic _tox runner does not have helm).
+    uses: ./.github/workflows/_precommit.yml
+
+  type-checking:
     uses: ./.github/workflows/_tox.yml
     with:
-      tox: pre-commit,type-checking
+      tox: type-checking
 
   test:
     strategy:
@@ -25,6 +30,26 @@ jobs:
     with:
       runs-on: ${{ matrix.runs-on }}
       python-version: ${{ matrix.python-version }}
+
+  container:
+    needs: test
+    if: always()
+    uses: ./.github/workflows/_container.yml
+    with:
+      publish: ${{ needs.test.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+
+  helm:
+    needs: test
+    if: always()
+    uses: ./.github/workflows/_helm.yml
+    with:
+      publish: ${{ needs.test.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
 
   docs:
     uses: ./.github/workflows/_docs.yml
