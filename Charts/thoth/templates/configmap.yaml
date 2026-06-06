@@ -27,6 +27,12 @@ data:
   THOTH_HINDSIGHT_BASE_URL: {{ printf "http://%s:%v" (include "thoth.hindsightServiceName" .) .Values.hindsight.port | quote }}
   THOTH_GIT_REMOTE: {{ .Values.config.gitRemote | quote }}
   THOTH_GIT_BRANCH: {{ .Values.config.gitBranch | quote }}
+  # HTTPS URL of the vault git repo the vault-bootstrap initContainer clones into an
+  # empty vault PVC. Only emitted when set (the deploying overlay sets it); empty
+  # disables bootstrap.
+  {{- with .Values.config.vaultRepoUrl }}
+  THOTH_VAULT_REPO_URL: {{ . | quote }}
+  {{- end }}
   # The MCP streamable-HTTP transport rejects requests whose Host/Origin are not
   # allow-listed (a 421 behind ingress); both keys are required for ingress to work.
   THOTH_MCP_ALLOWED_HOSTS: {{ .Values.config.mcpAllowedHosts | quote }}

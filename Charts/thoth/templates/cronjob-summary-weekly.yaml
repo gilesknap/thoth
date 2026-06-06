@@ -26,6 +26,8 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          initContainers:
+            {{- include "thoth.initContainers" . | nindent 12 }}
           containers:
             - name: summary-weekly
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

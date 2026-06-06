@@ -37,10 +37,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM ubuntu:noble AS runtime
 
 # Runtime system dependencies: git + ca-certificates are needed by the vault git
-# wrappers (bin/vault-pull / bin/vault-commit) to pull/commit/push the Obsidian
-# vault over HTTPS using a GITHUB_PKM_VAULT_TOKEN inline credential helper. No gh
-# CLI is required (the helper feeds the token directly), and audio/whisper/hindsight
-# native deps are deliberately out of scope for this image.
+# wrappers (bin/vault-bootstrap / bin/vault-pull / bin/vault-commit) to clone/pull/
+# commit/push the Obsidian vault over HTTPS using a GITHUB_PKM_VAULT_TOKEN inline
+# credential helper. No gh CLI is required (the helper feeds the token directly), and
+# audio/whisper/hindsight native deps are deliberately out of scope for this image.
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
@@ -56,7 +56,7 @@ ENV PATH=/app/.venv/bin:$PATH
 # Put the vault git wrappers on PATH (the runtime stage is a fresh FROM, so copy
 # them from the build stage's checked-out context). COPY preserves their executable
 # bit from the source tree.
-COPY --from=build /app/bin/vault-pull /app/bin/vault-commit /usr/local/bin/
+COPY --from=build /app/bin/vault-pull /app/bin/vault-commit /app/bin/vault-bootstrap /usr/local/bin/
 
 # change this entrypoint if it is not the same as the repo
 ENTRYPOINT ["thoth"]

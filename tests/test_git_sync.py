@@ -20,6 +20,7 @@ import pytest
 
 from thoth.config import Config, load_config
 from thoth.git_sync import (
+    VAULT_BOOTSTRAP_SCRIPT,
     VAULT_COMMIT_SCRIPT,
     VAULT_PULL_SCRIPT,
     Divergence,
@@ -155,17 +156,19 @@ def git_vault(tmp_path: Path) -> GitVault:
 
 
 def test_bin_dir_contains_both_scripts() -> None:
-    """bin_dir() resolves to a directory holding both shipped scripts."""
+    """bin_dir() resolves to a directory holding all shipped scripts."""
     directory = bin_dir()
     assert directory.is_dir()
     assert (directory / VAULT_PULL_SCRIPT).is_file()
     assert (directory / VAULT_COMMIT_SCRIPT).is_file()
+    assert (directory / VAULT_BOOTSTRAP_SCRIPT).is_file()
 
 
 def test_script_filenames_match_spec() -> None:
     """The script-name constants are the SPEC filenames."""
     assert VAULT_PULL_SCRIPT == "vault-pull"
     assert VAULT_COMMIT_SCRIPT == "vault-commit"
+    assert VAULT_BOOTSTRAP_SCRIPT == "vault-bootstrap"
 
 
 def test_resolve_bin_dir_finds_scripts_in_an_ancestor(tmp_path: Path) -> None:
@@ -187,10 +190,65 @@ def test_resolve_bin_dir_fallback_when_no_scripts(tmp_path: Path) -> None:
     module = tmp_path / "src" / "thoth" / "git_sync.py"
     module.parent.mkdir(parents=True)
     # No bin/ directory created anywhere; the fallback path is parents[2]/bin.
-    assert _resolve_bin_dir(module) == tmp_path / "bin"
+    # shutil.which must also miss so the PATH step does not intercept the fallback.
+    import thoth.git_sync as git_sync_mod
+
+    real_which = git_sync_mod.shutil.which
+    git_sync_mod.shutil.which = lambda _name: None  # type: ignore[assignment]
+    try:
+        assert _resolve_bin_dir(module) == tmp_path / "bin"
+    finally:
+        git_sync_mod.shutil.which = real_which  # type: ignore[assignment]
 
 
-@pytest.mark.parametrize("script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT])
+def test_resolve_bin_dir_consults_path_when_no_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no ancestor bin/, _resolve_bin_dir honours PATH (the container install).
+
+    In the non-editable container image the package lives under ``site-packages/thoth``
+    (no ancestor ``bin/vault-pull``) and the Dockerfile copies the wrappers onto PATH at
+    ``/usr/local/bin``. When ``shutil.which`` finds ``vault-pull`` there, its directory
+    wins over the repo-root guess.
+    """
+    on_path = tmp_path / "usr" / "local" / "bin"
+    on_path.mkdir(parents=True)
+    (on_path / VAULT_PULL_SCRIPT).write_text("#!/usr/bin/env bash\n")
+    module = tmp_path / "site-packages" / "thoth" / "git_sync.py"
+    module.parent.mkdir(parents=True)
+    import thoth.git_sync as git_sync_mod
+
+    monkeypatch.setattr(
+        git_sync_mod.shutil,
+        "which",
+        lambda name: str(on_path / name) if name == VAULT_PULL_SCRIPT else None,
+    )
+    assert _resolve_bin_dir(module) == on_path
+
+
+def test_resolve_bin_dir_ancestor_wins_over_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ancestor bin/ holding vault-pull beats PATH (dev/editable/CI checkout)."""
+    bin_here = tmp_path / "repo" / "bin"
+    bin_here.mkdir(parents=True)
+    (bin_here / VAULT_PULL_SCRIPT).write_text("#!/usr/bin/env bash\n")
+    module = tmp_path / "repo" / "src" / "thoth" / "git_sync.py"
+    module.parent.mkdir(parents=True)
+    import thoth.git_sync as git_sync_mod
+
+    # PATH points elsewhere; the ancestor must still win (which is never consulted).
+    other = tmp_path / "other" / "bin"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(
+        git_sync_mod.shutil, "which", lambda _name: str(other / VAULT_PULL_SCRIPT)
+    )
+    assert _resolve_bin_dir(module) == bin_here
+
+
+@pytest.mark.parametrize(
+    "script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT, VAULT_BOOTSTRAP_SCRIPT]
+)
 def test_scripts_pass_bash_syntax_check(script: str) -> None:
     """`bash -n` accepts each script (syntax check, no shellcheck needed)."""
     path = bin_dir() / script
@@ -203,7 +261,9 @@ def test_scripts_pass_bash_syntax_check(script: str) -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-@pytest.mark.parametrize("script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT])
+@pytest.mark.parametrize(
+    "script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT, VAULT_BOOTSTRAP_SCRIPT]
+)
 def test_scripts_contain_spec_verbatim_invariants(script: str) -> None:
     """Each script carries the load-bearing SPEC strings and never --force."""
     text = (bin_dir() / script).read_text()
@@ -215,7 +275,9 @@ def test_scripts_contain_spec_verbatim_invariants(script: str) -> None:
     assert "--force-with-lease" not in text
 
 
-@pytest.mark.parametrize("script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT])
+@pytest.mark.parametrize(
+    "script", [VAULT_PULL_SCRIPT, VAULT_COMMIT_SCRIPT, VAULT_BOOTSTRAP_SCRIPT]
+)
 def test_scripts_use_env_token_helper_with_gh_fallback(script: str) -> None:
     """Vault auth prefers an env-token x-access-token helper, falling back to gh.
 
@@ -361,6 +423,103 @@ def test_pull_raises_gitsyncerror_on_missing_remote(git_vault: GitVault) -> None
         sync.pull()
     # The message surfaces captured output for debugging.
     assert "vault-pull" in str(exc_info.value)
+
+
+# --------------------------------------------------------------------------- #
+# bootstrap(): clone an empty vault PVC on a fresh cluster.
+# --------------------------------------------------------------------------- #
+
+
+def test_bootstrap_clones_empty_vault(git_vault: GitVault, tmp_path: Path) -> None:
+    """bootstrap() init+fetch+checkouts the repo into an empty vault, origin wired.
+
+    The vault dir starts without a ``.git`` (a fresh PVC mount); with
+    ``THOTH_VAULT_REPO_URL`` pointing at the local bare repo, bootstrap clones it so the
+    work dir has ``.git`` and the seeded spine, and ``origin`` is configured so a later
+    ``pull()`` works. The poisoned helper proves the local path needs no credentials.
+    """
+    fresh = tmp_path / "fresh-vault"
+    fresh.mkdir()
+    env = dict(git_vault.env)
+    env["THOTH_VAULT_REPO_URL"] = str(git_vault.bare)
+    env.pop("THOTH_PUSH_REMOTE", None)
+    sync = GitSync(load_config({"PKM_VAULT": str(fresh)}), env=env)
+
+    result = sync.bootstrap()
+
+    assert result.returncode == 0
+    assert (fresh / ".git").is_dir()
+    assert (fresh / "index.md").read_text() == "# index\n"
+    # origin is wired to the source repo, so a subsequent pull works.
+    _set_identity(fresh)
+    assert sync.pull().returncode == 0
+
+
+def test_bootstrap_is_offline_for_local_remote(
+    git_vault: GitVault, tmp_path: Path
+) -> None:
+    """bootstrap() never invokes the credential helper for a local-path remote."""
+    fresh = tmp_path / "fresh-vault"
+    fresh.mkdir()
+    env = dict(git_vault.env)
+    env["THOTH_VAULT_REPO_URL"] = str(git_vault.bare)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    sync = GitSync(load_config({"PKM_VAULT": str(fresh)}), env=env)
+    result = sync.bootstrap()
+    assert result.returncode == 0
+    assert POISON_MARKER not in result.stderr
+    assert POISON_MARKER not in result.stdout
+
+
+def test_bootstrap_noop_when_already_git_repo(git_vault: GitVault) -> None:
+    """bootstrap() on an existing git vault is a clean no-op and does not wipe it.
+
+    ``git_vault.work`` is already a clone; bootstrap must detect the ``.git`` and skip
+    without touching the tree, even with a repo URL set.
+    """
+    before = _git(git_vault.work, "rev-parse", "HEAD").strip()
+    env = dict(git_vault.env)
+    env["THOTH_VAULT_REPO_URL"] = str(git_vault.bare)
+    sync = GitSync(git_vault.config, env=env)
+
+    result = sync.bootstrap()
+
+    assert result.returncode == 0
+    assert "skipping" in result.stdout
+    assert (git_vault.work / ".git").is_dir()
+    assert _git(git_vault.work, "rev-parse", "HEAD").strip() == before
+
+
+def test_bootstrap_noop_when_repo_url_unset(tmp_path: Path) -> None:
+    """bootstrap() with THOTH_VAULT_REPO_URL unset exits 0 and clones nothing."""
+    fresh = tmp_path / "fresh-vault"
+    fresh.mkdir()
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env.pop("THOTH_VAULT_REPO_URL", None)
+    env.pop("PKM_VAULT", None)
+    sync = GitSync(load_config({"PKM_VAULT": str(fresh)}), env=env)
+
+    result = sync.bootstrap()
+
+    assert result.returncode == 0
+    assert not (fresh / ".git").exists()
+
+
+def test_bootstrap_raises_on_unreachable_repo(tmp_path: Path) -> None:
+    """A bad repo URL makes bootstrap() raise GitSyncError with the script name."""
+    fresh = tmp_path / "fresh-vault"
+    fresh.mkdir()
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["THOTH_VAULT_REPO_URL"] = str(tmp_path / "does-not-exist.git")
+    env.pop("PKM_VAULT", None)
+    sync = GitSync(load_config({"PKM_VAULT": str(fresh)}), env=env)
+    with pytest.raises(GitSyncError) as exc_info:
+        sync.bootstrap()
+    assert "vault-bootstrap" in str(exc_info.value)
 
 
 # --------------------------------------------------------------------------- #

@@ -102,6 +102,11 @@ config:
   gitRemote: origin
   # @schema description: Git branch the vault wrappers push/pull against.
   gitBranch: main
+  # @schema description: HTTPS URL of the vault git repo, used by the vault-bootstrap
+  #   initContainer to clone an empty vault PVC on a fresh cluster. Empty disables
+  #   bootstrap (the dev/test default). This is personal infrastructure, so it is set
+  #   ONLY in the deploying cluster's values overlay, never committed here.
+  vaultRepoUrl: ""
   # @schema description: Comma-separated Host header allow-list for the MCP server
   #   (defends the streamable-HTTP transport against a 421 when behind ingress).
   #   The deploying overlay sets the public MCP hostname here.

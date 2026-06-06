@@ -27,6 +27,8 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        {{- include "thoth.initContainers" . | nindent 8 }}
       containers:
         - name: mcp
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
