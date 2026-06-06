@@ -27,7 +27,8 @@ image:
 
 # @schema description: Name of the pre-existing (e.g. SealedSecret-managed) Secret
 #   holding ALL secret env (ANTHROPIC_API_KEY, FIRECRAWL_API_KEY, GITHUB_PKM_VAULT_TOKEN,
-#   SLACK_* tokens/IDs, THOTH_MCP_API_KEYS, ...). The Hindsight pod reuses
+#   SLACK_* tokens/IDs, THOTH_MCP_API_KEYS, and the MCP OAuth secrets
+#   GITHUB_OAUTH_CLIENT_SECRET + THOTH_JWT_SIGNING_SECRET, ...). The Hindsight pod reuses
 #   ANTHROPIC_API_KEY as its fact-extraction LLM key. The chart does NOT template this
 #   Secret; every workload mounts it via envFrom.secretRef.
 secretName: thoth-env
@@ -108,6 +109,19 @@ config:
   # @schema description: Comma-separated Origin allow-list for the MCP server.
   #   The deploying overlay sets the public MCP origin(s) here.
   mcpAllowedOrigins: ""
+  # @schema description: GitHub OAuth App client id for MCP OAuth 2.1 login. Empty
+  #   disables OAuth (only the THOTH_MCP_API_KEYS bearer keys are accepted). The
+  #   matching client secret and the JWT signing secret live in the Secret named by
+  #   secretName (keys GITHUB_OAUTH_CLIENT_SECRET, THOTH_JWT_SIGNING_SECRET).
+  githubOauthClientId: ""
+  # @schema description: Public base URL of the MCP OAuth server (no trailing slash),
+  #   used to build the OAuth discovery/authorize/callback/token endpoints. The
+  #   deploying overlay sets the public MCP base URL here. Empty disables OAuth.
+  oauthServerUrl: ""
+  # @schema description: Comma-separated allow-list of GitHub usernames permitted to
+  #   complete MCP OAuth login. Empty means no user is allowed. This is an identity
+  #   allow-list, not a secret.
+  allowedGithubUsers: ""
 
 # @schema description: The HTTP MCP server.
 mcp:

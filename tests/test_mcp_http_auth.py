@@ -475,11 +475,19 @@ def test_run_http_registers_all_five_tools(
 
 
 class _FakeRequest:
-    """A minimal Starlette-request stand-in carrying just the headers a gate reads."""
+    """A minimal Starlette-request stand-in carrying what the gate reads.
 
-    def __init__(self, headers: dict[str, str]) -> None:
+    The gate reads ``request.headers`` (Tier 1/2 bearer + Cf-Access),
+    ``request.url.path`` (the OAuth public-path allow-list) and writes
+    ``request.state.oauth_sub`` (the decoded JWT subject). ``path`` defaults to a
+    protected route so the bearer-only tests are unaffected by the OAuth allow-list.
+    """
+
+    def __init__(self, headers: dict[str, str], *, path: str = "/mcp") -> None:
         # Starlette headers are case-insensitive; lower-case the keys to match .get().
         self.headers = {k.lower(): v for k, v in headers.items()}
+        self.url = types.SimpleNamespace(path=path)
+        self.state = types.SimpleNamespace()
 
 
 async def _call_next_marker(_request: Any) -> str:
@@ -624,4 +632,125 @@ def test_auth_middleware_accepts_valid_bearer_and_cf_assertion(
             _call_next_marker,
         )  # type: ignore[arg-type]
     )
+    assert out == "dispatched"
+
+
+# --- OAuth 2.1: the gate also accepts a thoth-issued JWT (additive, opt-in) ----------
+
+# A signing secret >=32 bytes so PyJWT's HS256 key-length check stays quiet under
+# filterwarnings=error. Fake placeholders only (gitleaks scans the commit).
+_OAUTH_SIGNING_SECRET = "test-oauth-signing-secret-" + "z" * 32
+_OAUTH_SERVER_URL = "https://mcp.example.com"
+
+
+def _oauth_config(tmp_path: Path, **extra: str) -> Config:
+    """A config with bearer keys AND OAuth 2.1 fully enabled (all required vars)."""
+    return _config(
+        tmp_path,
+        THOTH_MCP_API_KEYS="good-key",
+        GITHUB_OAUTH_CLIENT_ID="test-client-id",
+        GITHUB_OAUTH_CLIENT_SECRET="test-client-secret",
+        THOTH_JWT_SIGNING_SECRET=_OAUTH_SIGNING_SECRET,
+        THOTH_OAUTH_SERVER_URL=_OAUTH_SERVER_URL,
+        THOTH_ALLOWED_GITHUB_USERS="octocat",
+        **extra,
+    )
+
+
+_EXPECTED_RESOURCE_METADATA = (
+    f'Bearer resource_metadata="{_OAUTH_SERVER_URL}'
+    '/.well-known/oauth-protected-resource"'
+)
+
+
+def gate_dispatch(config: Config, request: _FakeRequest) -> Any:
+    """Build the gate for ``config`` and dispatch ``request`` through it (coroutine)."""
+    gate = build_auth_middleware(config)(app=lambda *a, **k: None)  # type: ignore[arg-type]
+    return gate.dispatch(request, _call_next_marker)  # type: ignore[arg-type]
+
+
+def test_auth_middleware_static_bearer_still_works_with_oauth_enabled(
+    tmp_path: Path,
+) -> None:
+    """Regression: a static THOTH_MCP_API_KEYS bearer still works after OAuth is on.
+
+    OAuth is additive -- turning it on must not break the API-key path Claude Code uses.
+    """
+    gate = build_auth_middleware(_oauth_config(tmp_path))(app=lambda *a, **k: None)  # type: ignore[arg-type]
+    out = _run_async(
+        gate.dispatch(
+            _FakeRequest({"Authorization": "Bearer good-key"}),
+            _call_next_marker,
+        )  # type: ignore[arg-type]
+    )
+    assert out == "dispatched"
+
+
+def test_auth_middleware_accepts_valid_oauth_jwt_and_attaches_sub(
+    tmp_path: Path,
+) -> None:
+    """A valid thoth OAuth JWT authorises and its ``sub`` lands on request.state."""
+    from thoth.mcp_oauth import mint_oauth_jwt
+
+    config = _oauth_config(tmp_path)
+    token = mint_oauth_jwt("octocat", config)
+    request = _FakeRequest({"Authorization": f"Bearer {token}"})
+
+    out = _run_async(gate_dispatch(config, request))
+    assert out == "dispatched"
+    # The decoded subject is attached for downstream logging/attribution.
+    assert request.state.oauth_sub == "octocat"
+
+
+def test_auth_middleware_rejects_invalid_jwt_with_resource_metadata_hint(
+    tmp_path: Path,
+) -> None:
+    """A garbage bearer (neither a key nor a valid JWT) is 401'd with the 9728 hint."""
+    config = _oauth_config(tmp_path)
+    response = _run_async(
+        gate_dispatch(config, _FakeRequest({"Authorization": "Bearer not.a.jwt"}))
+    )
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == _EXPECTED_RESOURCE_METADATA
+
+
+def test_auth_middleware_rejects_expired_jwt_with_resource_metadata_hint(
+    tmp_path: Path,
+) -> None:
+    """An expired thoth JWT is 401'd; the hint still points at the resource metadata.
+
+    The token is born expired via a negative TTL (no sleep, no real time-bomb).
+    """
+    from thoth.mcp_oauth import mint_oauth_jwt
+
+    config = _oauth_config(tmp_path)
+    token = mint_oauth_jwt("octocat", config, ttl_seconds=-10)
+    response = _run_async(
+        gate_dispatch(config, _FakeRequest({"Authorization": f"Bearer {token}"}))
+    )
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == _EXPECTED_RESOURCE_METADATA
+
+
+def test_auth_middleware_rejects_missing_token_with_resource_metadata_hint(
+    tmp_path: Path,
+) -> None:
+    """A request with no bearer at all is 401'd carrying the RFC 9728 discovery hint."""
+    config = _oauth_config(tmp_path)
+    response = _run_async(gate_dispatch(config, _FakeRequest({})))
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == _EXPECTED_RESOURCE_METADATA
+
+
+def test_auth_middleware_lets_oauth_discovery_path_through_without_a_bearer(
+    tmp_path: Path,
+) -> None:
+    """When OAuth is enabled, the discovery/OAuth routes are reachable without a token.
+
+    A client must be able to fetch the metadata and run the authorize/token dance before
+    it holds any credential, so those paths bypass the bearer gate entirely.
+    """
+    config = _oauth_config(tmp_path)
+    request = _FakeRequest({}, path="/.well-known/oauth-protected-resource")
+    out = _run_async(gate_dispatch(config, request))
     assert out == "dispatched"

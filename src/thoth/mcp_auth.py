@@ -6,10 +6,21 @@ request itself. Two tiers stack here, both enforced *before* any ``pkm_*`` tool 
 dispatched:
 
 * **Tier 1 -- static bearer (always on for HTTP).** Every request must carry
-  ``Authorization: Bearer <key>`` where ``<key>`` is one of the comma-separated keys in
-  ``THOTH_MCP_API_KEYS`` (rotation-friendly). The match is constant-time
-  (:func:`hmac.compare_digest`) so a wrong key leaks no timing signal. This is the tier
-  Claude Code uses (a remote MCP client that sends a user-pasted bearer header).
+  ``Authorization: Bearer <key>``. ``<key>`` is accepted when it is either one of the
+  comma-separated keys in ``THOTH_MCP_API_KEYS`` (rotation-friendly; the static-key
+  match is constant-time via :func:`hmac.compare_digest` so a wrong key leaks no timing
+  signal) **or** -- when OAuth 2.1 is configured (:meth:`Config.oauth_enabled`) -- a
+  valid thoth-issued OAuth access-token JWT (HS256, unexpired, verified by
+  :func:`thoth.mcp_oauth.verify_oauth_jwt`). The two are additive: a static key still
+  works after OAuth is turned on. This is the tier Claude Code uses (a remote MCP
+  client that sends a user-pasted bearer header); claude.ai obtains the JWT via the
+  OAuth dance.
+
+  When OAuth is enabled, the OAuth/discovery routes themselves
+  (:data:`thoth.mcp_oauth.OAUTH_PUBLIC_PATHS`) are allow-listed so an unauthenticated
+  client can reach them to *get* a token, and a 401 carries a
+  ``WWW-Authenticate: Bearer resource_metadata="..."`` hint pointing at the RFC 9728
+  protected-resource metadata so MCP clients can discover the authorization server.
 * **Tier 2 -- Cloudflare-Access JWT (opt-in defense-in-depth).** When BOTH
   ``THOTH_MCP_CF_ACCESS_TEAM_DOMAIN`` and ``THOTH_MCP_CF_ACCESS_AUD`` are set, the
   request must ALSO carry a valid ``Cf-Access-Jwt-Assertion`` header: a JWT signed by
@@ -172,15 +183,20 @@ def verify_cf_access_jwt(
 def build_auth_middleware(config: Config) -> Any:
     """Build a Starlette ``BaseHTTPMiddleware`` class enforcing the two auth tiers.
 
-    The returned class rejects (HTTP 401, no tool dispatch) any request that lacks a
-    valid bearer token, and -- when Cf-Access is configured -- additionally rejects a
-    request without a valid ``Cf-Access-Jwt-Assertion``. ``starlette`` is imported here,
-    not at module top level, so importing this module never needs the optional web
-    stack.
+    The returned class rejects (HTTP 401, no tool dispatch) any request whose bearer is
+    neither an accepted static ``THOTH_MCP_API_KEYS`` key nor -- when OAuth is
+    configured (:meth:`Config.oauth_enabled`) -- a valid thoth-issued OAuth access-token
+    JWT, and
+    -- when Cf-Access is configured -- additionally rejects a request without a valid
+    ``Cf-Access-Jwt-Assertion``. When OAuth is enabled the OAuth/discovery routes
+    (:data:`thoth.mcp_oauth.OAUTH_PUBLIC_PATHS`) are allow-listed (they must be
+    reachable without a token so a client can obtain one), and the 401 carries a
+    ``resource_metadata`` discovery hint. ``starlette`` is imported here, not at module
+    top level, so importing this module never needs the optional web stack.
 
     Args:
-        config: The frozen runtime config (provides the bearer key set and the optional
-            Cf-Access team domain / audience).
+        config: The frozen runtime config (provides the bearer key set, the optional
+            OAuth essentials, and the optional Cf-Access team domain / audience).
 
     Returns:
         A ``BaseHTTPMiddleware`` subclass ready to add to the FastMCP ASGI app.
@@ -193,17 +209,61 @@ def build_auth_middleware(config: Config) -> Any:
     cf_team_domain = config.mcp_cf_access_team_domain
     cf_aud = config.mcp_cf_access_aud
 
+    # OAuth is additive and opt-in: only when the four required vars are set does the
+    # gate also accept a thoth-issued JWT, allow-list the OAuth/discovery routes, and
+    # emit the RFC 9728 resource_metadata discovery hint on a 401. ``verify_oauth_jwt``
+    # and the allow-list set are imported lazily so this module stays import-safe in CI
+    # (mcp_oauth's top level is stdlib-only too).
+    oauth_enabled = config.oauth_enabled()
+    oauth_public_paths: frozenset[str] = frozenset()
+    challenge = "Bearer"
+    if oauth_enabled:
+        from thoth.mcp_oauth import OAUTH_PUBLIC_PATHS
+
+        oauth_public_paths = OAUTH_PUBLIC_PATHS
+        # The hint points the client at the protected-resource metadata so it can find
+        # the authorization server. server_url is guaranteed non-None by oauth_enabled.
+        assert config.oauth_server_url is not None
+        metadata_url = (
+            config.oauth_server_url.rstrip("/")
+            + "/.well-known/oauth-protected-resource"
+        )
+        challenge = f'Bearer resource_metadata="{metadata_url}"'
+
+    def _unauthorised(detail: str) -> Any:
+        """A 401 carrying the (OAuth-aware) WWW-Authenticate discovery hint."""
+        return JSONResponse(
+            {"error": "invalid_token", "detail": detail},
+            status_code=401,
+            headers={"WWW-Authenticate": challenge},
+        )
+
     class _ThothMcpAuthMiddleware(BaseHTTPMiddleware):
         """Reject unauthenticated requests with 401 before any tool is dispatched."""
 
         async def dispatch(self, request: Any, call_next: Any) -> Any:
+            # The OAuth/discovery routes must be reachable WITHOUT a bearer so a client
+            # can complete the dance and obtain a token; let them straight through.
+            if oauth_enabled and request.url.path in oauth_public_paths:
+                return await call_next(request)
+
             token = extract_bearer_token(request.headers.get("authorization"))
-            if not bearer_key_accepted(token, accepted_keys):
-                return JSONResponse(
-                    {"error": "invalid_token", "detail": "missing or invalid bearer"},
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+            # Tier 1a: a static THOTH_MCP_API_KEYS bearer (constant-time match).
+            allowed = bearer_key_accepted(token, accepted_keys)
+            # Tier 1b: else a valid thoth-issued OAuth JWT (additive, opt-in). The
+            # decoded ``sub`` is attached to request.state for downstream logging.
+            if not allowed and oauth_enabled:
+                from thoth.mcp_oauth import verify_oauth_jwt
+
+                try:
+                    claims = verify_oauth_jwt(token, config)
+                except AuthError:
+                    claims = None
+                if claims is not None:
+                    request.state.oauth_sub = claims.get("sub")
+                    allowed = True
+            if not allowed:
+                return _unauthorised("missing or invalid bearer")
             if cf_enabled:
                 assert cf_team_domain is not None  # guaranteed by mcp_cf_access_enabled
                 assert cf_aud is not None
