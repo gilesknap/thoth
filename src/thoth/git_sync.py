@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -53,6 +54,9 @@ VAULT_PULL_SCRIPT: str = "vault-pull"
 
 VAULT_COMMIT_SCRIPT: str = "vault-commit"
 """Filename of the shipped commit+push bash script in :func:`bin_dir`."""
+
+VAULT_BOOTSTRAP_SCRIPT: str = "vault-bootstrap"
+"""Filename of the shipped clone-an-empty-vault bash script in :func:`bin_dir`."""
 
 # Sentinel emitted by vault-commit when the rebase hits a conflict (verbatim
 # prefix from the script). Matching is substring-based so the rest of the line
@@ -183,8 +187,14 @@ def _resolve_bin_dir(module_path: Path) -> Path:
 
     Walks up the ancestors of ``module_path`` (this module's resolved location)
     and returns the first ``<ancestor>/bin`` that actually holds a
-    ``vault-pull`` script. When none is found, falls back to the repo-root guess
-    (``parents[2]`` for ``src/thoth/git_sync.py``) so the path is always concrete.
+    ``vault-pull`` script — the repo root in an editable/dev/CI checkout, where the
+    scripts sit beside the source tree. When NO ancestor carries them (a non-editable
+    install, e.g. the container image where the package lives under
+    ``site-packages/thoth/`` and the wrappers were copied to ``/usr/local/bin`` on
+    ``PATH``), consults ``PATH`` via :func:`shutil.which`; if ``vault-pull`` is found
+    there its directory is returned. Only when both miss does it fall back to the
+    repo-root guess (``parents[2]`` for ``src/thoth/git_sync.py``) so the path is
+    always concrete.
 
     Args:
         module_path: The resolved path of this module file.
@@ -196,6 +206,11 @@ def _resolve_bin_dir(module_path: Path) -> Path:
         candidate = ancestor / "bin"
         if (candidate / VAULT_PULL_SCRIPT).is_file():
             return candidate
+    # Non-editable install (the container): no ancestor holds the scripts, but the
+    # Dockerfile copies them onto PATH (/usr/local/bin). Honour PATH before guessing.
+    which = shutil.which(VAULT_PULL_SCRIPT)
+    if which is not None:
+        return Path(which).resolve().parent
     parents = module_path.parents
     repo_root = parents[2] if len(parents) > 2 else parents[-1]
     return repo_root / "bin"
@@ -206,8 +221,10 @@ def bin_dir() -> Path:
 
     Resolves by walking up from this module's location to the first ancestor that
     contains a ``vault-pull`` script (the repo root in an editable install and in
-    CI). Falls back to a repo-root guess so the path is always concrete even
-    before the scripts exist on disk.
+    CI). When no ancestor carries it (a non-editable install such as the container
+    image, where the wrappers are copied onto ``PATH`` at ``/usr/local/bin``),
+    consults ``PATH`` via :func:`shutil.which`. Falls back to a repo-root guess so
+    the path is always concrete even before the scripts exist on disk.
 
     Returns:
         The absolute ``bin/`` directory path (not guaranteed to exist).
@@ -309,6 +326,37 @@ class GitSync:
         if result.returncode != 0:
             raise GitSyncError(
                 self._format_failure("vault-pull", result),
+            )
+        return result
+
+    def bootstrap(self, *, timeout: float = 300.0) -> GitResult:
+        """Run ``vault-bootstrap``: clone the vault into an empty ``$PKM_VAULT``.
+
+        A freshly-provisioned cluster mounts an empty vault PVC (no ``.git``) and
+        nothing else clones the vault repo, so the script init+fetch+checkouts the
+        ``THOTH_VAULT_REPO_URL`` repo into the mount point (tolerant of a non-empty
+        mount dir, e.g. a ``lost+found``). It is a **no-op** when ``$PKM_VAULT`` is
+        already a git repo (the steady state) and when ``THOTH_VAULT_REPO_URL`` is
+        unset (the dev/test default — bootstrap is opt-in via the cluster overlay), in
+        both cases exiting cleanly without touching the tree. Run as a Helm
+        initContainer before each vault-mounting workload.
+
+        Args:
+            timeout: Seconds to allow the script (a full clone) before
+                :class:`subprocess.TimeoutExpired` is raised.
+
+        Returns:
+            The :class:`GitResult` (``committed=True`` meaning "ran cleanly"; the
+            stdout line reports whether it cloned or skipped).
+
+        Raises:
+            GitSyncError: if the script exits non-zero (stderr/stdout attached to
+                the message).
+        """
+        result = self._run(VAULT_BOOTSTRAP_SCRIPT, (), timeout=timeout)
+        if result.returncode != 0:
+            raise GitSyncError(
+                self._format_failure("vault-bootstrap", result),
             )
         return result
 

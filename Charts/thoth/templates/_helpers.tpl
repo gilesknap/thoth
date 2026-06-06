@@ -91,6 +91,28 @@ spec) by the caller.
 {{- end }}
 
 {{/*
+Init container shared by every vault-mounting workload: clones the vault repo into
+an empty vault PVC on first start (a no-op once the vault is a git repo, and when
+config.vaultRepoUrl is unset). Same image/env/mounts as the main container so the
+clone lands on the same vault path. Indented for `nindent 8` (deployment pod spec)
+or `nindent 12` (cronjob pod spec) by the caller, like thoth.volumes.
+*/}}
+{{- define "thoth.initContainers" -}}
+- name: vault-bootstrap
+  image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  args: ["vault-bootstrap"]
+  envFrom:
+    {{- include "thoth.envFrom" . | nindent 4 }}
+  volumeMounts:
+    {{- include "thoth.volumeMounts" . | nindent 4 }}
+  {{- with .Values.securityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+{{/*
 Volumes shared by the thoth (non-hindsight) workloads: the vault and the
 thoth-home PVCs.
 */}}

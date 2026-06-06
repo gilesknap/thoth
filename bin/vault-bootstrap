@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# thoth/bin/vault-bootstrap — clone the canonical vault into an EMPTY PVC.
+#
+# A freshly-provisioned cluster mounts an empty vault PVC (no .git), and nothing
+# else clones the vault repo, so every vault-mounting workload would fail its first
+# pull/commit. This wrapper runs as an initContainer before each of those workloads
+# and clones the vault ONCE: when $PKM_VAULT already has a .git it is a no-op (the
+# steady state), and when THOTH_VAULT_REPO_URL is unset there is nothing to clone, so
+# it is also a no-op (the dev/test default — bootstrap is opt-in via the cluster
+# overlay, never a hardcoded owner URL).
+#
+# Auth mirrors vault-pull: when GITHUB_PKM_VAULT_TOKEN is set (sealed-secret env) it is
+# fed to git as an x-access-token HTTPS credential via an inline credential helper (the
+# token stays in the process env ONLY, never in the URL, git config, or reflog); when it
+# is unset it falls back to gh's credential helper (HTTPS, never SSH — a documented no-op
+# for a local-path remote in tests/CI). GIT_CONFIG_GLOBAL=/dev/null neutralises any
+# global insteadOf ssh-rewrite. THOTH_GIT_REMOTE / THOTH_GIT_BRANCH default to the
+# verbatim SPEC values ("origin" / "main"), so a test can point the clone at a LOCAL bare
+# repo in tmp_path.
+#
+# The PVC mount point may already contain entries (e.g. a lost+found directory), so a
+# plain `git clone` into it would refuse. Instead init the repo in place, add the remote,
+# fetch the branch, and check it out — equivalent to a clone but tolerant of a non-empty
+# mount dir.
+#
+# The vault PVC is RWO/single-node, and this wrapper runs as an initContainer on EVERY
+# vault-mounting workload (mcp + slack Deployments both start on the same node on first
+# ArgoCD sync). So N copies race against the SAME working dir. Two guards make that safe:
+#   1. flock on the vault dir serialises the bootstrap — only one copy runs the critical
+#      section at a time; the rest block, then see the completed checkout and skip.
+#   2. The idempotency check requires a COMPLETED checkout (HEAD resolves), not bare
+#      `.git` existence. A crashed partial init (set -e after `git init` created `.git`
+#      but before `checkout`) leaves `.git` with an unborn HEAD; that must be retried,
+#      not declared done. Every step below is re-runnable, so a retry converges.
+set -euo pipefail
+VAULT="${PKM_VAULT:-/opt/pkm-vault}"
+REPO_URL="${THOTH_VAULT_REPO_URL:-}"
+REMOTE="${THOTH_GIT_REMOTE:-origin}"
+BRANCH="${THOTH_GIT_BRANCH:-main}"
+mkdir -p "$VAULT"
+# Serialise concurrent initContainers on the shared RWO vault PVC: take an exclusive
+# advisory lock on the vault dir for the whole bootstrap (released when this process,
+# and so fd 9, exits). Locking the dir itself avoids leaving a stray lockfile in the
+# checked-out tree.
+exec 9<"$VAULT"
+flock 9
+if git -C "$VAULT" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    echo "vault-bootstrap: already initialised at $VAULT; skipping"
+    exit 0
+fi
+if [ -z "$REPO_URL" ]; then
+    echo "vault-bootstrap: THOTH_VAULT_REPO_URL unset; nothing to clone (skipping)"
+    exit 0
+fi
+# Vault auth. When GITHUB_PKM_VAULT_TOKEN is set (systemd EnvironmentFile / sealed-secret),
+# feed it to git as an x-access-token HTTPS credential via an inline credential helper —
+# the token stays in the process env ONLY (never in the URL, git config, or reflog). When
+# it is unset, fall back to gh's credential helper (HTTPS, never SSH), a documented no-op
+# for a local-path remote.
+if [ -n "${GITHUB_PKM_VAULT_TOKEN:-}" ]; then
+    export GITHUB_PKM_VAULT_TOKEN
+    CRED_HELPER='!f() { echo username=x-access-token; echo "password=${GITHUB_PKM_VAULT_TOKEN}"; }; f'
+else
+    CRED_HELPER='!gh auth git-credential'
+fi
+GIT_CONFIG_GLOBAL=/dev/null git init -q -b "$BRANCH" "$VAULT"
+GIT_CONFIG_GLOBAL=/dev/null git -C "$VAULT" remote add "$REMOTE" "$REPO_URL" 2>/dev/null \
+    || GIT_CONFIG_GLOBAL=/dev/null git -C "$VAULT" remote set-url "$REMOTE" "$REPO_URL"
+GIT_CONFIG_GLOBAL=/dev/null git -C "$VAULT" -c credential.helper="$CRED_HELPER" \
+    fetch "$REMOTE" "$BRANCH"
+GIT_CONFIG_GLOBAL=/dev/null git -C "$VAULT" -c credential.helper="$CRED_HELPER" \
+    checkout -B "$BRANCH" "$REMOTE/$BRANCH"
+echo "vault-bootstrap: cloned $REPO_URL ($REMOTE/$BRANCH) into $VAULT"

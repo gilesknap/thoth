@@ -71,6 +71,10 @@
                 "thothHome": {
                     "description": "THOTH_HOME path inside the container (mount point of the home PVC).",
                     "type": "string"
+                },
+                "vaultRepoUrl": {
+                    "description": "HTTPS URL of the vault git repo, used by the vault-bootstrap",
+                    "type": "string"
                 }
             },
             "additionalProperties": false

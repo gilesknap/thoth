@@ -67,7 +67,8 @@ def build_parser() -> ArgumentParser:
         version=__version__,
     )
     sub = parser.add_subparsers(
-        dest="command", metavar="{init,slack,mcp,reindex,summary,lint,capture}"
+        dest="command",
+        metavar="{init,vault-bootstrap,slack,mcp,reindex,summary,lint,capture}",
     )
 
     init = sub.add_parser("init", help="seed the vault spine + dashboards (idempotent)")
@@ -75,6 +76,12 @@ def build_parser() -> ArgumentParser:
         "--force",
         action="store_true",
         help="overwrite existing spine/dashboard files",
+    )
+
+    sub.add_parser(
+        "vault-bootstrap",
+        help="clone the vault repo into an empty $PKM_VAULT "
+        "(no-op if already a git repo)",
     )
 
     sub.add_parser("slack", help="run the Slack Socket-Mode capture/retrieve daemon")
@@ -242,6 +249,7 @@ def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
     """Route a parsed ``command`` to its handler with the loaded ``config``."""
     handlers: dict[str, Callable[[Namespace, Config], None]] = {
         "init": run_init,
+        "vault-bootstrap": run_vault_bootstrap,
         "slack": run_slack,
         "mcp": run_mcp,
         "reindex": run_reindex,
@@ -273,6 +281,29 @@ def run_init(namespace: Namespace, config: Config) -> None:
     print(f"init: {len(result.created)} written, {len(result.skipped)} skipped")
     for name in result.created:
         print(f"  + {name}")
+
+
+def run_vault_bootstrap(namespace: Namespace, config: Config) -> None:
+    """Clone the vault into an empty ``$PKM_VAULT`` (``thoth vault-bootstrap``).
+
+    Builds a :class:`~thoth.git_sync.GitSync` over ``config`` and calls
+    :meth:`~thoth.git_sync.GitSync.bootstrap`, which runs the shipped
+    ``bin/vault-bootstrap`` wrapper: it clones the ``THOTH_VAULT_REPO_URL`` repo into
+    the vault mount point when it is not yet a git repo, and is a no-op when the vault
+    already has a ``.git`` (the steady state) or when ``THOTH_VAULT_REPO_URL`` is unset
+    (the dev/test default). Wired as a Helm initContainer before each vault-mounting
+    workload so a fresh cluster's empty vault PVC is populated once on first start. The
+    git import is local to the handler so importing this module never needs it.
+
+    Args:
+        namespace: The parsed args (no flags for this subcommand).
+        config: The frozen runtime config (resolves the vault root + child env).
+    """
+    from .git_sync import GitSync
+
+    git = GitSync(config)
+    result = git.bootstrap()
+    print(f"vault-bootstrap: {result.stdout.strip() or 'done'}")
 
 
 def run_slack(namespace: Namespace, config: Config) -> None:

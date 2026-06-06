@@ -60,7 +60,8 @@ def test_build_parser_lint_no_log_flag() -> None:
 
 
 @pytest.mark.parametrize(
-    "command", ["init", "slack", "mcp", "reindex", "summary", "lint"]
+    "command",
+    ["init", "vault-bootstrap", "slack", "mcp", "reindex", "summary", "lint"],
 )
 def test_build_parser_recognises_each_subcommand(command: str) -> None:
     """Each Phase-3/4 subcommand is recognised and sets ``command``."""
@@ -102,6 +103,7 @@ def test_main_dispatches_each_command(
 
     for name in (
         "run_init",
+        "run_vault_bootstrap",
         "run_slack",
         "run_mcp",
         "run_reindex",
@@ -115,6 +117,7 @@ def test_main_dispatches_each_command(
         monkeypatch.setattr(__main__, name, _record)
 
     __main__.main(["init"])
+    __main__.main(["vault-bootstrap"])
     __main__.main(["slack"])
     __main__.main(["mcp"])
     __main__.main(["reindex"])
@@ -123,6 +126,7 @@ def test_main_dispatches_each_command(
 
     assert [name for name, _ in calls] == [
         "run_init",
+        "run_vault_bootstrap",
         "run_slack",
         "run_mcp",
         "run_reindex",
@@ -162,6 +166,44 @@ def test_run_init_builds_vault_and_seeds(
 
     assert seen["config"] is stub_config
     assert seen["force"] is force
+
+
+# --- run_vault_bootstrap (builds a GitSync and clones; nothing blocks) -------------
+
+
+def test_run_vault_bootstrap_builds_gitsync_and_bootstraps(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_config: Config,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``thoth vault-bootstrap`` builds a GitSync and calls bootstrap (no real git)."""
+    seen: dict[str, Any] = {}
+
+    class _FakeGitSync:
+        def __init__(self, config: Config) -> None:
+            seen["config"] = config
+
+        def bootstrap(self) -> Any:
+            seen["bootstrapped"] = True
+            from thoth.git_sync import GitResult
+
+            return GitResult(
+                returncode=0,
+                stdout="vault-bootstrap: cloned repo into /vault\n",
+                stderr="",
+                committed=True,
+            )
+
+    import thoth.git_sync as git_sync_module
+
+    monkeypatch.setattr(git_sync_module, "GitSync", _FakeGitSync)
+
+    namespace = __main__.build_parser().parse_args(["vault-bootstrap"])
+    __main__.run_vault_bootstrap(namespace, stub_config)
+
+    assert seen["config"] is stub_config
+    assert seen["bootstrapped"] is True
+    assert "cloned repo into /vault" in capsys.readouterr().out
 
 
 # --- run_slack / run_mcp (routing only; nothing blocks) ----------------------------
