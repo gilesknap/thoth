@@ -170,7 +170,10 @@ Two `helm-schema` hook foot-guns (`Charts/thoth/values.schema.json` is generated
   (`Please install … plugin!`). The fix (ec pattern): install the plugin in both the
   devcontainer (`Dockerfile` developer stage) and a dedicated `_precommit.yml` CI job
   (`ci.yml`'s `lint` uses it; `type-checking` stays on `_tox.yml`). Don't delete a
-  failing schema hook — install the plugin where it runs.
+  failing schema hook — install the plugin where it runs. **A fresh agent sandbox is
+  often NOT the built devcontainer** (no `helm`/`gpg`, no `/cache` mount, no
+  `pre-commit`, read-only `/usr/local/bin`) — so don't try to live-install helm there;
+  the Dockerfile already has it, so **rebuild the container** to pick it up.
 - **`@schema` annotation comments must not contain `;`.** The parser treats `;` as the
   annotation separator, so a `;` in a description makes the generator error and write
   **nothing** — the committed schema silently stops updating. Keep descriptions

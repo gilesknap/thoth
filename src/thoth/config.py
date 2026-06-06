@@ -151,6 +151,11 @@ class Config:
     mcp_cf_access_aud: str | None
     mcp_allowed_hosts: str | None
     mcp_allowed_origins: str | None
+    github_oauth_client_id: str | None
+    github_oauth_client_secret: str | None
+    jwt_signing_secret: str | None
+    allowed_github_users: str | None
+    oauth_server_url: str | None
 
     @property
     def state_db_path(self) -> Path:
@@ -304,6 +309,78 @@ class Config:
             return ()
         return tuple(o.strip() for o in raw.split(",") if o.strip())
 
+    def allowed_github_user_set(self) -> frozenset[str]:
+        """Parse ``THOTH_ALLOWED_GITHUB_USERS`` into the OAuth allow-list set.
+
+        OAuth 2.1 for the MCP server authenticates a user by their GitHub identity and
+        then mints a thoth-signed access token; this allow-list bounds *which* GitHub
+        logins may obtain one. Logins are comma-separated so the set can be edited
+        without code changes; surrounding whitespace and blank entries are dropped, and
+        an unset/empty var yields the empty set (no user is allowed, so the OAuth flow
+        admits nobody until the operator populates it).
+
+        Returns:
+            The frozenset of allowed GitHub logins (empty when unconfigured).
+        """
+        raw = self.allowed_github_users
+        if not raw:
+            return frozenset()
+        return frozenset(login.strip() for login in raw.split(",") if login.strip())
+
+    def oauth_enabled(self) -> bool:
+        """Return ``True`` when OAuth 2.1 for the MCP server is fully configured.
+
+        OAuth is *opt-in* and additive to the static ``THOTH_MCP_API_KEYS`` bearer
+        (the server still starts in API-key-only mode when OAuth env is absent). It is
+        enabled only when ALL four required vars are set: ``GITHUB_OAUTH_CLIENT_ID``,
+        ``GITHUB_OAUTH_CLIENT_SECRET``, ``THOTH_JWT_SIGNING_SECRET`` and
+        ``THOTH_OAUTH_SERVER_URL``. A partial configuration is a startup error -- see
+        :meth:`require_oauth` -- not a silent fallback.
+        """
+        return bool(
+            self.github_oauth_client_id
+            and self.github_oauth_client_secret
+            and self.jwt_signing_secret
+            and self.oauth_server_url
+        )
+
+    def require_oauth(self) -> tuple[str, str, str, str]:
+        """Return the four OAuth essentials or raise :class:`ConfigError`.
+
+        Returns ``(client_id, client_secret, signing_secret, server_url)``. Raises if
+        any of ``GITHUB_OAUTH_CLIENT_ID``, ``GITHUB_OAUTH_CLIENT_SECRET``,
+        ``THOTH_JWT_SIGNING_SECRET`` or ``THOTH_OAUTH_SERVER_URL`` is unset, naming
+        exactly which are missing. Called when ANY OAuth var is present so a half-set
+        configuration fails fast at startup rather than running half-open.
+        """
+        missing = [
+            name
+            for name, value in (
+                ("GITHUB_OAUTH_CLIENT_ID", self.github_oauth_client_id),
+                ("GITHUB_OAUTH_CLIENT_SECRET", self.github_oauth_client_secret),
+                ("THOTH_JWT_SIGNING_SECRET", self.jwt_signing_secret),
+                ("THOTH_OAUTH_SERVER_URL", self.oauth_server_url),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ConfigError(
+                "OAuth requires GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET, "
+                "THOTH_JWT_SIGNING_SECRET and THOTH_OAUTH_SERVER_URL; "
+                f"missing: {', '.join(missing)}"
+            )
+        # All four are non-None here; assert for the type checker.
+        assert self.github_oauth_client_id is not None
+        assert self.github_oauth_client_secret is not None
+        assert self.jwt_signing_secret is not None
+        assert self.oauth_server_url is not None
+        return (
+            self.github_oauth_client_id,
+            self.github_oauth_client_secret,
+            self.jwt_signing_secret,
+            self.oauth_server_url,
+        )
+
     def alert_target(self) -> str | None:
         """Resolve where unattended error/heartbeat alerts are posted (issue #15).
 
@@ -419,7 +496,7 @@ def load_config(
     # vault_raw is non-None: PKM_VAULT is in REQUIRED_VARS and passed the check above.
     assert vault_raw is not None
 
-    return Config(
+    config = Config(
         vault_path=_resolve_path(vault_raw),
         vault_name=lookup("OBSIDIAN_VAULT_NAME") or DEFAULT_OBSIDIAN_VAULT_NAME,
         thoth_home=thoth_home,
@@ -459,7 +536,33 @@ def load_config(
         mcp_cf_access_aud=lookup("THOTH_MCP_CF_ACCESS_AUD"),
         mcp_allowed_hosts=lookup("THOTH_MCP_ALLOWED_HOSTS"),
         mcp_allowed_origins=lookup("THOTH_MCP_ALLOWED_ORIGINS"),
+        github_oauth_client_id=lookup("GITHUB_OAUTH_CLIENT_ID"),
+        github_oauth_client_secret=lookup("GITHUB_OAUTH_CLIENT_SECRET"),
+        jwt_signing_secret=lookup("THOTH_JWT_SIGNING_SECRET"),
+        allowed_github_users=lookup("THOTH_ALLOWED_GITHUB_USERS"),
+        oauth_server_url=lookup("THOTH_OAUTH_SERVER_URL"),
     )
+
+    # OAuth 2.1 for the MCP server is additive and opt-in: with no OAuth env at all
+    # the server starts in API-key-only mode (``oauth_enabled()`` is False). But a
+    # *partial* configuration is a foot-gun -- it would run half-open -- so if ANY OAuth
+    # var is set we require the full required set, failing fast at startup and naming
+    # what is missing. ``THOTH_ALLOWED_GITHUB_USERS`` counts as "OAuth env present" even
+    # though it is not one of the four required vars.
+    oauth_vars_present = any(
+        lookup(name) is not None
+        for name in (
+            "GITHUB_OAUTH_CLIENT_ID",
+            "GITHUB_OAUTH_CLIENT_SECRET",
+            "THOTH_JWT_SIGNING_SECRET",
+            "THOTH_OAUTH_SERVER_URL",
+            "THOTH_ALLOWED_GITHUB_USERS",
+        )
+    )
+    if oauth_vars_present and not config.oauth_enabled():
+        config.require_oauth()
+
+    return config
 
 
 def _read_dotenv(path: Path) -> dict[str, str]:

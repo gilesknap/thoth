@@ -375,6 +375,94 @@ def test_require_slack_raises_when_incomplete(extra: dict[str, str]) -> None:
         cfg.require_slack()
 
 
+# --- OAuth 2.1 config (issue #..): additive, opt-in, fail-fast when half-set ---------
+
+# A signing secret >=32 bytes keeps PyJWT's HS256 key-length check quiet downstream;
+# obviously-fake placeholders only (gitleaks scans the commit).
+FAKE_SIGNING_SECRET = "test-signing-secret-" + "x" * 32
+
+_FULL_OAUTH_ENV = {
+    "GITHUB_OAUTH_CLIENT_ID": "test-client-id",
+    "GITHUB_OAUTH_CLIENT_SECRET": "test-client-secret",
+    "THOTH_JWT_SIGNING_SECRET": FAKE_SIGNING_SECRET,
+    "THOTH_OAUTH_SERVER_URL": "https://mcp.example.com",
+    "THOTH_ALLOWED_GITHUB_USERS": "octocat, hubot",
+}
+
+
+def test_oauth_fields_round_trip_and_enabled() -> None:
+    """The OAuth vars map onto their fields; full config -> oauth_enabled() True."""
+    cfg = load_config({"PKM_VAULT": "/x", **_FULL_OAUTH_ENV})
+    assert cfg.github_oauth_client_id == "test-client-id"
+    assert cfg.github_oauth_client_secret == "test-client-secret"
+    assert cfg.jwt_signing_secret == FAKE_SIGNING_SECRET
+    assert cfg.oauth_server_url == "https://mcp.example.com"
+    assert cfg.allowed_github_users == "octocat, hubot"
+    assert cfg.oauth_enabled() is True
+    # The allow-list parses comma-separated, trimmed, blank-dropped (like the key set).
+    assert cfg.allowed_github_user_set() == frozenset({"octocat", "hubot"})
+    # require_oauth returns the four essentials in order.
+    assert cfg.require_oauth() == (
+        "test-client-id",
+        "test-client-secret",
+        FAKE_SIGNING_SECRET,
+        "https://mcp.example.com",
+    )
+
+
+def test_oauth_disabled_when_no_oauth_env_and_server_still_loads() -> None:
+    """No OAuth env at all: oauth_enabled() is False and config loads (API-key mode)."""
+    cfg = load_config({"PKM_VAULT": "/x"})
+    assert cfg.oauth_enabled() is False
+    assert cfg.github_oauth_client_id is None
+    assert cfg.jwt_signing_secret is None
+    assert cfg.oauth_server_url is None
+    assert cfg.allowed_github_user_set() == frozenset()
+
+
+@pytest.mark.parametrize(
+    "drop",
+    [
+        "GITHUB_OAUTH_CLIENT_ID",
+        "GITHUB_OAUTH_CLIENT_SECRET",
+        "THOTH_JWT_SIGNING_SECRET",
+        "THOTH_OAUTH_SERVER_URL",
+    ],
+)
+def test_partial_oauth_config_fails_fast_at_load(drop: str) -> None:
+    """A half-set OAuth config is a fail-fast ConfigError naming the missing var.
+
+    OAuth is additive and opt-in, but a *partial* configuration would run half-open, so
+    if ANY OAuth var is present load_config requires the full set and names what is
+    missing rather than silently falling back to API-key-only mode.
+    """
+    env = {"PKM_VAULT": "/x", **_FULL_OAUTH_ENV}
+    del env[drop]
+    with pytest.raises(ConfigError, match=drop):
+        load_config(env)
+
+
+def test_allowed_github_users_alone_triggers_required_set() -> None:
+    """THOTH_ALLOWED_GITHUB_USERS counts as 'OAuth present' and demands all vars."""
+    with pytest.raises(ConfigError, match="GITHUB_OAUTH_CLIENT_ID"):
+        load_config({"PKM_VAULT": "/x", "THOTH_ALLOWED_GITHUB_USERS": "octocat"})
+
+
+def test_require_oauth_raises_when_fully_unset() -> None:
+    """require_oauth on a config with no OAuth env names every missing required var."""
+    cfg = load_config({"PKM_VAULT": "/x"})
+    with pytest.raises(ConfigError) as exc_info:
+        cfg.require_oauth()
+    message = str(exc_info.value)
+    for var in (
+        "GITHUB_OAUTH_CLIENT_ID",
+        "GITHUB_OAUTH_CLIENT_SECRET",
+        "THOTH_JWT_SIGNING_SECRET",
+        "THOTH_OAUTH_SERVER_URL",
+    ):
+        assert var in message
+
+
 def test_obsidian_uri_matches_spec_example() -> None:
     """obsidian_uri matches the SPEC Appendix worked example (slash -> %2F)."""
     cfg = load_config({"PKM_VAULT": "/x"})

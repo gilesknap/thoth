@@ -31,3 +31,16 @@ data:
   # allow-listed (a 421 behind ingress); both keys are required for ingress to work.
   THOTH_MCP_ALLOWED_HOSTS: {{ .Values.config.mcpAllowedHosts | quote }}
   THOTH_MCP_ALLOWED_ORIGINS: {{ .Values.config.mcpAllowedOrigins | quote }}
+  # MCP OAuth 2.1 (#bearer + per-user GitHub identity). The matching client secret
+  # and JWT signing secret are NOT templated here; they live in the Secret named by
+  # secretName (GITHUB_OAUTH_CLIENT_SECRET, THOTH_JWT_SIGNING_SECRET). OAuth is off
+  # unless the client id and server URL are both set.
+  {{- with .Values.config.githubOauthClientId }}
+  GITHUB_OAUTH_CLIENT_ID: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.oauthServerUrl }}
+  THOTH_OAUTH_SERVER_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.allowedGithubUsers }}
+  THOTH_ALLOWED_GITHUB_USERS: {{ . | quote }}
+  {{- end }}

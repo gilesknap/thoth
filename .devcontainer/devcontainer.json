@@ -67,6 +67,9 @@
     ],
     // Mount the parent as /workspaces so we can pip install peers as editable
     "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces,type=bind",
-    // After the container is created, recreate the venv then make pre-commit first run faster
-    "postCreateCommand": "uv venv --clear && uv sync && pre-commit install --install-hooks"
+    // After the container is created, recreate the venv then make pre-commit first run faster.
+    // Clear core.hooksPath first: if it's set (even to git's default hooks dir) pre-commit
+    // "cowardly refuses" to install. The bind-mounted .git/config can carry a stale value in
+    // from a past tool, so unset it on every rebuild to keep this step self-healing.
+    "postCreateCommand": "uv venv --clear && uv sync && (git config --unset-all core.hooksPath 2>/dev/null || true) && pre-commit install --install-hooks"
 }
