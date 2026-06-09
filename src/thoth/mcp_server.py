@@ -223,12 +223,8 @@ def _render_ingest_report(report: IngestReport) -> str:
 
     parts = [head]
     refs: list[str] = []
-    for uri, wikilink in zip(report.obsidian_links, report.wikilinks, strict=False):
+    for uri, wikilink in zip(report.obsidian_links, report.wikilinks, strict=True):
         refs.append(f"[open]({uri}) {wikilink}")
-    for uri in report.obsidian_links[len(report.wikilinks) :]:
-        refs.append(f"[open]({uri})")
-    for wikilink in report.wikilinks[len(report.obsidian_links) :]:
-        refs.append(wikilink)
     if refs:
         parts.append(" - ".join(refs))
     if report.message and not report.conflict:
@@ -488,11 +484,16 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         A :class:`ToolResult` listing the actions (always ``ok=True``; an empty vault
         yields a "no open actions" note).
     """
-    from thoth.summary import ACTION_OPEN_STATUSES, SummaryEngine
+    from thoth.summary import SummaryEngine
 
     engine = SummaryEngine(ctx.config, ctx.vault)
     open_actions = engine.open_actions()
-    overdue_paths = {item.path for item in engine.overdue_actions()}
+    today = engine.today
+    overdue_paths = {
+        item.path
+        for item in open_actions
+        if item.due_date is not None and item.due_date < today
+    }
 
     lines: list[str] = ["**Open actions:**"]
     if open_actions:
@@ -501,17 +502,13 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
     else:
         lines.append("- _No open actions._")
 
-    closed = (
-        _scan_closed_actions(ctx.vault, open_statuses=set(ACTION_OPEN_STATUSES))
-        if include_done
-        else []
-    )
+    closed = engine.closed_actions() if include_done else []
     if closed:
         lines.append("")
         lines.append("**Done/closed:**")
         lines.extend(
-            f"- {wikilink} {title} (status: {status})"
-            for title, status, wikilink in closed
+            f"- {item.wikilink} {item.title} (status: {item.status})"
+            for item in closed
         )
 
     return ToolResult(
@@ -520,43 +517,9 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         data={
             "open": [item.path for item in open_actions],
             "overdue": sorted(overdue_paths),
-            "closed": [wikilink for _, _, wikilink in closed],
+            "closed": [item.wikilink for item in closed],
         },
     )
-
-
-def _scan_closed_actions(
-    vault: Vault, *, open_statuses: set[str]
-) -> list[tuple[str, str, str]]:
-    """Read ``actions/*.md`` and return ``(title, status, wikilink)`` for closed items.
-
-    A closed action is one whose frontmatter ``status`` is not in ``open_statuses`` (the
-    open-action logic itself lives in :class:`thoth.summary.SummaryEngine`; this is the
-    thin "also show done" extension ``pkm_todos`` adds, read via the confined vault). A
-    missing/blank status counts as open and is therefore excluded. Results are sorted
-    by path for determinism.
-    """
-    directory = vault.root / "actions"
-    if not directory.is_dir():
-        return []
-    closed: list[tuple[str, str, str]] = []
-    for entry in sorted(directory.glob("*.md")):
-        rel = f"actions/{entry.name}"
-        try:
-            page = vault.read_page(rel)
-        except VaultError:
-            continue
-        status_value = page.frontmatter.get("status")
-        status = status_value if isinstance(status_value, str) else ""
-        if not status or status in open_statuses:
-            continue
-        title_value = page.frontmatter.get("title")
-        slug = PurePosixPath(rel).stem
-        title = title_value if isinstance(title_value, str) and title_value else slug
-        # Match SummaryEngine's folder-qualified wikilink form ([[actions/<slug>]]) so
-        # the open and closed sections render identically.
-        closed.append((title, status, f"[[{rel.removesuffix('.md')}]]"))
-    return closed
 
 
 def _render_action(item: Any, *, overdue: bool) -> str:

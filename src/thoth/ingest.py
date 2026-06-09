@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any, overload
@@ -82,6 +82,7 @@ from thoth.vault import (
     SlugError,
     Vault,
     VaultError,
+    redact_secrets,
 )
 
 __all__ = [
@@ -1184,7 +1185,7 @@ class Ingestor:
         try:
             result = self._git.commit(subject)
         except VaultConflictError as exc:
-            return _replace_report(
+            return replace(
                 report,
                 committed=False,
                 conflict=True,
@@ -1200,7 +1201,7 @@ class Ingestor:
             # A non-empty vault-commit ran the rebase + push to completion, so the
             # remote is now current -- record the push liveness marker (issue #15).
             self._record_marker(MARKER_PUSH)
-        return _replace_report(
+        return replace(
             report,
             committed=result.committed,
             conflict=False,
@@ -1250,7 +1251,7 @@ class Ingestor:
         try:
             result = self._git.commit("deferred capture")
         except VaultConflictError as conflict:
-            return _replace_report(
+            return replace(
                 report,
                 committed=False,
                 conflict=True,
@@ -1264,7 +1265,7 @@ class Ingestor:
             return report
         if result.committed:
             self._record_marker(MARKER_PUSH)
-        return _replace_report(
+        return replace(
             report,
             committed=result.committed,
             conflict=False,
@@ -1438,21 +1439,4 @@ def _curate_repair_prompt(problems: str) -> str:
         f"{problems}\n\n"
         "Return a corrected file plan as a single JSON object that fixes EVERY problem "
         "above and matches the required shape exactly. Output only the JSON."
-    )
-
-
-def _replace_report(
-    report: IngestReport, *, committed: bool, conflict: bool, message: str
-) -> IngestReport:
-    """Return a copy of ``report`` with the commit-outcome fields set."""
-    return IngestReport(
-        page_paths=report.page_paths,
-        raw_paths=report.raw_paths,
-        asset_paths=report.asset_paths,
-        obsidian_links=report.obsidian_links,
-        wikilinks=report.wikilinks,
-        committed=committed,
-        conflict=conflict,
-        deferred=report.deferred,
-        message=message,
     )

@@ -41,6 +41,7 @@ from thoth.config import Config
 from thoth.vault import (
     FOLDER_TYPE_CONTRACT,
     INDEX_SECTIONS,
+    LOG_ACTIONS,
     REQUIRED_COMMON_FIELDS,
     VALID_SOURCES,
     SchemaError,
@@ -217,10 +218,6 @@ ANSWER_SCHEMA: dict[str, Any] = {
 flags whether the web was consulted; ``web_sources`` lists the cited URLs.
 """
 
-# Valid actions for the file-plan ``log`` block (mirrors thoth.vault.append_log).
-_VALID_LOG_ACTIONS: frozenset[str] = frozenset(
-    {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
-)
 _MIN_WIKILINKS: int = 2
 
 
@@ -253,7 +250,7 @@ def file_plan_contract_text() -> str:
     )
     sources = ", ".join(sorted(VALID_SOURCES))
     required = ", ".join(REQUIRED_COMMON_FIELDS)
-    log_actions = ", ".join(sorted(_VALID_LOG_ACTIONS))
+    log_actions = ", ".join(sorted(LOG_ACTIONS))
     sections = ", ".join(sorted(INDEX_SECTIONS))
     return (
         "Return ONLY a single JSON object (no prose, no commentary) of this exact "
@@ -810,10 +807,10 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
                 if field not in log:
                     problems.append(f"log: missing '{field}'")
             log_action = log.get("action")
-            if log_action is not None and log_action not in _VALID_LOG_ACTIONS:
+            if log_action is not None and log_action not in LOG_ACTIONS:
                 problems.append(
                     f"log: invalid action {log_action!r} (allowed: "
-                    f"{', '.join(sorted(_VALID_LOG_ACTIONS))})"
+                    f"{', '.join(sorted(LOG_ACTIONS))})"
                 )
             files = log.get("files")
             if files is not None and not isinstance(files, list):

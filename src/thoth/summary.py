@@ -251,6 +251,7 @@ class SummaryEngine:
         self._now = resolved
         self._today = resolved.date()
         self._markers = markers
+        self._actions_cache: list[ActionItem] | None = None
 
     @property
     def now(self) -> datetime:
@@ -536,6 +537,23 @@ class SummaryEngine:
         refs.sort(key=lambda r: (r.updated or date.min, r.path), reverse=True)
         return refs
 
+    def closed_actions(self) -> list[ActionItem]:
+        """Return closed/done actions (``status`` not in :data:`ACTION_OPEN_STATUSES`).
+
+        A missing or blank ``status`` is treated as open and is therefore excluded.
+        Sorted by path for determinism.
+
+        Returns:
+            The closed :class:`ActionItem` list.
+        """
+        items = [
+            item
+            for item in self._scan_actions()
+            if item.status and item.status not in ACTION_OPEN_STATUSES
+        ]
+        items.sort(key=lambda a: a.path)
+        return items
+
     def review_flagged(self) -> list[PageRef]:
         """Return curated pages flagged for review.
 
@@ -554,7 +572,9 @@ class SummaryEngine:
     # ---- internal scans -------------------------------------------------------------
 
     def _scan_actions(self) -> list[ActionItem]:
-        """Parse every ``actions/*.md`` page into an :class:`ActionItem`."""
+        """Parse every ``actions/*.md`` page into an :class:`ActionItem` (cached)."""
+        if self._actions_cache is not None:
+            return self._actions_cache
         items: list[ActionItem] = []
         for rel, meta in self._iter_pages(_ACTIONS_DIR):
             slug = PurePosixPath(rel).stem
@@ -568,6 +588,7 @@ class SummaryEngine:
                     wikilink=f"[[{rel.removesuffix('.md')}]]",
                 )
             )
+        self._actions_cache = items
         return items
 
     def _scan_media_with_status(self) -> list[tuple[MediaItem, str]]:

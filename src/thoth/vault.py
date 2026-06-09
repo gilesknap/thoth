@@ -159,7 +159,7 @@ the one :meth:`Vault.append_index` enforces.
 """
 
 # Actions accepted by append_log (SPEC log.md seed template).
-_LOG_ACTIONS: frozenset[str] = frozenset(
+LOG_ACTIONS: frozenset[str] = frozenset(
     {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
 )
 
@@ -712,9 +712,9 @@ class Vault:
             SchemaError: if ``action`` is not a known log action.
             VaultError: if ``log.md`` is missing.
         """
-        if action not in _LOG_ACTIONS:
+        if action not in LOG_ACTIONS:
             raise SchemaError(
-                f"unknown log action {action!r}; expected one of {sorted(_LOG_ACTIONS)}"
+                f"unknown log action {action!r}; expected one of {sorted(LOG_ACTIONS)}"
             )
         absolute = self.resolve("log.md")
         if not absolute.is_file():

@@ -39,6 +39,7 @@ from thoth.extract import ExtractedDoc, ExtractError, Extractor, SsrfError, WebH
 from thoth.llm import (
     LLM,
     Message,
+    _block_as_dict,
     assistant_blocks_message,
     extract_text,
     tool_result_block,
@@ -128,6 +129,11 @@ WEB_EXTRACT_TOOL: dict[str, object] = {
     },
 }
 """Web extraction tool, offered only when web access is allowed (SSRF inside)."""
+
+# Hard ceiling on total model turns per ask so a misbehaving model cannot spin forever;
+# web_extract dispatches are separately capped by ``max_web_reads``.
+_TOOL_LOOP_MAX_TURNS: int = 12
+
 
 
 class ResearchError(Exception):
@@ -399,6 +405,10 @@ class ResearchEngine:
         """
         return self._extractor.web_extract(url)
 
+    def complete(self, messages: list[Any], tools: list[dict[str, object]]) -> Any:
+        """Run one ``messages.create`` turn; the single seam ``_ToolLoop`` drives."""
+        return self._llm.complete(messages, tools=tools)
+
     # ---- internals ---------------------------------------------------------------
 
     def _vault_candidates(self, question: str, *, max_pages: int) -> list[Citation]:
@@ -471,10 +481,6 @@ class _ToolLoop:
     when a hard iteration cap is reached.
     """
 
-    # A hard ceiling on total model turns so a misbehaving fake/model cannot spin
-    # forever; web_extract dispatches are separately capped by ``max_web_reads``.
-    _MAX_TURNS: int = 12
-
     def __init__(self, engine: ResearchEngine, candidates: list[Citation]) -> None:
         """Initialise the loop state for one ask.
 
@@ -501,8 +507,8 @@ class _ToolLoop:
         """
         messages = [Message(role="user", content=self._initial_prompt(question))]
         last_text = ""
-        for _ in range(self._MAX_TURNS):
-            response = self._engine._llm.complete(messages, tools=tools)  # noqa: SLF001
+        for _ in range(_TOOL_LOOP_MAX_TURNS):
+            response = self._engine.complete(messages, tools=tools)
             last_text = extract_text(response)
             tool_uses = _tool_use_blocks(response)
             if not tool_uses:
@@ -615,23 +621,11 @@ class _ToolLoop:
         )
 
 
-# ---- response-shape helpers (tolerant of SDK objects and dict-shaped fakes) -------
+# ---- response-shape helpers (normalise via llm._block_as_dict) --------------------
 
 
-def _tool_use_blocks(response: Any) -> list[Any]:
-    """Return the ``tool_use`` content blocks of a response (objects or dicts).
-
-    :func:`thoth.llm.extract_text` deliberately ignores ``tool_use`` blocks, so the
-    research loop inspects ``response.content`` itself. Tolerant of the real SDK shape
-    (blocks with a ``.type`` attribute) and a dict-shaped fake
-    (``{'content': [{'type': 'tool_use', ...}]}``).
-
-    Args:
-        response: An Anthropic response object or a dict-shaped stand-in.
-
-    Returns:
-        The list of ``tool_use`` blocks, in order (possibly empty).
-    """
+def _tool_use_blocks(response: Any) -> list[dict[str, Any]]:
+    """Return the ``tool_use`` content blocks of a response as normalised plain dicts."""
     content = (
         response.get("content")
         if isinstance(response, dict)
@@ -639,42 +633,25 @@ def _tool_use_blocks(response: Any) -> list[Any]:
     )
     if content is None:
         return []
-    blocks: list[Any] = []
-    for block in content:
-        block_type = (
-            block.get("type")
-            if isinstance(block, dict)
-            else getattr(block, "type", None)
-        )
-        if block_type == "tool_use":
-            blocks.append(block)
-    return blocks
+    normalized = [_block_as_dict(b) for b in content]
+    return [d for d in normalized if d.get("type") == "tool_use"]
 
 
-def _block_name(block: Any) -> str:
-    """Return a ``tool_use`` block's tool ``name`` as a string (``''`` when absent)."""
-    name = (
-        block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
-    )
+def _block_name(block: dict[str, Any]) -> str:
+    """Return a normalised ``tool_use`` block's ``name`` (``''`` when absent)."""
+    name = block.get("name")
     return name if isinstance(name, str) else ""
 
 
-def _block_id(block: Any) -> str:
-    """Return a ``tool_use`` block's ``id`` as a string (``''`` when absent).
-
-    The id keys the matching ``tool_result`` block in the next user turn, so it must be
-    carried through verbatim (the Messages API rejects a ``tool_result`` whose
-    ``tool_use_id`` matches no prior ``tool_use`` block).
-    """
-    value = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
+def _block_id(block: dict[str, Any]) -> str:
+    """Return a normalised ``tool_use`` block's ``id`` (``''`` when absent)."""
+    value = block.get("id")
     return value if isinstance(value, str) else ""
 
 
-def _block_input(block: Any) -> dict[str, Any]:
-    """Return a ``tool_use`` block's ``input`` map (``{}`` when absent/ill-typed)."""
-    value = (
-        block.get("input") if isinstance(block, dict) else getattr(block, "input", None)
-    )
+def _block_input(block: dict[str, Any]) -> dict[str, Any]:
+    """Return a normalised ``tool_use`` block's ``input`` map (``{}`` when absent)."""
+    value = block.get("input")
     return value if isinstance(value, dict) else {}
 
 
