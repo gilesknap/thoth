@@ -7,14 +7,8 @@ tool** (SPEC section 3): :class:`GitSync` shells out to two shipped bash scripts
 classifies their exit codes into typed results. It never pushes ``--force`` and
 fails loudly, surfacing the conflicting path, on a rebase conflict.
 
-The Slack daemon dispatches each capture on a worker thread, all sharing one git
-working tree, so :class:`GitSync` carries a re-entrant :attr:`GitSync.capture_lock`
-that :class:`thoth.ingest.Ingestor` holds **only** around the small tree-mutating
-critical sections (the orient pull, and the log-append → stage → commit → rebase →
-push sequence) — never across the slow LLM passes. :meth:`commit` stages the
-*explicit* paths a single capture wrote (``git add -- <paths>``), not the whole
-tree, so a commit can never sweep a different, concurrent capture's untracked asset
-into the wrong commit and orphan an embedded ``![[asset]]`` (issue #85).
+Concurrent captures share one git working tree; the locking story (what is — and
+is not — serialised, and why) lives on :attr:`GitSync.capture_lock` (issue #85).
 
 The two scripts carry the SPEC's git wrappers (``GIT_CONFIG_GLOBAL=/dev/null`` +
 ``gh``'s credential helper, ``pull --rebase``, never ``--force``). They push back to
@@ -35,7 +29,6 @@ parses or writes page content (strict separation from :mod:`thoth.vault`).
 
 from __future__ import annotations
 
-import datetime as _dt
 import os
 import shutil
 import subprocess
@@ -44,7 +37,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from thoth.config import Config
@@ -267,18 +260,8 @@ class GitSync:
         child_env["PKM_VAULT"] = str(config.vault_path)
         self._child_env = child_env
         self._bin_path = bin_dir() if bin_path is None else bin_path
-        # Serialises the small tree-mutating critical sections of a capture (the orient
-        # pull and the log-append -> stage -> commit -> rebase -> push) against any
-        # other capture sharing this single git working tree (issue #85). The Slack
-        # daemon dispatches events on a worker-thread pool, so two commits or two
-        # rebases could otherwise collide on ``.git/index.lock`` or lose a ``log.md``
-        # append (the shared append target), and a ``pull --rebase`` rewrites the whole
-        # tree. The lock is NOT held across the slow classify/analyse/curate LLM passes,
-        # so captures stay concurrent there; the orphaned-asset fix proper is
-        # explicit-path staging in :meth:`commit`, and this lock only closes the
-        # residual shared-state races. It is re-entrant so a held critical section that
-        # nests :meth:`commit`/:meth:`pull` never self-deadlocks. One ``GitSync`` per
-        # vault per process, so the instance lock is the per-working-tree mutex.
+        # Per-working-tree mutex for a capture's tree-mutating critical sections; the
+        # full rationale lives on the :attr:`capture_lock` property docstring (#85).
         self._capture_lock = threading.RLock()
 
     @property
@@ -322,12 +305,7 @@ class GitSync:
             GitSyncError: if the script exits non-zero (stderr/stdout attached to
                 the message).
         """
-        result = self._run(VAULT_PULL_SCRIPT, (), timeout=timeout)
-        if result.returncode != 0:
-            raise GitSyncError(
-                self._format_failure("vault-pull", result),
-            )
-        return result
+        return self._run_checked(VAULT_PULL_SCRIPT, (), timeout=timeout)
 
     def bootstrap(self, *, timeout: float = 300.0) -> GitResult:
         """Run ``vault-bootstrap``: clone the vault into an empty ``$PKM_VAULT``.
@@ -353,12 +331,7 @@ class GitSync:
             GitSyncError: if the script exits non-zero (stderr/stdout attached to
                 the message).
         """
-        result = self._run(VAULT_BOOTSTRAP_SCRIPT, (), timeout=timeout)
-        if result.returncode != 0:
-            raise GitSyncError(
-                self._format_failure("vault-bootstrap", result),
-            )
-        return result
+        return self._run_checked(VAULT_BOOTSTRAP_SCRIPT, (), timeout=timeout)
 
     def stage(self, paths: Sequence[str], *, timeout: float = 30.0) -> None:
         """Stage exactly ``paths`` in the working tree (``git add -- <paths>``).
@@ -391,15 +364,7 @@ class GitSync:
         # Retried on `.git/index.lock` contention from a concurrent client (see
         # :func:`_run_with_lock_retry`); a non-lock failure raises below unchanged.
         completed = _run_with_lock_retry(
-            lambda: subprocess.run(
-                ["git", "add", "--", *stageable],
-                cwd=str(self._vault_root),
-                env=self._child_env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
+            lambda: self._exec(["git", "add", "--", *stageable], timeout=timeout)
         )
         if completed.returncode != 0:
             raise GitSyncError(
@@ -412,25 +377,22 @@ class GitSync:
 
         A path that is neither (a never-committed hold removed within the same run)
         would make ``git add -- <path>`` abort on an unmatched pathspec, so it is
-        dropped — it carries no git change anyway. Order-preserving.
+        dropped — it carries no git change anyway. Order-preserving. Assumes plain
+        file paths (no directory or glob pathspecs).
         """
-        kept: list[str] = []
-        for path in paths:
-            if (self._vault_root / path).exists():
-                kept.append(path)
-                continue
-            tracked = subprocess.run(
-                ["git", "ls-files", "--error-unmatch", "--", path],
-                cwd=str(self._vault_root),
-                env=self._child_env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
+        statuses = [(path, (self._vault_root / path).exists()) for path in paths]
+        missing = [path for path, on_disk in statuses if not on_disk]
+        tracked: set[str] = set()
+        if missing:
+            # One batched probe for every missing path. No ``--error-unmatch`` (it
+            # aborts on the first unmatched pathspec); ``-z`` neutralises
+            # ``core.quotePath`` so non-ASCII paths round-trip verbatim.
+            completed = self._exec(
+                ["git", "ls-files", "-z", "--", *missing], timeout=timeout
             )
-            if tracked.returncode == 0:
-                kept.append(path)
-        return kept
+            if completed.returncode == 0:
+                tracked = set(completed.stdout.split("\0")) - {""}
+        return [path for path, on_disk in statuses if on_disk or path in tracked]
 
     def commit(
         self,
@@ -471,16 +433,9 @@ class GitSync:
             GitSyncError: on any other non-zero exit.
         """
         script_args = (message, "--", *paths) if paths is not None else (message,)
-        result = self._run(VAULT_COMMIT_SCRIPT, script_args, timeout=timeout)
-        if result.returncode != 0:
-            if _CONFLICT_SENTINEL in result.stderr:
-                raise VaultConflictError(
-                    self._format_failure("vault-commit", result),
-                )
-            raise GitSyncError(
-                self._format_failure("vault-commit", result),
-            )
-        return result
+        return self._run_checked(
+            VAULT_COMMIT_SCRIPT, script_args, timeout=timeout, classify_conflict=True
+        )
 
     def divergence(self, *, timeout: float = 30.0) -> Divergence:
         """Count local vault commits ahead of the rebase tracking ref.
@@ -514,8 +469,8 @@ class GitSync:
             ahead = int(count.strip())
         except ValueError:
             return Divergence(commits_ahead=-1, since=None)
-        if ahead <= 0:
-            return Divergence(commits_ahead=ahead if ahead == 0 else -1, since=None)
+        if ahead == 0:
+            return Divergence(commits_ahead=0, since=None)
         # Author time (Unix seconds) of the OLDEST unpushed commit (the first that
         # diverged) -> the "unpushed since T" timestamp.
         oldest = self._git_text(
@@ -531,20 +486,38 @@ class GitSync:
         exception handler never see a new exception.
         """
         try:
-            completed = subprocess.run(
-                ["git", *args],
-                cwd=str(self._vault_root),
-                env=self._child_env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
+            completed = self._exec(["git", *args], timeout=timeout)
         except (OSError, subprocess.SubprocessError):
             return None
         if completed.returncode != 0:
             return None
         return completed.stdout
+
+    def _exec(
+        self, argv: Sequence[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one child process in the vault root with the forced environment.
+
+        Every subprocess this class spawns goes through here: ``check=False`` so a
+        failure returns for the caller's own classification, text-mode captured
+        output, and the ``PKM_VAULT``-forced child environment.
+
+        Args:
+            argv: The full argument vector (no ``shell=True``).
+            timeout: Seconds before :class:`subprocess.TimeoutExpired`.
+
+        Returns:
+            The :class:`subprocess.CompletedProcess` of the run.
+        """
+        return subprocess.run(
+            list(argv),
+            cwd=str(self._vault_root),
+            env=self._child_env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
 
     def _run(self, script: str, args: Sequence[str], *, timeout: float) -> GitResult:
         """Run one sync script and classify its result.
@@ -570,15 +543,7 @@ class GitSync:
         # index lock would otherwise fail the whole capture; a non-lock non-zero exit is
         # returned unchanged for the caller's own conflict/error classification.
         completed = _run_with_lock_retry(
-            lambda: subprocess.run(
-                ["bash", str(script_path), *args],
-                cwd=str(self._vault_root),
-                env=self._child_env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
+            lambda: self._exec(["bash", str(script_path), *args], timeout=timeout)
         )
         committed = (
             completed.returncode == 0 and _NOTHING_TO_COMMIT not in completed.stdout
@@ -589,6 +554,43 @@ class GitSync:
             stderr=completed.stderr,
             committed=committed,
         )
+
+    def _run_checked(
+        self,
+        script: str,
+        args: Sequence[str],
+        *,
+        timeout: float,
+        classify_conflict: bool = False,
+    ) -> GitResult:
+        """Run one sync script via :meth:`_run` and raise on a non-zero exit.
+
+        Args:
+            script: The script filename (e.g. :data:`VAULT_COMMIT_SCRIPT`).
+            args: Positional arguments passed to the script.
+            timeout: Seconds before :class:`subprocess.TimeoutExpired`.
+            classify_conflict: When ``True``, a failure whose stderr carries the
+                ``VAULT CONFLICT`` sentinel raises :class:`VaultConflictError`
+                (only ``vault-commit`` emits it).
+
+        Returns:
+            The :class:`GitResult` of a clean (zero-exit) run.
+
+        Raises:
+            VaultConflictError: on a rebase-conflict exit when ``classify_conflict``
+                is set.
+            GitSyncError: on any other non-zero exit.
+        """
+        result = self._run(script, args, timeout=timeout)
+        if result.returncode != 0:
+            if classify_conflict and _CONFLICT_SENTINEL in result.stderr:
+                raise VaultConflictError(
+                    self._format_failure(script, result),
+                )
+            raise GitSyncError(
+                self._format_failure(script, result),
+            )
+        return result
 
     @staticmethod
     def _format_failure(script: str, result: GitResult) -> str:
@@ -606,11 +608,12 @@ def _parse_first_epoch(text: str | None) -> datetime | None:
     """
     if not text:
         return None
-    first = text.strip().splitlines()[0].strip() if text.strip() else ""
+    tokens = text.split()
+    first = tokens[0] if tokens else ""
     if not first:
         return None
     try:
         epoch = int(first)
     except ValueError:
         return None
-    return datetime.fromtimestamp(epoch, tz=_dt.UTC)
+    return datetime.fromtimestamp(epoch, tz=UTC)

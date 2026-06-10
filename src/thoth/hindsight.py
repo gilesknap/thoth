@@ -22,16 +22,11 @@ is a path segment** (env ``THOTH_HINDSIGHT_BANK``, default :data:`DEFAULT_BANK`)
 * ``forget`` -> ``DELETE .../documents/{document_id}`` (a real per-document delete).
 * ``reset_bank`` -> ``DELETE .../{bank}`` (a full wipe for ``reindex --full-rebuild``).
 
-Provenance survives Hindsight's **LLM fact-extraction** (SPEC section 8): a whole-page
-``retain`` may be split into several atomic facts, each surfacing as its own recall hit,
-so the vault path is carried on every hit and :func:`parse_recall` recovers it from the
-first channel that yields a path, in preference order: the hit's echoed ``document_id``
-(the item's ``document_id``, also the :meth:`Hindsight.forget` target); the hit's echoed
-``context``; and finally the in-band ``SOURCE: <rel-path>`` sentinel
-(:func:`retain_text`) surviving inside the hit text. The page type round-trips as the
-hit's ``tags`` and recall is scoped by it client-side (ADR 0004). The item's ``tags``
-are echoed onto every extracted fact and do **not** gate recall, so a page type carried
-there stays fully recallable.
+Provenance survives Hindsight's **LLM fact-extraction** (SPEC section 8): every recall
+hit carries the vault path, recovered via redundant channels — the full channel story
+lives on :func:`_path_for_hit`. The page type round-trips as the hit's ``tags`` and
+recall is scoped by it client-side (ADR 0004); the item's ``tags`` do **not** gate
+recall, so a page type carried there stays fully recallable.
 
 The seam for tests is an injectable :class:`httpx.BaseTransport`: tests pass an
 :class:`httpx.MockTransport` that records each :class:`httpx.Request` and returns a
@@ -107,8 +102,7 @@ class RecallHit:
 
     Attributes:
         path: The vault-relative path recovered for the hit, via the first provenance
-            channel that yielded one (echoed ``document_id``; echoed ``context``; or a
-            ``SOURCE:`` line in the text). See :func:`parse_recall`.
+            channel that yielded one (see :func:`_path_for_hit`).
         text: The raw fact text the hit carried (provenance for callers).
         page_type: The page-type tag recovered for the hit (``entity``/``concept``/
             ``memory``/...), or ``""`` when none was carried. Recall is scoped by this
@@ -125,11 +119,9 @@ def retain_text(rel_path: str, facts: str) -> str:
     """Prefix the ``SOURCE:`` sentinel so recall can echo the vault path back.
 
     The returned blob is exactly one ``SOURCE: <rel_path>`` line, a blank line, then
-    ``facts``. This is the **final fallback** provenance channel: because Hindsight runs
-    LLM fact-extraction (not token chunking), a whole-page retain may be split into
-    atomic facts and this in-band sentinel can attach to only one of them or none -- so
-    the vault path is *also* (and preferentially) carried as ``document_id`` and
-    ``context`` on the retained item (see :meth:`Hindsight.retain`).
+    ``facts``. This is the **final fallback** provenance channel (see
+    :func:`_path_for_hit` for the channel order and why the path also travels
+    out-of-band on the retained item).
 
     Args:
         rel_path: The vault-relative path of the page these facts describe.
@@ -216,8 +208,7 @@ def parse_recall(payload: dict[str, object]) -> list[RecallHit]:
 
     ``payload`` is the **parsed JSON dict** of a ``memories/recall`` response: a
     ``results`` list of hits. Each hit's vault path is recovered via
-    :func:`_path_for_hit` (echoed ``document_id`` -> echoed ``context`` -> ``SOURCE:``
-    sentinel, in that order), and its page type via :func:`_page_type_for_hit` (the
+    :func:`_path_for_hit`, and its page type via :func:`_page_type_for_hit` (the
     hit's ``tags``). The first occurrence of each distinct path wins and later
     duplicates are dropped, preserving first-seen order. Hits with no recoverable path
     are skipped.
@@ -307,7 +298,7 @@ class Hindsight:
         self._bank: str = (
             bank
             if bank is not None
-            else (_opt_env("THOTH_HINDSIGHT_BANK") or DEFAULT_BANK)
+            else (os.environ.get("THOTH_HINDSIGHT_BANK") or DEFAULT_BANK)
         )
         self._base_url: str = base_url or config.hindsight_base_url
         self._timeout = timeout
@@ -351,13 +342,12 @@ class Hindsight:
     def retain(self, rel_path: str, facts: str, *, tags: Sequence[str] = ()) -> None:
         """Retain a curated page's facts, with the vault path carried as provenance.
 
-        POSTs one item to ``.../memories``: ``content`` is :func:`retain_text` (facts
-        with the ``SOURCE:`` sentinel prepended for the fallback channel),
-        ``document_id`` and ``context`` both carry ``rel_path`` (the primary provenance
-        channels, and ``document_id`` is the :meth:`forget` target), and ``tags``
-        carries the **page type only** -- never the path. ``async`` is ``false`` so the
-        call blocks until the facts are extracted and indexed. A non-2xx is a hard
-        failure so the ingest pass can surface that the page did not land.
+        POSTs one item to ``.../memories``: ``content`` is :func:`retain_text`,
+        ``document_id`` and ``context`` both carry ``rel_path`` (the provenance
+        channels — see :func:`_path_for_hit`), and ``tags`` carries the **page type
+        only** -- never the path. ``async`` is ``false`` so the call blocks until the
+        facts are extracted and indexed. A non-2xx is a hard failure so the ingest
+        pass can surface that the page did not land.
 
         Args:
             rel_path: The vault-relative path of the page being retained.
@@ -368,9 +358,8 @@ class Hindsight:
                 remains, no ``tags`` key is sent.
 
         Raises:
-            HindsightError: on a non-2xx response (HTTP 4xx fails fast; transient
-                failures -- transport error / HTTP 5xx -- are retried up to ``retries``
-                times first).
+            HindsightError: on a non-2xx response, after the bounded retry on
+                transient failures (see the class docstring).
             thoth.budget.BudgetExceededError: when a budget guard is wired and the daily
                 call cap has been reached (raised before the HTTP call, so no Gemini
                 extraction is spent).
@@ -422,8 +411,7 @@ class Hindsight:
             ``limit`` (``[]`` when nothing matched).
 
         Raises:
-            HindsightError: on a non-2xx response (HTTP 4xx fails fast; transient
-                failures are retried up to ``retries`` times first).
+            HindsightError: on a non-2xx response, as :meth:`retain`.
         """
         response = self._request_checked(
             "recall", query, "POST", "/memories/recall", json={"query": query}
@@ -458,15 +446,9 @@ class Hindsight:
         :meth:`retain`/:meth:`recall`.
 
         Raises:
-            HindsightError: on a non-2xx response (HTTP 4xx fails fast; transient
-                failures are retried up to ``retries`` times first).
+            HindsightError: on a non-2xx response, as :meth:`retain`.
         """
-        # The bank itself is one segment up from the per-call ``/memories`` paths; an
-        # absolute path on the client (whose base_url ends ``/banks/{bank}``) addresses
-        # the full URL, so build the bank URL explicitly.
-        self._request_checked(
-            "reset_bank", self._bank, "DELETE", self._bank_url(), absolute=True
-        )
+        self._request_checked("reset_bank", self._bank, "DELETE", "")
 
     def probe(self, rel_path: str, query: str) -> bool:
         """Recall ``query`` and report whether ``rel_path`` is among the hits.
@@ -492,10 +474,6 @@ class Hindsight:
         """Return the URL-encoded ``/v1/default/banks/{bank}`` path prefix."""
         return f"/v1/default/banks/{quote(self._bank, safe='')}"
 
-    def _bank_url(self) -> str:
-        """Return the absolute URL of the bank itself (for ``reset_bank``)."""
-        return f"{self._base_url.rstrip('/')}{self._bank_prefix()}"
-
     def _doc_path(self, rel_path: str) -> str:
         """Return the bank-relative ``/documents/{rel_path}`` path.
 
@@ -512,12 +490,11 @@ class Hindsight:
         path: str,
         *,
         json: object | None = None,
-        absolute: bool = False,
     ) -> httpx.Response:
         """Issue a checked HTTP call with bounded retry on transient failures.
 
-        ``path`` is appended to the ``/v1/default/banks/{bank}`` prefix unless
-        ``absolute`` is set (then it is the full URL, e.g. the bank itself). Re-attempts
+        ``path`` is appended to the ``/v1/default/banks/{bank}`` prefix (an empty
+        ``path`` addresses the bank itself, for ``reset_bank``). Re-attempts
         only :class:`HindsightTransientError` (transport error / HTTP 5xx) up to
         ``retries`` times with exponential backoff; a permanent :class:`HindsightError`
         (HTTP 4xx) propagates immediately.
@@ -526,9 +503,8 @@ class Hindsight:
             op: The operation name for diagnostics (``"retain"`` / ``"recall"`` / ...).
             subject: The path or query the call concerns (for the error message).
             method: The HTTP method.
-            path: The bank-relative path, or the absolute URL when ``absolute`` is set.
+            path: The bank-relative path (``""`` for the bank itself).
             json: An optional JSON body.
-            absolute: When ``True``, ``path`` is used verbatim as the request URL.
 
         Returns:
             The successful (2xx) response.
@@ -537,7 +513,7 @@ class Hindsight:
             HindsightError: the last failure once attempts are exhausted (transient) or
                 immediately (permanent).
         """
-        url = path if absolute else f"{self._bank_prefix()}{path}"
+        url = f"{self._bank_prefix()}{path}"
         retrying = Retrying(
             stop=stop_after_attempt(self._retries),
             wait=wait_exponential(
@@ -584,11 +560,6 @@ class Hindsight:
             f"hindsight {op} for {subject!r} failed "
             f"(HTTP {response.status_code}). body: {response.text.strip()!r}"
         )
-
-
-def _opt_env(name: str) -> str | None:
-    """Return ``os.environ[name]`` or ``None`` when unset or empty."""
-    return os.environ.get(name) or None
 
 
 def _response_json(response: httpx.Response) -> dict[str, object]:
