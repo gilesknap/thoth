@@ -58,7 +58,7 @@ import logging
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any, overload
@@ -82,6 +82,7 @@ from thoth.llm import (
     _block_name,
     _tool_use_blocks,
     assistant_blocks_message,
+    extract_text,
     extract_tool_use,
     file_plan_contract_text,
     parse_json_block,
@@ -592,6 +593,9 @@ class Ingestor:
             with self._git.capture_lock:
                 self._orient()
         holding = self.persist_inbound(capture, as_is=as_is)
+        extracted_body = (
+            holding.prefetched.body if holding.prefetched is not None else None
+        )
         analysed = _Analysed(analysis=None)
         try:
             phase(
@@ -604,9 +608,7 @@ class Ingestor:
             classification = self.classify(
                 capture,
                 analysis=analysis,
-                extracted_body=(
-                    holding.prefetched.body if holding.prefetched is not None else None
-                ),
+                extracted_body=extracted_body,
             )
             raw = self.capture_raw(
                 capture,
@@ -645,11 +647,7 @@ class Ingestor:
                     capture,
                     classification,
                     raw,
-                    extracted_body=(
-                        holding.prefetched.body
-                        if holding.prefetched is not None
-                        else None
-                    ),
+                    extracted_body=extracted_body,
                 )
             else:
                 phase(f"curating ({self._config.anthropic_model})")
@@ -660,11 +658,7 @@ class Ingestor:
                     raw,
                     candidates,
                     analysis=analysis,
-                    extracted_body=(
-                        holding.prefetched.body
-                        if holding.prefetched is not None
-                        else None
-                    ),
+                    extracted_body=extracted_body,
                 )
         except LLMUnavailableError as exc:
             # classify/curate (or the analyse call itself) deferred: capture_raw never
@@ -788,8 +782,6 @@ class Ingestor:
             asset_paths=[],
             obsidian_links=[],
             wikilinks=[],
-            committed=False,
-            conflict=False,
             unchanged=True,
             message=f"Unchanged; already curated at {curated_path} (skipped).",
         )
@@ -820,40 +812,19 @@ class Ingestor:
         """
         # The only working-tree change is the hold deletion; stage exactly that.
         commit_paths = [hold_rel] if hold_rel is not None else []
-        if not do_commit:
-            # Batch path: stage the deletion now for the caller's batched commit.
-            with self._git.capture_lock:
-                if commit_paths:
-                    try:
-                        self._git.stage(commit_paths)
-                    except GitSyncError:
-                        pass
-            return report
-        # Take the working-tree lock around the commit/rebase/push (issue #85).
-        with self._git.capture_lock:
-            try:
-                result = self._git.commit(
-                    cls.title or "unchanged capture", paths=commit_paths
-                )
-            except VaultConflictError as conflict:
-                return _replace_report(
-                    report,
-                    committed=False,
-                    conflict=True,
-                    message=(
-                        f"{report.message} (holding removal not pushed -- vault "
-                        f"conflict; resolve in Obsidian: {conflict})"
-                    ),
-                )
-            except GitSyncError as exc:
-                raise IngestError(f"commit failed: {exc}") from exc
-        if result.committed:
-            self._record_marker(MARKER_PUSH)
-        return _replace_report(
+        return self._finalise_git(
             report,
-            committed=result.committed,
-            conflict=False,
-            message=report.message,
+            cls.title or "unchanged capture",
+            commit_paths,
+            do_commit=do_commit,
+            conflict_message=lambda conflict: (
+                f"{report.message} (holding removal not pushed -- vault "
+                f"conflict; resolve in Obsidian: {conflict})"
+            ),
+            staged_message=None,
+            success_message=None,
+            swallow_stage_error=True,
+            swallow_git_error=False,
         )
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
@@ -1375,29 +1346,16 @@ class Ingestor:
                 return self._capture_image(
                     capture, cls, fetched=fetched, derived=derived
                 )
-            if kind is CaptureKind.URL:
-                if prefetched is not None:
-                    return self._write_raw_doc(
-                        "articles", cls, prefetched.body, prefetched.source_url
-                    )
-                doc = self._extractor.web_extract(_require(capture.url, "url"))
-                return self._write_raw_doc(
-                    "articles", cls, doc.markdown, doc.source_url
-                )
             if kind is CaptureKind.PDF:
                 return self._capture_pdf(capture, cls, fetched=fetched)
-            if kind is CaptureKind.AUDIO:
-                if prefetched is not None:
-                    return self._write_raw_doc(
-                        "transcripts", cls, prefetched.body, None
-                    )
-                transcript = self._extractor.transcribe(_require(capture.path, "path"))
-                return self._write_raw_doc("transcripts", cls, transcript, None)
-            # TEXT
-            text = (
-                prefetched.body if prefetched is not None else self._text_body(capture)
+            pre = (
+                prefetched
+                if prefetched is not None
+                else self._extract_text(capture, kind)
             )
-            return self._write_raw_doc("articles", cls, text, None)
+            assert pre is not None  # URL/AUDIO/TEXT kinds always carry a text body
+            subdir = "transcripts" if kind is CaptureKind.AUDIO else "articles"
+            return self._write_raw_doc(subdir, cls, pre.body, pre.source_url)
         except ExtractError as exc:
             raise IngestError(f"capture failed during extraction: {exc}") from exc
         except VaultError as exc:
@@ -1775,18 +1733,16 @@ class Ingestor:
         """
         slug = f"hold-{hashlib.sha256(body.encode('utf-8')).hexdigest()[:12]}"
         rel = f"inbox/{slug}.md"
-        new_sha = Vault.stored_body_sha256(body)
-        existing_sha = self._existing_raw_sha(rel)
-        if existing_sha is not None and existing_sha == new_sha:
-            return RawCaptureResult(raw_path=rel, disposition="skipped_unchanged")
-        disposition = "updated_drift" if existing_sha is not None else "created"
+        disposition = self._doc_disposition(rel, body)
+        if disposition == "skipped_unchanged":
+            return RawCaptureResult(raw_path=rel, disposition=disposition)
         meta: dict[str, object] = {
             "title": "Held capture",
             "type": "inbox",
             "source": source,
             "tags": ["inbox"],
             # Stamp the body digest so re-persist is idempotent (mirrors write_raw).
-            "sha256": new_sha,
+            "sha256": Vault.stored_body_sha256(body),
             # Stamp the intended curation mode (issue #95, task E) so the inbox sweep
             # re-files this hold with the ORIGINAL intent rather than guessing.
             "mode": mode,
@@ -1844,15 +1800,9 @@ class Ingestor:
             source_url: The provenance URL stamped into frontmatter, if any.
         """
         rel = f"raw/{subdir}/{cls.slug}.md"
-        # write_raw stamps the parse-stable redacted digest (Vault.stored_body_sha256),
-        # so the idempotency compare MUST use the same derivation -- otherwise an
-        # unchanged body ending in a newline (the normal extractor case) never matches
-        # and is wrongly re-reported as drift.
-        new_sha = Vault.stored_body_sha256(body)
-        existing_sha = self._existing_raw_sha(rel)
-        if existing_sha is not None and existing_sha == new_sha:
-            return RawCaptureResult(raw_path=rel, disposition="skipped_unchanged")
-        disposition = "updated_drift" if existing_sha is not None else "created"
+        disposition = self._doc_disposition(rel, body)
+        if disposition == "skipped_unchanged":
+            return RawCaptureResult(raw_path=rel, disposition=disposition)
         meta: dict[str, object] = {}
         if source_url is not None:
             meta["source_url"] = source_url
@@ -1880,20 +1830,9 @@ class Ingestor:
         Raises:
             IngestError: if the binary is genuinely different at an existing asset slug.
         """
-        if capture.url is not None:
-            # Reuse the analyse pass's single download when present (no second fetch,
-            # no leaked temp); fall back to fetching for a standalone capture_raw call.
-            binary = (
-                fetched
-                if fetched is not None
-                else self._extractor.fetch_binary(capture.url)
-            )
-            asset_result = self._save_fetched_asset(cls, binary)
-            source_url: str | None = binary.source_url
-        else:
-            path = _require(capture.path, "path")
-            asset_result = self._save_local_asset_result(cls, path, "pdf")
-            source_url = None
+        asset_result, source_url = self._obtain_primary_asset(
+            capture, cls, fetched, local_ext="pdf"
+        )
         return self._write_paper_stub(cls, asset_result, source_url)
 
     def _write_paper_stub(
@@ -1948,19 +1887,11 @@ class Ingestor:
         bytes-SHA-256 idempotency/drift behaviour as the original (a byte-identical
         re-ingest skips it).
         """
-        if capture.url is not None:
-            # Reuse the analyse pass's single download when present (no second fetch,
-            # no leaked temp); fall back to fetching for a standalone capture_raw call.
-            binary = (
-                fetched
-                if fetched is not None
-                else self._extractor.fetch_binary(capture.url)
-            )
-            original = self._save_fetched_asset(cls, binary)
-        else:
-            path = _require(capture.path, "path")
-            ext = (capture.filename or path.name).rsplit(".", 1)[-1].lower()
-            original = self._save_local_asset_result(cls, path, ext)
+        name = capture.filename or (
+            capture.path.name if capture.path is not None else ""
+        )
+        ext = name.rsplit(".", 1)[-1].lower()
+        original, _ = self._obtain_primary_asset(capture, cls, fetched, local_ext=ext)
         original = self._append_extra_images(capture, cls, original)
         return self._append_derived_assets(cls, original, derived)
 
@@ -2046,14 +1977,38 @@ class Ingestor:
         ``<slug>.excalidraw.md`` -- is swallowed to ``None`` here (the existing asset
         is left untouched) rather than aborting the capture (ADR 0009).
         """
-        with tempfile.NamedTemporaryFile(delete=False) as handle:
-            handle.write(text.encode("utf-8"))
-            staged = Path(handle.name)
+        staged = self._stage_bytes(text.encode("utf-8"))
         try:
             result = self._store_asset(staged, asset_name)
         except IngestError:
             return None
         return result.asset_paths[0] if result.asset_paths else None
+
+    def _obtain_primary_asset(
+        self,
+        capture: Capture,
+        cls: Classification,
+        fetched: FetchedBinary | None,
+        *,
+        local_ext: str,
+    ) -> tuple[RawCaptureResult, str | None]:
+        """Acquire a binary capture's primary asset; return it plus any provenance URL.
+
+        The shared acquisition step of :meth:`_capture_pdf` and :meth:`_capture_image`:
+        a ``url`` capture reuses the analyse pass's single download when present (no
+        second fetch, no leaked temp) -- falling back to fetching for a standalone
+        :meth:`capture_raw` call -- and carries the fetch's ``source_url``; a local
+        ``path`` capture is staged under ``local_ext`` with no provenance URL.
+        """
+        if capture.url is not None:
+            binary = (
+                fetched
+                if fetched is not None
+                else self._extractor.fetch_binary(capture.url)
+            )
+            return self._save_fetched_asset(cls, binary), binary.source_url
+        path = _require(capture.path, "path")
+        return self._save_local_asset_result_named(cls.slug, path, local_ext), None
 
     def _save_fetched_asset(
         self, cls: Classification, fetched: FetchedBinary
@@ -2069,34 +2024,27 @@ class Ingestor:
         asset_name = f"{cls.slug}.{fetched.suggested_ext}"
         return self._store_asset(fetched.tmp_path, asset_name)
 
-    def _save_local_asset_result(
-        self, cls: Classification, path: Path, ext: str
-    ) -> RawCaptureResult:
-        """Stage a server-resolvable local file into ``raw/assets`` via the vault.
-
-        The source is copied into a fresh tmp file first so :meth:`Vault.save_asset`'s
-        move never consumes the caller's original (the Slack/MCP tmp download). The same
-        bytes-SHA-256 idempotency/drift rule as :meth:`_save_fetched_asset` applies, and
-        the staged tmp copy is always cleaned up on the skip/error path.
-        """
-        return self._save_local_asset_result_named(cls.slug, path, ext)
-
     def _save_local_asset_result_named(
         self, asset_slug: str, path: Path, ext: str
     ) -> RawCaptureResult:
         """Stage a local file into ``raw/assets`` under an explicit asset slug.
 
-        The slug-bearing variant of :meth:`_save_local_asset_result`, so a multi-image
-        batch (issue #84) can save each extra image under its own ``<slug>-N`` name
-        while the primary keeps the bare ``<slug>``. The same copy-then-store discipline
-        (the caller's tmp download is never consumed, the staged copy never leaked)
-        applies.
+        The source is copied into a fresh tmp file first so :meth:`Vault.save_asset`'s
+        move never consumes the caller's original (the Slack/MCP tmp download), and a
+        multi-image batch (issue #84) can save each extra image under its own
+        ``<slug>-N`` name while the primary keeps the bare ``<slug>``. The same
+        bytes-SHA-256 idempotency/drift rule as :meth:`_save_fetched_asset` applies,
+        and the staged tmp copy is always cleaned up on the skip/error path.
         """
-        asset_name = f"{asset_slug}.{ext}"
+        staged = self._stage_bytes(path.read_bytes())
+        return self._store_asset(staged, f"{asset_slug}.{ext}")
+
+    @staticmethod
+    def _stage_bytes(data: bytes) -> Path:
+        """Write ``data`` to a fresh tmp file consumed by :meth:`_store_asset`."""
         with tempfile.NamedTemporaryFile(delete=False) as handle:
-            handle.write(path.read_bytes())
-            staged = Path(handle.name)
-        return self._store_asset(staged, asset_name)
+            handle.write(data)
+            return Path(handle.name)
 
     def _store_asset(self, tmp_path: Path, asset_name: str) -> RawCaptureResult:
         """Move ``tmp_path`` into ``raw/assets`` idempotently, never leaking the tmp.
@@ -2139,6 +2087,22 @@ class Ingestor:
             # still staged, so unlink them here -- no thoth-* temp file is ever leaked.
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
+
+    def _doc_disposition(self, rel: str, body: str) -> str:
+        """Classify a textual raw/holding write against any existing stored digest.
+
+        The writer stamps the parse-stable redacted digest
+        (:meth:`Vault.stored_body_sha256`), so the idempotency compare MUST use the
+        same derivation -- otherwise an unchanged body ending in a newline (the normal
+        extractor case) never matches and is wrongly re-reported as drift. Returns
+        ``'skipped_unchanged'`` for a byte-identical existing page, ``'updated_drift'``
+        for a changed one, and ``'created'`` for a brand-new path.
+        """
+        new_sha = Vault.stored_body_sha256(body)
+        existing_sha = self._existing_raw_sha(rel)
+        if existing_sha is not None and existing_sha == new_sha:
+            return "skipped_unchanged"
+        return "updated_drift" if existing_sha is not None else "created"
 
     def _existing_raw_sha(self, rel: str) -> str | None:
         """Return the stored ``sha256`` of an existing raw page, or ``None``."""
@@ -2401,13 +2365,73 @@ class Ingestor:
         if holding_raw is not None:
             ordered.append(holding_raw)
         ordered.append("log.md")
-        seen: set[str] = set()
-        deduped: list[str] = []
-        for path in ordered:
-            if path and path not in seen:
-                seen.add(path)
-                deduped.append(path)
-        return deduped
+        return list(dict.fromkeys(path for path in ordered if path))
+
+    def _finalise_git(
+        self,
+        report: IngestReport,
+        subject: str,
+        paths: list[str] | None,
+        *,
+        do_commit: bool,
+        conflict_message: Callable[[VaultConflictError], str],
+        staged_message: str | None,
+        success_message: str | None,
+        swallow_stage_error: bool,
+        swallow_git_error: bool,
+    ) -> IngestReport:
+        """Stage or commit this capture's ``paths``; fold the outcome into ``report``.
+
+        The shared git tail of :meth:`_commit` / :meth:`_commit_unchanged` /
+        :meth:`_commit_deferred`. With ``do_commit=False`` exactly ``paths`` is staged
+        under the working-tree lock (issue #85) for the caller's batched commit; a
+        stage failure is swallowed or raised per ``swallow_stage_error`` and
+        ``staged_message`` (when given) rewrites the report's message. Otherwise the
+        commit/rebase/push runs under the lock: a
+        :class:`~thoth.git_sync.VaultConflictError` is surfaced on the report via
+        ``conflict_message`` (content stays filed locally; never a ``--force``), a
+        :class:`~thoth.git_sync.GitSyncError` is swallowed or raised per
+        ``swallow_git_error``, and a real push records the push liveness marker (issue
+        #15) once the lock is released. ``success_message`` (when given) replaces the
+        report's message on the committed path.
+        """
+        if not do_commit:
+            with self._git.capture_lock:
+                if paths:
+                    try:
+                        self._git.stage(paths)
+                    except GitSyncError as exc:
+                        if not swallow_stage_error:
+                            raise IngestError(f"stage failed: {exc}") from exc
+            if staged_message is None:
+                return report
+            return replace(
+                report, committed=False, conflict=False, message=staged_message
+            )
+        with self._git.capture_lock:
+            try:
+                result = self._git.commit(subject, paths=paths)
+            except VaultConflictError as conflict:
+                return replace(
+                    report,
+                    committed=False,
+                    conflict=True,
+                    message=conflict_message(conflict),
+                )
+            except GitSyncError as exc:
+                if swallow_git_error:
+                    return report
+                raise IngestError(f"commit failed: {exc}") from exc
+        if result.committed:
+            # A non-empty vault-commit ran the rebase + push to completion, so the
+            # remote is now current -- record the push liveness marker (issue #15).
+            self._record_marker(MARKER_PUSH)
+        return replace(
+            report,
+            committed=result.committed,
+            conflict=False,
+            message=success_message if success_message is not None else report.message,
+        )
 
     def _commit(
         self,
@@ -2438,48 +2462,22 @@ class Ingestor:
         Raises:
             IngestError: on a non-conflict git failure.
         """
-        if not do_commit:
-            # Stage this capture's own paths now so the later batch commit includes them
-            # without re-scanning the whole tree (issue #85). The git work (rebase/push)
-            # is still the batch caller's.
-            if paths:
-                try:
-                    self._git.stage(paths)
-                except GitSyncError as exc:
-                    raise IngestError(f"stage failed: {exc}") from exc
-            return _replace_report(
-                report,
-                committed=False,
-                conflict=False,
-                message=(
-                    f"Filed {len(report.page_paths)} page(s) (batch commit pending)."
-                ),
-            )
-        subject = cls.title or "capture"
-        try:
-            result = self._git.commit(subject, paths=paths)
-        except VaultConflictError as exc:
-            return _replace_report(
-                report,
-                committed=False,
-                conflict=True,
-                message=(
-                    "VAULT CONFLICT: content is filed locally but the push was "
-                    "refused; resolve in Obsidian. Paths: "
-                    f"{', '.join(report.page_paths)} ({exc})"
-                ),
-            )
-        except GitSyncError as exc:
-            raise IngestError(f"commit failed: {exc}") from exc
-        if result.committed:
-            # A non-empty vault-commit ran the rebase + push to completion, so the
-            # remote is now current -- record the push liveness marker (issue #15).
-            self._record_marker(MARKER_PUSH)
-        return _replace_report(
+        return self._finalise_git(
             report,
-            committed=result.committed,
-            conflict=False,
-            message=f"Filed {len(report.page_paths)} page(s).",
+            cls.title or "capture",
+            paths,
+            do_commit=do_commit,
+            conflict_message=lambda conflict: (
+                "VAULT CONFLICT: content is filed locally but the push was "
+                "refused; resolve in Obsidian. Paths: "
+                f"{', '.join(report.page_paths)} ({conflict})"
+            ),
+            staged_message=(
+                f"Filed {len(report.page_paths)} page(s) (batch commit pending)."
+            ),
+            success_message=f"Filed {len(report.page_paths)} page(s).",
+            swallow_stage_error=False,
+            swallow_git_error=False,
         )
 
     def _commit_deferred(
@@ -2517,8 +2515,6 @@ class Ingestor:
             asset_paths=asset_paths,
             obsidian_links=[],
             wikilinks=[],
-            committed=False,
-            conflict=False,
             deferred=True,
             message=(
                 f"Saved raw, curation deferred ({exc}). The item is held durably "
@@ -2531,44 +2527,28 @@ class Ingestor:
         commit_paths = [*raw_paths, *asset_paths, "log.md"]
         # The log append + stage/commit is the narrow tree-mutating section: take the
         # working-tree lock so the shared log.md append and the commit/rebase never race
-        # a concurrent capture (issue #85).
+        # a concurrent capture (issue #85). The lock is re-entrant, so it is held across
+        # both the log append and the nested git finalisation.
         with self._git.capture_lock:
             try:
                 self._vault.append_log("ingest", "deferred capture", raw_paths)
             except VaultError:
                 # Navigation is best-effort here; the durable hold is what matters.
                 pass
-            if not do_commit:
-                # The batch caller (thoth capture) commits the run; stage the hold now
-                # so the batched commit includes it without an add -A.
-                try:
-                    self._git.stage(commit_paths)
-                except GitSyncError:
-                    pass
-                return report
-            try:
-                result = self._git.commit("deferred capture", paths=commit_paths)
-            except VaultConflictError as conflict:
-                return _replace_report(
-                    report,
-                    committed=False,
-                    conflict=True,
-                    message=(
-                        "Saved raw locally, curation deferred (LLM unavailable), but "
-                        f"the push was refused; resolve in Obsidian. ({conflict})"
-                    ),
-                )
-            except GitSyncError:
-                # The hold is durable locally even if the push failed; do not raise.
-                return report
-        if result.committed:
-            self._record_marker(MARKER_PUSH)
-        return _replace_report(
-            report,
-            committed=result.committed,
-            conflict=False,
-            message=report.message,
-        )
+            return self._finalise_git(
+                report,
+                "deferred capture",
+                commit_paths,
+                do_commit=do_commit,
+                conflict_message=lambda conflict: (
+                    "Saved raw locally, curation deferred (LLM unavailable), but "
+                    f"the push was refused; resolve in Obsidian. ({conflict})"
+                ),
+                staged_message=None,
+                success_message=None,
+                swallow_stage_error=True,
+                swallow_git_error=True,
+            )
 
     # ---- pass 8: report ----------------------------------------------------------
 
@@ -2600,9 +2580,6 @@ class Ingestor:
             obsidian_links=links,
             wikilinks=wikilinks,
             titles=titles,
-            committed=False,
-            conflict=False,
-            message="",
         )
 
     @staticmethod
@@ -2772,8 +2749,6 @@ class Ingestor:
         Raises:
             IngestError: if no parseable JSON object is found.
         """
-        from thoth.llm import extract_text
-
         text = extract_text(response)
         try:
             return parse_json_block(text)
@@ -2962,22 +2937,3 @@ def _curate_repair_turn(response: Any, problems: str) -> Message:
                 content=[tool_result_block(_block_id(block), text, is_error=True)],
             )
     return Message(role="user", content=text)
-
-
-def _replace_report(
-    report: IngestReport, *, committed: bool, conflict: bool, message: str
-) -> IngestReport:
-    """Return a copy of ``report`` with the commit-outcome fields set."""
-    return IngestReport(
-        page_paths=report.page_paths,
-        raw_paths=report.raw_paths,
-        asset_paths=report.asset_paths,
-        obsidian_links=report.obsidian_links,
-        wikilinks=report.wikilinks,
-        titles=report.titles,
-        committed=committed,
-        conflict=conflict,
-        deferred=report.deferred,
-        unchanged=report.unchanged,
-        message=message,
-    )
