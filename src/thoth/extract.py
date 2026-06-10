@@ -106,12 +106,13 @@ class TranscriptionError(ExtractError):
 class FirecrawlLike(Protocol):
     """Structural type for the Firecrawl client :meth:`Extractor.web_extract` uses."""
 
-    def scrape(self, url: str, *, formats: list[str] | None = ...) -> Any:
+    def scrape(self, url: str, *, formats: Any = ...) -> Any:
         """Scrape ``url`` and return a result carrying markdown (duck-typed).
 
         ``firecrawl-py`` 4.x replaced ``scrape_url(url, params={...})`` with
         ``scrape(url, formats=[...])`` returning a ``Document`` (``.markdown`` /
-        ``.metadata``).
+        ``.metadata``). ``formats`` is ``Any`` so the real client (whose parameter is
+        typed ``list[FormatOption]``) satisfies this Protocol structurally.
         """
         ...
 
@@ -249,19 +250,26 @@ def assert_url_allowed(url: str, *, allow_private_urls: bool = False) -> None:
 
 
 def _content_type_to_ext(content_type: str) -> str:
-    """Map a (possibly parameterised) ``Content-Type`` to a bare lowercase extension.
+    """Map a bare lowercased content type to a bare lowercase extension.
 
-    Strips any ``; charset=...`` parameter, lowercases, and looks the bare type up
-    in :data:`_IMAGE_EXT_BY_CONTENT_TYPE`, falling back to :data:`_DEFAULT_BINARY_EXT`.
+    Normalisation (parameter stripping + lowercasing) is owned by
+    :meth:`Extractor._stream_to_fd`; this is a plain lookup in
+    :data:`_IMAGE_EXT_BY_CONTENT_TYPE`, falling back to :data:`_DEFAULT_BINARY_EXT`.
 
     Args:
-        content_type: The raw ``Content-Type`` header value (may be empty).
+        content_type: The bare, lowercased content type (may be empty).
 
     Returns:
         A bare lowercase extension (no leading dot).
     """
-    bare = content_type.split(";", 1)[0].strip().lower()
-    return _IMAGE_EXT_BY_CONTENT_TYPE.get(bare, _DEFAULT_BINARY_EXT)
+    return _IMAGE_EXT_BY_CONTENT_TYPE.get(content_type, _DEFAULT_BINARY_EXT)
+
+
+def _field(obj: Any, name: str) -> Any:
+    """Return ``obj[name]`` (dict) or ``obj.name`` (object), defaulting to ``None``."""
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
 
 
 class Extractor:
@@ -368,10 +376,7 @@ class Extractor:
     @staticmethod
     def _extract_markdown(result: Any) -> str:
         """Pull the ``markdown`` field out of a Firecrawl result (dict or object)."""
-        if isinstance(result, dict):
-            value = result.get("markdown")
-        else:
-            value = getattr(result, "markdown", None)
+        value = _field(result, "markdown")
         return value if isinstance(value, str) else ""
 
     @staticmethod
@@ -382,23 +387,10 @@ class Extractor:
         ``DocumentMetadata`` *object* (``.title``), not a dict, so both shapes are
         accepted here.
         """
-        metadata: Any = (
-            result.get("metadata")
-            if isinstance(result, dict)
-            else getattr(result, "metadata", None)
-        )
-        meta_title = (
-            metadata.get("title")
-            if isinstance(metadata, dict)
-            else getattr(metadata, "title", None)
-        )
+        meta_title = _field(_field(result, "metadata"), "title")
         if isinstance(meta_title, str):
             return meta_title
-        title = (
-            result.get("title")
-            if isinstance(result, dict)
-            else getattr(result, "title", None)
-        )
+        title = _field(result, "title")
         return title if isinstance(title, str) else ""
 
     def fetch_binary(self, url: str) -> FetchedBinary:

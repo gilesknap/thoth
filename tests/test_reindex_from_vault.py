@@ -270,6 +270,20 @@ def test_page_type_parses_type_else_falls_back_to_page() -> None:
     assert page_type("---\ntitle: X\n---\n\nbody\n") == "page"
 
 
+def test_page_type_degenerate_inputs() -> None:
+    """page_type handles quoted/empty/non-string values and ignores the body.
+
+    The value comes from the parsed leading frontmatter block only: a quoted scalar
+    is unquoted, a column-0 ``type:`` line in the *body* never leaks in, an empty
+    ``type:`` key falls back to ``page``, and a non-string scalar (YAML can yield an
+    int) is coerced with ``str``.
+    """
+    assert page_type('---\ntype: "entity"\n---\n\nbody\n') == "entity"
+    assert page_type("---\ntitle: X\n---\n\nbody\ntype: rogue\n") == "page"
+    assert page_type("---\ntype:\ntitle: X\n---\n\nbody\n") == "page"
+    assert page_type("---\ntype: 3\n---\n\nbody\n") == "3"
+
+
 def test_manifest_path_is_under_thoth_home_hindsight(config: Config) -> None:
     """manifest_path is <thoth_home>/hindsight/reindex-manifest.json."""
     expected = config.thoth_home / "hindsight" / "reindex-manifest.json"

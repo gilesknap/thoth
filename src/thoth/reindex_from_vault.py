@@ -40,12 +40,12 @@ where the ``hindsight-api`` server is absent.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import frontmatter
+import yaml  # transitive dep of python-frontmatter (its YAML handler)
 
 from thoth.budget import BudgetExceededError
 from thoth.config import Config
@@ -88,10 +88,6 @@ SKIP_FILES: frozenset[str] = frozenset({"SCHEMA.md", "index.md", "log.md"})
 holds conventions and ``log.md`` is the append-only action log. All three are structure,
 not curated knowledge.
 """
-
-# Capture a leading "type:" value from frontmatter; multiline so it is found anywhere in
-# the leading block. Used only as a retain tag (page_type), never for confinement.
-_TYPE_LINE_RE: re.Pattern[str] = re.compile(r"^type:\s*(\S+)", re.MULTILINE)
 
 
 class ReindexError(Exception):
@@ -143,18 +139,24 @@ def page_type(markdown: str) -> str:
     """Return the leading frontmatter ``type:`` value, or ``"page"`` when absent.
 
     This is used only to tag a retained fact for recall filtering (alongside the vault
-    path), never for any confinement or contract decision, so a missing or unparseable
-    type degrades to the neutral ``"page"`` rather than raising.
+    path), never for any confinement or contract decision, so a missing, empty, or
+    unparseable type degrades to the neutral ``"page"`` rather than raising.
 
     Args:
         markdown: The full page text (frontmatter + body).
 
     Returns:
-        The ``type`` value (for example ``"entity"``) or ``"page"`` when no leading
-        ``type:`` line is present.
+        The ``type`` value (for example ``"entity"``; non-string YAML scalars are
+        coerced with :class:`str`) or ``"page"`` when the leading frontmatter block
+        has no non-empty ``type`` key.
     """
-    match = _TYPE_LINE_RE.search(markdown)
-    return match.group(1) if match else "page"
+    try:
+        value = frontmatter.loads(markdown).get("type")
+    except yaml.YAMLError:
+        return "page"
+    if value is None:
+        return "page"
+    return str(value) or "page"
 
 
 def _split_body(markdown: str) -> str:
@@ -328,12 +330,13 @@ class Reindexer:
         aborted = False
         for rel, markdown in self._iter_pages():
             seen.add(rel)
-            digest = self.body_hash(markdown)
+            body = _split_body(markdown)
+            digest = self._vault.body_sha256(body)
             if not full_rebuild and manifest.get(rel, {}).get("sha256") == digest:
                 skipped += 1
                 continue
             try:
-                self._retain_page(rel, markdown)
+                self._retain_page(rel, markdown, body)
             except BudgetExceededError:
                 # The daily LLM budget (issue #16) was reached mid-rebuild. Stop
                 # cleanly: the pages retained so far are advanced in the manifest below,
@@ -346,26 +349,17 @@ class Reindexer:
             manifest[rel] = {"sha256": digest, "retained_at": _now_iso()}
             changed += 1
 
-        if aborted:
-            self.write_manifest(manifest)
-            return ReindexResult(
-                changed=changed,
-                skipped=skipped,
-                pruned=0,
-                live_pages=len(seen),
-                full_rebuild=full_rebuild,
-                aborted=True,
-            )
-
-        pruned = self._prune_deleted(manifest, seen)
+        pruned = 0 if aborted else self._prune_deleted(manifest, seen)
         self.write_manifest(manifest)
-        self._record_marker()
+        if not aborted:
+            self._record_marker()
         return ReindexResult(
             changed=changed,
             skipped=skipped,
             pruned=pruned,
             live_pages=len(seen),
             full_rebuild=full_rebuild,
+            aborted=aborted,
         )
 
     def _record_marker(self) -> None:
@@ -412,19 +406,20 @@ class Reindexer:
         pages.sort(key=lambda item: item[0])
         return pages
 
-    def _retain_page(self, rel: str, markdown: str) -> None:
+    def _retain_page(self, rel: str, markdown: str, body: str) -> None:
         """Forget any stale facts for ``rel`` then retain the current body.
 
         Args:
             rel: The vault-relative page path (the Hindsight reference / manifest key).
-            markdown: The full page text; the leading frontmatter is stripped so only
-                the body is retained, matching the body-hash idempotency key.
+            markdown: The full page text (supplies the :func:`page_type` retain tag).
+            body: The page body with the leading frontmatter already stripped
+                (:func:`_split_body`), so only the body is retained, matching the
+                body-hash idempotency key.
 
         Raises:
             ReindexError: if the checked retain raises
                 :class:`~thoth.hindsight.HindsightError`.
         """
-        body = _split_body(markdown)
         self._hindsight.forget(rel)
         try:
             self._hindsight.retain(rel, body, tags=[page_type(markdown), rel])
