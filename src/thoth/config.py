@@ -63,7 +63,7 @@ DEFAULT_OBSIDIAN_VAULT_NAME: str = "pkm-vault"
 """Default registered Obsidian vault name used in ``obsidian://`` links."""
 
 DEFAULT_ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
-"""Default Anthropic model id (the dated fallback id belongs to ``llm.py``)."""
+"""Default Anthropic model id."""
 
 DEFAULT_LOG_LEVEL: str = "INFO"
 """Default logging level (issue #52); ``THOTH_LOG_LEVEL`` overrides it at the daemon.
@@ -169,34 +169,24 @@ class Config:
 
     def require_anthropic(self) -> str:
         """Return the Anthropic API key or raise :class:`ConfigError` if unset."""
-        if self.anthropic_api_key is None:
-            raise ConfigError(
-                "ANTHROPIC_API_KEY is required for this operation but is not set"
-            )
-        return self.anthropic_api_key
+        return _require(
+            self.anthropic_api_key,
+            "ANTHROPIC_API_KEY is required for this operation but is not set",
+        )
 
     def require_slack(self) -> tuple[str, str]:
         """Return ``(bot_token, app_token)`` or raise :class:`ConfigError`.
 
         Raises if either ``SLACK_BOT_TOKEN`` or ``SLACK_APP_TOKEN`` is unset.
         """
-        missing = [
-            name
-            for name, value in (
+        bot_token, app_token = _require_all(
+            (
                 ("SLACK_BOT_TOKEN", self.slack_bot_token),
                 ("SLACK_APP_TOKEN", self.slack_app_token),
-            )
-            if value is None
-        ]
-        if missing:
-            raise ConfigError(
-                "Slack requires both SLACK_BOT_TOKEN and SLACK_APP_TOKEN; "
-                f"missing: {', '.join(missing)}"
-            )
-        # Both are non-None here; assert for the type checker.
-        assert self.slack_bot_token is not None
-        assert self.slack_app_token is not None
-        return self.slack_bot_token, self.slack_app_token
+            ),
+            "Slack requires both SLACK_BOT_TOKEN and SLACK_APP_TOKEN; ",
+        )
+        return bot_token, app_token
 
     def require_slack_summary_channel(self) -> str:
         """Return the summary DM/channel id or raise :class:`ConfigError` if unset.
@@ -206,11 +196,10 @@ class Config:
         (``SLACK_SUMMARY_CHANNEL``) rather than as a literal so the target is not baked
         into the code.
         """
-        if self.slack_summary_channel is None:
-            raise ConfigError(
-                "SLACK_SUMMARY_CHANNEL is required to post a summary but is not set"
-            )
-        return self.slack_summary_channel
+        return _require(
+            self.slack_summary_channel,
+            "SLACK_SUMMARY_CHANNEL is required to post a summary but is not set",
+        )
 
     def require_slack_capture_channel(self) -> str:
         """Return the capture channel id or raise :class:`ConfigError` if unset.
@@ -222,11 +211,10 @@ class Config:
         cutover from the old ``message.im`` flow), so the daemon fails fast at startup
         rather than listen nowhere.
         """
-        if self.slack_capture_channel is None:
-            raise ConfigError(
-                "SLACK_CAPTURE_CHANNEL is required to run the Slack daemon but is unset"
-            )
-        return self.slack_capture_channel
+        return _require(
+            self.slack_capture_channel,
+            "SLACK_CAPTURE_CHANNEL is required to run the Slack daemon but is unset",
+        )
 
     def mcp_api_key_set(self) -> frozenset[str]:
         """Parse ``THOTH_MCP_API_KEYS`` into the accepted bearer-key set (issue #103).
@@ -241,10 +229,7 @@ class Config:
         Returns:
             The frozenset of non-empty bearer keys (empty when unconfigured).
         """
-        raw = self.mcp_api_keys
-        if not raw:
-            return frozenset()
-        return frozenset(key.strip() for key in raw.split(",") if key.strip())
+        return frozenset(_split_csv(self.mcp_api_keys))
 
     def require_mcp_api_keys(self) -> frozenset[str]:
         """Return the bearer-key set or raise :class:`ConfigError` if none are set.
@@ -287,10 +272,7 @@ class Config:
         Returns:
             The extra allowed-host patterns (empty when unconfigured).
         """
-        raw = self.mcp_allowed_hosts
-        if not raw:
-            return ()
-        return tuple(h.strip() for h in raw.split(",") if h.strip())
+        return _split_csv(self.mcp_allowed_hosts)
 
     def mcp_allowed_origins_list(self) -> tuple[str, ...]:
         """Extra ``Origin`` values to allow past the DNS-rebinding guard (#103).
@@ -304,10 +286,7 @@ class Config:
         Returns:
             The extra allowed-origin patterns (empty when unconfigured).
         """
-        raw = self.mcp_allowed_origins
-        if not raw:
-            return ()
-        return tuple(o.strip() for o in raw.split(",") if o.strip())
+        return _split_csv(self.mcp_allowed_origins)
 
     def allowed_github_user_set(self) -> frozenset[str]:
         """Parse ``THOTH_ALLOWED_GITHUB_USERS`` into the OAuth allow-list set.
@@ -322,10 +301,7 @@ class Config:
         Returns:
             The frozenset of allowed GitHub logins (empty when unconfigured).
         """
-        raw = self.allowed_github_users
-        if not raw:
-            return frozenset()
-        return frozenset(login.strip() for login in raw.split(",") if login.strip())
+        return frozenset(_split_csv(self.allowed_github_users))
 
     def oauth_enabled(self) -> bool:
         """Return ``True`` when OAuth 2.1 for the MCP server is fully configured.
@@ -353,33 +329,17 @@ class Config:
         exactly which are missing. Called when ANY OAuth var is present so a half-set
         configuration fails fast at startup rather than running half-open.
         """
-        missing = [
-            name
-            for name, value in (
+        client_id, client_secret, signing_secret, server_url = _require_all(
+            (
                 ("GITHUB_OAUTH_CLIENT_ID", self.github_oauth_client_id),
                 ("GITHUB_OAUTH_CLIENT_SECRET", self.github_oauth_client_secret),
                 ("THOTH_JWT_SIGNING_SECRET", self.jwt_signing_secret),
                 ("THOTH_OAUTH_SERVER_URL", self.oauth_server_url),
-            )
-            if value is None
-        ]
-        if missing:
-            raise ConfigError(
-                "OAuth requires GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET, "
-                "THOTH_JWT_SIGNING_SECRET and THOTH_OAUTH_SERVER_URL; "
-                f"missing: {', '.join(missing)}"
-            )
-        # All four are non-None here; assert for the type checker.
-        assert self.github_oauth_client_id is not None
-        assert self.github_oauth_client_secret is not None
-        assert self.jwt_signing_secret is not None
-        assert self.oauth_server_url is not None
-        return (
-            self.github_oauth_client_id,
-            self.github_oauth_client_secret,
-            self.jwt_signing_secret,
-            self.oauth_server_url,
+            ),
+            "OAuth requires GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET, "
+            "THOTH_JWT_SIGNING_SECRET and THOTH_OAUTH_SERVER_URL; ",
         )
+        return client_id, client_secret, signing_secret, server_url
 
     def alert_target(self) -> str | None:
         """Resolve where unattended error/heartbeat alerts are posted (issue #15).
@@ -610,6 +570,34 @@ def _int_opt(value: str | None, *, default: int, name: str) -> int:
         return int(value)
     except ValueError as exc:
         raise ConfigError(f"{name} must be an integer, got {value!r}") from exc
+
+
+def _split_csv(raw: str | None) -> tuple[str, ...]:
+    """Split a comma-separated env value, trimming entries and dropping blanks."""
+    if not raw:
+        return ()
+    return tuple(piece.strip() for piece in raw.split(",") if piece.strip())
+
+
+def _require(value: str | None, message: str) -> str:
+    """Return ``value`` or raise :class:`ConfigError` with ``message`` when unset."""
+    if value is None:
+        raise ConfigError(message)
+    return value
+
+
+def _require_all(
+    pairs: tuple[tuple[str, str | None], ...], prefix: str
+) -> tuple[str, ...]:
+    """Return the paired values or raise :class:`ConfigError` naming the unset vars.
+
+    ``prefix`` opens the error message; the missing variable names are appended in
+    pair order.
+    """
+    missing = [name for name, value in pairs if value is None]
+    if missing:
+        raise ConfigError(prefix + f"missing: {', '.join(missing)}")
+    return tuple(value for _, value in pairs if value is not None)
 
 
 def _strip_user_token(token: str) -> str:
