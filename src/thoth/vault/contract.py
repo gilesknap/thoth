@@ -3,15 +3,13 @@
 The single source of the folder x type contract (issue #19): the classify prompt
 (:mod:`thoth.ingest`), the lint folder walks (:mod:`thoth.lint`), the summary scans
 (:mod:`thoth.summary`) and the file-plan validator (:mod:`thoth.llm`) all import these
-constants rather than restating them, and :func:`slugify` lives next to the
-:data:`SLUG_RE` validation grammar so the slug rule and the grammar never drift apart.
+constants rather than restating them, so the contract and its consumers never drift
+apart.
 """
 
 from __future__ import annotations
 
 import re
-
-from slugify import slugify as _slugify_lib
 
 # --- module-level constants: the folder x type contract ---------------------------
 
@@ -122,12 +120,6 @@ one-place edit."""
 SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 """Slug grammar: lowercase alphanumerics in single-hyphen-separated groups."""
 
-# Caps applied by :func:`slugify`. A slug keeps at most this many hyphen-separated
-# words and this many characters, so a long title yields a short, filesystem-friendly
-# slug that still satisfies :data:`SLUG_RE`.
-_MAX_SLUG_WORDS: int = 8
-_MAX_SLUG_LEN: int = 80
-
 ASSET_SLUG_RE: re.Pattern[str] = re.compile(
     r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+)+$"
 )
@@ -177,37 +169,3 @@ _AUTHOR_REQUIRED_FIELDS: tuple[str, ...] = tuple(
 _LOG_ACTIONS: frozenset[str] = frozenset(
     {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
 )
-
-
-def slugify(text: str, *, fallback: str = "untitled") -> str:
-    """Build a vault slug from free text via ``python-slugify``, capped and validated.
-
-    Wraps :func:`slugify.slugify` (``python-slugify``) with the project caps
-    (:data:`_MAX_SLUG_WORDS` words, :data:`_MAX_SLUG_LEN` characters, lowercase, word
-    boundaries respected) so a long title yields a short, filesystem-friendly slug.
-    Unlike the old hand-rolled strippers, ``python-slugify`` *transliterates* non-ASCII
-    rather than dropping it: ``"café notes"`` becomes ``cafe-notes`` and ``"naïve
-    Bayes"`` becomes ``naive-bayes``. When the input transliterates to nothing usable
-    (empty, whitespace, or symbols-only) the ``fallback`` word is returned, so the slug
-    is **always** a non-empty string satisfying :data:`SLUG_RE`. The slug rule is
-    defined here, next to the :data:`SLUG_RE` validation grammar, so the two cannot
-    drift apart.
-
-    Args:
-        text: The free text to slugify (typically a page title or question).
-        fallback: The slug returned when ``text`` has no slug-able characters; must
-            itself satisfy :data:`SLUG_RE` (defaults to ``"untitled"``).
-
-    Returns:
-        A slug string guaranteed to satisfy :data:`SLUG_RE`.
-    """
-    slug = _slugify_lib(
-        text,
-        max_length=_MAX_SLUG_LEN,
-        word_boundary=True,
-        separator="-",
-        lowercase=True,
-    )
-    words = slug.split("-")[:_MAX_SLUG_WORDS]
-    slug = "-".join(word for word in words if word)
-    return slug or fallback

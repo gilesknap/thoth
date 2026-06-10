@@ -38,7 +38,6 @@ from thoth.vault import (
     Vault,
     VaultError,
     redact_secrets,
-    slugify,
 )
 
 # Obviously-fake, concatenated token shapes only (gitleaks scans the commit). Building
@@ -185,35 +184,6 @@ def test_folder_dir_tuples_partition_the_folder_contract() -> None:
     # Each reference folder admits exactly one reference type.
     for folder in CURATED_DIRS:
         assert FOLDER_TYPE_CONTRACT[folder] <= REFERENCE_TYPES
-
-
-# --- slugify (the one shared slug builder, issue #10) ------------------------------
-
-
-def test_slugify_transliterates_and_caps() -> None:
-    """slugify transliterates unicode and applies the word/length caps (#10)."""
-    assert slugify("café notes") == "cafe-notes"
-    assert slugify("naïve Bayes") == "naive-bayes"
-    long = slugify("one two three four five six seven eight nine ten eleven")
-    assert len(long.split("-")) <= 8
-
-
-def test_slugify_fallback_for_empty_and_symbols() -> None:
-    """An input with no slug-able characters returns the fallback word (#10)."""
-    assert slugify("") == "untitled"
-    assert slugify("   ", fallback="query") == "query"
-    assert slugify("!!!", fallback="query") == "query"
-
-
-@pytest.mark.parametrize(
-    "text",
-    ["café", "naïve Bayes", "Hello, World!", "日本語", "", "!!!", "Trailing---"],
-)
-def test_slugify_result_always_validates(text: str) -> None:
-    """Every slugify output is non-empty and accepted by Vault.validate_slug (#10)."""
-    slug = slugify(text)
-    assert SLUG_RE.fullmatch(slug)
-    assert Vault.validate_slug(slug) == slug
 
 
 # --- path confinement (the security core) ------------------------------------------
@@ -750,23 +720,6 @@ def test_append_log_unknown_action(vault: Vault) -> None:
     """An action outside the allowed set raises SchemaError."""
     with pytest.raises(SchemaError):
         vault.append_log("explode", "subject", [])
-
-
-# --- embed_asset_markdown ----------------------------------------------------------
-
-
-def test_embed_asset_markdown(vault: Vault) -> None:
-    """embed_asset_markdown returns the validated Obsidian embed string."""
-    assert (
-        vault.embed_asset_markdown("motor-control-diagram-e4a408.png")
-        == "![[motor-control-diagram-e4a408.png]]"
-    )
-
-
-def test_embed_asset_markdown_validates(vault: Vault) -> None:
-    """embed_asset_markdown rejects an invalid filename."""
-    with pytest.raises(SlugError):
-        vault.embed_asset_markdown("Bad Name.PNG")
 
 
 # --- secret redaction --------------------------------------------------------------

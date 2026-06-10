@@ -17,16 +17,13 @@ the frozen :class:`thoth.config.Config` for the vault root and name, and delegat
 single canonical ``obsidian://`` link encoding to :meth:`Config.obsidian_uri`; the
 confinement check lives here so there is exactly one encoder and one confiner.
 
-Only the standard library plus ``frontmatter``, ``yaml`` and ``slugify``
-(``python-slugify``, pure-python) are imported at module level, so importing this
-package is always CI-safe.
+Only the standard library plus ``frontmatter`` and ``yaml`` are imported at module
+level, so importing this package is always CI-safe.
 
 This package is also the single canonical source of the page-type / source / folder
 vocabulary (issue #19): the classify prompt (:mod:`thoth.ingest`), the lint folder walks
 (:mod:`thoth.lint`), the summary scans (:mod:`thoth.summary`) and the file-plan
-validator (:mod:`thoth.llm`) all import these constants rather than restating them, and
-:func:`slugify` lives next to the :data:`SLUG_RE` validation grammar so the slug rule
-and the grammar never drift apart.
+validator (:mod:`thoth.llm`) all import these constants rather than restating them.
 
 The submodules split the surface by responsibility: :mod:`thoth.vault.contract` (the
 vocabulary constants and the slug grammar), :mod:`thoth.vault.redact` (secret
@@ -50,7 +47,6 @@ from .contract import (
     TYPE_ENUMERATION,
     VALID_SOURCES,
     VALID_TYPES,
-    slugify,
 )
 from .core import (
     Page,
@@ -86,5 +82,4 @@ __all__ = [
     "Vault",
     "VaultError",
     "redact_secrets",
-    "slugify",
 ]

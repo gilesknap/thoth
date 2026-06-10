@@ -216,5 +216,4 @@ chokepoint against redelivery storms.
 | **git** | Vault version control and two-way sync (Obsidian Git plugin + appliance bash wrappers) |
 | **Obsidian** | Markdown vault viewer and editor on the workstation |
 | **python-frontmatter** | YAML frontmatter parsing for vault page metadata |
-| **python-slugify** | Unicode-correct slug generation for vault file names |
 | **tenacity** | Retry hardening around transient Hindsight HTTP failures (5xx + transport errors) |
