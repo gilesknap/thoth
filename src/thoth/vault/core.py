@@ -1,38 +1,8 @@
-"""The closed, path-confined read/write surface over the Obsidian vault.
-
-This module is the security core of the appliance (SPEC section 3): the LLM never
-gets a shell or arbitrary file access, so every byte that reaches the vault passes
-through the helpers here. They (a) confine paths to the resolved vault root, rejecting
-anything that resolves outside it (absolute paths, ``..`` segments, and symlink
-escapes are all caught *before* any disk is touched); (b) validate the folder-by-type
-contract and the slug/asset-filename grammar; (c) read and write YAML frontmatter via
-``python-frontmatter`` + ``pyyaml``; (d) stamp the required ``created``/``updated``
-(and ``ingested``/``sha256`` for raw) fields; (e) make append-only, deduplicated edits
-to ``log.md``; (f) move binary assets into ``raw/assets/`` (never
-base64); and (g) redact secret-looking strings from body and frontmatter before
-filing.
-
-The module is pure filesystem and fully unit-testable on a temporary vault. It reuses
-the frozen :class:`thoth.config.Config` for the vault root and name, and delegates the
-single canonical ``obsidian://`` link encoding to :meth:`Config.obsidian_uri`; the
-confinement check lives here so there is exactly one encoder and one confiner.
-
-Only the standard library plus ``frontmatter``, ``yaml`` and ``slugify``
-(``python-slugify``, pure-python) are imported at module level, so importing this module
-is always CI-safe.
-
-This module is also the single canonical source of the page-type / source / folder
-vocabulary (issue #19): the classify prompt (:mod:`thoth.ingest`), the lint folder walks
-(:mod:`thoth.lint`), the summary scans (:mod:`thoth.summary`) and the file-plan
-validator (:mod:`thoth.llm`) all import these constants rather than restating them, and
-:func:`slugify` lives next to the :data:`SLUG_RE` validation grammar so the slug rule
-and the grammar never drift apart.
-"""
+"""The errors, page records, and the path-confined :class:`Vault` facade itself."""
 
 from __future__ import annotations
 
 import hashlib
-import re
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -41,206 +11,21 @@ from pathlib import Path, PurePosixPath
 
 import frontmatter
 import yaml
-from slugify import slugify as _slugify_lib
 
 from thoth.config import Config
 
-# --- module-level constants: the folder x type contract ---------------------------
-
-# A stable, human-ordered enumeration of the four content types a capture may be
-# classified into (ADR 0005). Frozensets have no meaningful order, so the classify
-# prompt (thoth.ingest) derives its "one of ..." list from this tuple rather than
-# restating the vocabulary. ``inbox`` is machinery (the durable pre-curate holding
-# type), never a classify target, so it is excluded here and added to VALID_TYPES.
-TYPE_ENUMERATION: tuple[str, ...] = (
-    "entity",
-    "note",
-    "memory",
-    "action",
+from .contract import (
+    _AUTHOR_REQUIRED_FIELDS,
+    _LOG_ACTIONS,
+    ASSET_SLUG_RE,
+    FOLDER_TYPE_CONTRACT,
+    RAW_SUBDIRS,
+    SEED_DIRS,
+    SLUG_RE,
+    VALID_SOURCES,
+    VALID_TYPES,
 )
-"""Canonical ordering of the four content :data:`VALID_TYPES` offered to the classifier.
-
-ADR 0005 collapsed the eight folders into four flat, equal folders, so a capture is one
-of exactly four content types: ``entity`` (nouns), ``note`` (everything written,
-differentiated by a ``tags:`` value such as ``concept``/``comparison``/``query``),
-``memory`` (personal reference), and ``action`` (carries ``status``/``due``; a media
-item is an ``action`` tagged ``media``). ``summary`` is no longer a content type -- it
-survives only as the label on the spine ``index.md`` Home page.
-"""
-
-INBOX_TYPE: str = "inbox"
-"""The machinery ``type`` for a durable pre-curate ``inbox/`` holding page (ADR 0004).
-
-Not a content type the classifier may pick (so absent from :data:`TYPE_ENUMERATION`),
-but a legal frontmatter ``type`` :meth:`Vault.write_page` accepts for the ``inbox/``
-folder, so it is a member of :data:`VALID_TYPES`.
-"""
-
-VALID_TYPES: frozenset[str] = frozenset(TYPE_ENUMERATION) | {INBOX_TYPE}
-"""Every legal frontmatter ``type`` value (the four content types plus ``inbox``)."""
-
-REFERENCE_TYPES: frozenset[str] = frozenset({"entity", "note", "memory"})
-"""The lifecycle-free reference content types (ADR 0005): the non-actionable types.
-
-Replaces the old ``KNOWLEDGE_TYPES`` family. Used as the default recall scope for
-knowledge Q&A (:meth:`thoth.query.QueryEngine.recall_paths`): with the knowledge /
-life-admin families gone, "what do I know about X?" excludes the actionable ``action``
-type (todos and the to-consume media queue) by scoping to these reference types instead.
-"""
-
-VALID_SOURCES: frozenset[str] = frozenset(
-    {"slack", "mcp", "web", "manual", "cron", "import"}
-)
-"""Every legal frontmatter ``source`` value (SPEC frontmatter contract).
-
-``import`` is the provenance of a page filed by the ``thoth capture <path>`` CLI
-backfill (issue #80): content that already lived on disk (a single file or a walked
-directory of Markdown + assets), fed through the same :class:`~thoth.ingest.Ingestor`
-pipeline as a Slack/MCP capture. :meth:`write_page` validates ``source`` against this
-set, so the value must live here for an imported page to be writable."""
-
-FOLDER_TYPE_CONTRACT: dict[str, frozenset[str]] = {
-    "entities": frozenset({"entity"}),
-    "notes": frozenset({"note"}),
-    "memories": frozenset({"memory"}),
-    "actions": frozenset({"action"}),
-    "inbox": frozenset({"inbox"}),
-}
-"""Top-level vault folder -> the ``type`` values allowed to be written there (ADR 0005).
-
-Four flat content folders plus the ``inbox/`` holding folder. ``entities/`` absorbs the
-old ``people/``; ``notes/`` absorbs ``concepts/``/``comparisons/``/``queries/``
-(differentiated by a ``tags:`` value, not a folder); ``actions/`` absorbs ``media/`` (a
-media item is an ``action`` tagged ``media``); ``memories/`` is kept as its own folder.
-"""
-
-CURATED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
-"""The lifecycle-free reference folders, in catalog order (ADR 0005).
-
-Canonical here so :mod:`thoth.lint` and :mod:`thoth.summary` derive the same list
-instead of restating it. These are the reference pages that carry a one-line
-``summary:`` frontmatter gloss and get the orphan / stale checks. They carry no
-``status``/``due`` lifecycle.
-"""
-
-ACTIONABLE_DIRS: tuple[str, ...] = ("actions",)
-"""The lifecycle-bearing folder(s) scanned for overdue / cold checks (ADR 0005).
-
-A page here carries ``status``/``due`` and shows in the actionable Bases dashboards; the
-to-consume media queue lives here too (an ``action`` tagged ``media``). Together with
-:data:`CURATED_DIRS` and the ``inbox/`` holding folder these are the
-:data:`FOLDER_TYPE_CONTRACT` folders (a consistency the tests assert), so adding a
-folder is a one-place edit.
-"""
-
-RAW_SUBDIRS: frozenset[str] = frozenset({"articles", "papers", "transcripts", "assets"})
-"""The ``raw/`` subdirectories (SPEC vault tree); ``assets`` is binary-only."""
-
-SEED_DIRS: tuple[str, ...] = (
-    CURATED_DIRS
-    + ACTIONABLE_DIRS
-    + ("inbox",)
-    + tuple(f"raw/{subdir}" for subdir in sorted(RAW_SUBDIRS))
-)
-"""Every empty content folder :meth:`Vault.seed` creates so the structure exists.
-
-The four flat content folders (:data:`CURATED_DIRS` + :data:`ACTIONABLE_DIRS`) plus the
-``inbox/`` holding folder and the ``raw/`` subdirectories, so a freshly seeded vault has
-the full browsable skeleton in Obsidian even before any page is filed. Derived from the
-same canonical dir constants rather than restating them, so adding a folder is a
-one-place edit."""
-
-SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-"""Slug grammar: lowercase alphanumerics in single-hyphen-separated groups."""
-
-# Caps applied by :func:`slugify`. A slug keeps at most this many hyphen-separated
-# words and this many characters, so a long title yields a short, filesystem-friendly
-# slug that still satisfies :data:`SLUG_RE`.
-_MAX_SLUG_WORDS: int = 8
-_MAX_SLUG_LEN: int = 80
-
-ASSET_SLUG_RE: re.Pattern[str] = re.compile(
-    r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+)+$"
-)
-"""Asset filename grammar: ``<slug>`` plus one or more lowercase extensions.
-
-A single extension is the common case (``motor-diagram-e4a408.png``); a *compound*
-extension such as ``motor-diagram-e4a408.excalidraw.md`` is also accepted, so the
-advanced-image artifacts (issue #68) -- the editable Excalidraw reconstruction saved as
-``<slug>.excalidraw.md`` -- validate as assets. The grammar still forbids ``..`` (every
-dot must be followed by a ``[a-z0-9]`` group), a leading dot, uppercase, and spaces.
-"""
-
-REQUIRED_COMMON_FIELDS: tuple[str, ...] = (
-    "title",
-    "type",
-    "created",
-    "updated",
-    "source",
-    "tags",
-)
-"""Frontmatter fields required on every curated/life-admin page."""
-
-SUMMARY_TYPES: frozenset[str] = REFERENCE_TYPES
-"""Page ``type`` values that carry a one-line ``summary:`` frontmatter gloss (#72).
-
-The lifecycle-free reference types (``entity``/``note``/``memory``) each carry an
-optional one-line ``summary:`` frontmatter field authored by the curate pass -- the
-canonical, rebuildable home of a page's gloss (replacing the old agent-maintained
-``index.md`` catalog; ADR 0008). ``action``/``inbox`` pages do not get one (they are
-surfaced by the Bases dashboards, not a summary). The ``summary`` is plain frontmatter
-that round-trips through :meth:`Vault.read_page` / :meth:`Vault.write_page` like any
-other field, so it needs no special write path; this constant exists so the curate
-contract (:func:`thoth.llm.file_plan_contract_text`) and the lint invariant
-(:meth:`thoth.lint.LintEngine.check_summaries`) share one definition of "which pages are
-glossed" with :data:`REFERENCE_TYPES`.
-"""
-
-# created/updated are stamped by write_page, so the caller need not supply them; the
-# remaining required common fields must be present in the input frontmatter.
-_STAMPED_FIELDS: frozenset[str] = frozenset({"created", "updated"})
-_AUTHOR_REQUIRED_FIELDS: tuple[str, ...] = tuple(
-    field for field in REQUIRED_COMMON_FIELDS if field not in _STAMPED_FIELDS
-)
-
-# Actions accepted by append_log (SPEC log.md seed template).
-_LOG_ACTIONS: frozenset[str] = frozenset(
-    {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
-)
-
-
-def slugify(text: str, *, fallback: str = "untitled") -> str:
-    """Build a vault slug from free text via ``python-slugify``, capped and validated.
-
-    Wraps :func:`slugify.slugify` (``python-slugify``) with the project caps
-    (:data:`_MAX_SLUG_WORDS` words, :data:`_MAX_SLUG_LEN` characters, lowercase, word
-    boundaries respected) so a long title yields a short, filesystem-friendly slug.
-    Unlike the old hand-rolled strippers, ``python-slugify`` *transliterates* non-ASCII
-    rather than dropping it: ``"café notes"`` becomes ``cafe-notes`` and ``"naïve
-    Bayes"`` becomes ``naive-bayes``. When the input transliterates to nothing usable
-    (empty, whitespace, or symbols-only) the ``fallback`` word is returned, so the slug
-    is **always** a non-empty string satisfying :data:`SLUG_RE`. The slug rule is
-    defined here, next to the :data:`SLUG_RE` validation grammar, so the two cannot
-    drift apart.
-
-    Args:
-        text: The free text to slugify (typically a page title or question).
-        fallback: The slug returned when ``text`` has no slug-able characters; must
-            itself satisfy :data:`SLUG_RE` (defaults to ``"untitled"``).
-
-    Returns:
-        A slug string guaranteed to satisfy :data:`SLUG_RE`.
-    """
-    slug = _slugify_lib(
-        text,
-        max_length=_MAX_SLUG_LEN,
-        word_boundary=True,
-        separator="-",
-        lowercase=True,
-    )
-    words = slug.split("-")[:_MAX_SLUG_WORDS]
-    slug = "-".join(word for word in words if word)
-    return slug or fallback
+from .redact import _redact_frontmatter, redact_secrets
 
 
 class VaultError(Exception):
@@ -315,11 +100,12 @@ class Vault:
 
         Writes every packaged template (``index.md``, ``SCHEMA.md``, ``log.md``, and
         ``_bases/*.base``) to its path under the vault root and creates the canonical
-        empty content folders (:data:`SEED_DIRS`: ``entities/``, ``notes/``,
-        ``memories/``, ``actions/``, ``inbox/`` and the ``raw/`` subdirs) so the
-        structure exists for Obsidian browsing. Existing spine files are left untouched
-        unless ``force`` is set, so re-running over a live vault never clobbers an
-        edited spine page; the empty-folder creation is always ``exist_ok``.
+        empty content folders (:data:`~thoth.vault.SEED_DIRS`: ``entities/``,
+        ``notes/``, ``memories/``, ``actions/``, ``inbox/`` and the ``raw/`` subdirs)
+        so the structure exists for Obsidian browsing. Existing spine files are left
+        untouched unless ``force`` is set, so re-running over a live vault never
+        clobbers an edited spine page; the empty-folder creation is always
+        ``exist_ok``.
 
         Args:
             force: Overwrite existing spine/dashboard files with the packaged text.
@@ -329,7 +115,7 @@ class Vault:
             ones ``created`` on this run and the ones ``skipped`` (already present and
             ``force`` not set).
         """
-        from .templates import iter_templates
+        from thoth.templates import iter_templates
 
         created: list[str] = []
         skipped: list[str] = []
@@ -405,11 +191,12 @@ class Vault:
 
     @staticmethod
     def validate_slug(slug: str) -> str:
-        """Return ``slug`` if it matches :data:`SLUG_RE`, else raise :class:`SlugError`.
+        """Return ``slug`` if it matches the slug grammar, else raise SlugError.
 
         Accepts lowercase alphanumeric groups joined by single hyphens (for example
-        ``program-motion-controller``); rejects uppercase, spaces, slashes, leading or
-        trailing hyphens, doubled hyphens, and the empty string.
+        ``program-motion-controller``, per :data:`~thoth.vault.SLUG_RE`); rejects
+        uppercase, spaces, slashes, leading or trailing hyphens, doubled hyphens, and
+        the empty string.
         """
         if not SLUG_RE.fullmatch(slug):
             raise SlugError(f"invalid slug {slug!r}: must match {SLUG_RE.pattern}")
@@ -417,11 +204,12 @@ class Vault:
 
     @staticmethod
     def validate_asset_filename(name: str) -> str:
-        """Return ``name`` if it matches :data:`ASSET_SLUG_RE`, else raise SlugError.
+        """Return ``name`` if it matches the asset grammar, else raise SlugError.
 
         Accepts ``<slug>.<ext>`` with a lowercase slug and lowercase extension (for
-        example ``motor-control-diagram-e4a408.png``), as well as a compound extension
-        (for example ``motor-control-diagram-e4a408.excalidraw.md``, the editable
+        example ``motor-control-diagram-e4a408.png``, per
+        :data:`~thoth.vault.ASSET_SLUG_RE`), as well as a compound extension (for
+        example ``motor-control-diagram-e4a408.excalidraw.md``, the editable
         Excalidraw reconstruction from issue #68); rejects a missing extension, ``..``,
         a leading dot, uppercase, and spaces.
         """
@@ -446,12 +234,13 @@ class Vault:
         """Validate that ``page_type`` may live in ``folder``.
 
         Args:
-            folder: A top-level vault folder name (key of :data:`FOLDER_TYPE_CONTRACT`).
+            folder: A top-level vault folder name (key of
+                :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`).
             page_type: The frontmatter ``type`` value.
 
         Raises:
             SchemaError: if ``folder`` is not a known folder, or ``page_type`` is not
-                permitted in that folder per :data:`FOLDER_TYPE_CONTRACT`.
+                permitted in that folder per :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`.
         """
         allowed = FOLDER_TYPE_CONTRACT.get(folder)
         if allowed is None:
@@ -628,10 +417,11 @@ class Vault:
         (always the run date); then writes ``<folder>/<slug>.md`` atomically.
 
         Args:
-            folder: A top-level vault folder (key of :data:`FOLDER_TYPE_CONTRACT`).
+            folder: A top-level vault folder (key of
+                :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`).
             slug: The page slug (validated by :meth:`validate_slug`).
             frontmatter_in: The page frontmatter; must contain a valid ``type`` and
-                ``source`` and the other :data:`REQUIRED_COMMON_FIELDS`.
+                ``source`` and the other :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`.
             body: The page body markdown.
             today: The date to stamp; defaults to :meth:`date.today`.
 
@@ -675,8 +465,8 @@ class Vault:
         frontmatter values.
 
         Args:
-            subdir: A ``raw/`` subdirectory in :data:`RAW_SUBDIRS`, excluding
-                ``assets`` (which is binary-only -- use :meth:`save_asset`).
+            subdir: A ``raw/`` subdirectory in :data:`~thoth.vault.RAW_SUBDIRS`,
+                excluding ``assets`` (which is binary-only -- use :meth:`save_asset`).
             slug: The raw page slug (validated by :meth:`validate_slug`).
             frontmatter_in: Raw frontmatter (for example ``source_url``); ``ingested``
                 and ``sha256`` are added/overwritten by this method.
@@ -847,9 +637,9 @@ class Vault:
 
         Args:
             meta: The redacted frontmatter mapping (already passed through
-                :func:`_redact_frontmatter`).
+                :func:`~thoth.vault.redact._redact_frontmatter`).
             body: The redacted body markdown (already passed through
-                :func:`redact_secrets`).
+                :func:`~thoth.vault.redact_secrets`).
 
         Returns:
             The exact text written to disk for this page.
@@ -878,83 +668,3 @@ class Vault:
         tmp = absolute.with_name(absolute.name + ".tmp")
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(absolute)
-
-
-# ---- module-level secret redaction (also importable standalone) -------------------
-
-# Token-shaped patterns. Each is conservative: it matches a recognisable provider
-# prefix followed by a run of token characters, or a labelled secret assignment, or a
-# long opaque hex/base64 blob. Ordinary prose and short words never match.
-_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # Provider-prefixed API keys: sk-..., sk-ant-..., ghp_/gho_/ghs_..., xoxb-/xapp-...
-    re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}\b"),
-    re.compile(r"\bgh[opsu]_[A-Za-z0-9]{16,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-    re.compile(r"\bxapp-[A-Za-z0-9-]{10,}\b"),
-    # AWS access key id.
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    # Bearer <token> authorization headers.
-    re.compile(r"\bBearer\s+[A-Za-z0-9._-]{10,}"),
-    # key=VALUE / key: VALUE for a sensitive key name.
-    re.compile(
-        r"(?i)\b(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)\b"
-        r"\s*[:=]\s*\S{6,}"
-    ),
-    # Long opaque hex blob (e.g. a 32+ char digest used as a credential).
-    re.compile(r"\b[0-9a-fA-F]{32,}\b"),
-    # Long opaque base64-ish blob (mixed case + digits, no spaces).
-    re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"),
-)
-
-_REDACTED = "[REDACTED]"
-
-
-def redact_secrets(text: str) -> str:
-    """Replace secret-looking substrings with a fixed ``[REDACTED]`` marker.
-
-    Masks provider-prefixed API keys (``sk-...``, ``ghp_...``), AWS access key ids
-    (``AKIA...``), ``Bearer <token>`` headers, ``key=VALUE`` assignments for a
-    sensitive key set, and long opaque hex/base64 blobs. The match is conservative so
-    ordinary prose and short words are left untouched. Applied to body and frontmatter
-    before filing (SPEC section 12). Never raises; a non-string input is returned
-    unchanged.
-    """
-    if not isinstance(text, str):
-        return text
-    redacted = text
-    for pattern in _SECRET_PATTERNS:
-        redacted = pattern.sub(_REDACTED, redacted)
-    return redacted
-
-
-# Writer-controlled structural fields: generated from validated inputs (dates and the
-# body digest), never user free-text, so they are exempt from redaction. The sha256
-# digest in particular is a 64-char hex string the long-hex-blob rule would else mask.
-_NEVER_REDACT_FIELDS: frozenset[str] = frozenset(
-    {"created", "updated", "ingested", "sha256"}
-)
-
-
-def _redact_frontmatter(meta: dict[str, object]) -> dict[str, object]:
-    """Return a copy of ``meta`` with secrets redacted from string values.
-
-    Recurses into list and dict values; non-string scalars (dates, ints, bools) are
-    preserved as-is so frontmatter typing and date stamping are not disturbed.
-    Writer-controlled structural fields (:data:`_NEVER_REDACT_FIELDS`) are passed
-    through verbatim so the generated ``sha256`` digest is not mistaken for a secret.
-    """
-    return {
-        key: (value if key in _NEVER_REDACT_FIELDS else _redact_value(value))
-        for key, value in meta.items()
-    }
-
-
-def _redact_value(value: object) -> object:
-    """Redact secrets from a frontmatter value, recursing into lists and dicts."""
-    if isinstance(value, str):
-        return redact_secrets(value)
-    if isinstance(value, list):
-        return [_redact_value(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _redact_value(item) for key, item in value.items()}
-    return value
