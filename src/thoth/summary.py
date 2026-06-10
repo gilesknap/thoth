@@ -52,7 +52,8 @@ still listed and the scan never crashes.
 from __future__ import annotations
 
 import datetime as _dt
-from collections.abc import Iterable, Sequence
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import PurePosixPath
@@ -237,6 +238,7 @@ class SummaryEngine:
         self._now = resolved
         self._today = resolved.date()
         self._markers = markers
+        self._page_cache: dict[str, list[tuple[str, dict[str, object]]]] = {}
 
     @property
     def now(self) -> datetime:
@@ -462,12 +464,11 @@ class SummaryEngine:
         Returns:
             The overdue :class:`ActionItem` list, earliest due first.
         """
-        items = [
+        return [
             item
             for item in self.open_actions()
             if item.due_date is not None and item.due_date < self._today
         ]
-        return self._sort_actions(items)
 
     def due_soon_actions(self, *, days: int = DUE_SOON_DAYS) -> list[ActionItem]:
         """Return open actions due strictly after today through ``today + days``.
@@ -484,12 +485,11 @@ class SummaryEngine:
             The due-soon :class:`ActionItem` list, earliest due first.
         """
         horizon = self._today + _dt.timedelta(days=days)
-        items = [
+        return [
             item
             for item in self.open_actions()
             if item.due_date is not None and self._today < item.due_date <= horizon
         ]
-        return self._sort_actions(items)
 
     def media_backlog(self) -> list[MediaItem]:
         """Return unconsumed media (``status == MEDIA_OPEN_STATUS``), oldest first.
@@ -620,37 +620,42 @@ class SummaryEngine:
                 )
         return pairs
 
-    def _iter_pages(self, folder: str) -> Iterable[tuple[str, dict[str, object]]]:
-        """Yield ``(vault_relative_path, frontmatter)`` for each ``*.md`` in ``folder``.
+    def _iter_pages(self, folder: str) -> list[tuple[str, dict[str, object]]]:
+        """Return the ``(vault_relative_path, frontmatter)`` pairs for ``folder``.
 
         The folder is resolved through the vault for confinement; a missing folder
         yields nothing. A file that cannot be parsed is skipped rather than crashing the
-        scan (a malformed page must never wedge the daily digest).
+        scan (a malformed page must never wedge the daily digest). The list is read once
+        per folder and cached on the engine -- every caller builds a fresh engine per
+        invocation, so the cache only dedupes the repeated scans within one digest.
         """
+        cached = self._page_cache.get(folder)
+        if cached is not None:
+            return cached
         try:
             base = self._vault.resolve(folder)
         except Exception as exc:  # pragma: no cover - defensive, resolve is total here
             raise SummaryError(f"cannot resolve folder {folder!r}: {exc}") from exc
-        if not base.is_dir():
-            return
-        for path in sorted(base.glob("*.md")):
-            rel = PurePosixPath(folder) / path.name
-            try:
-                post = frontmatter.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
-                continue
-            yield rel.as_posix(), dict(post.metadata)
+        pages: list[tuple[str, dict[str, object]]] = []
+        if base.is_dir():
+            for path in sorted(base.glob("*.md")):
+                rel = PurePosixPath(folder) / path.name
+                try:
+                    post = frontmatter.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
+                    continue
+                pages.append((rel.as_posix(), dict(post.metadata)))
+        return self._page_cache.setdefault(folder, pages)
 
     # ---- rendering helpers ----------------------------------------------------------
 
     def _actions_due_on(self, day: date) -> list[ActionItem]:
         """Return open actions whose ``due_date`` equals ``day``."""
-        items = [
+        return [
             item
             for item in self.open_actions()
             if item.due_date is not None and item.due_date == day
         ]
-        return self._sort_actions(items)
 
     @staticmethod
     def _sort_actions(items: list[ActionItem]) -> list[ActionItem]:
@@ -660,10 +665,7 @@ class SummaryEngine:
     @staticmethod
     def _counts_by_type(refs: Sequence[PageRef]) -> list[tuple[str, int]]:
         """Count pages by ``page_type``, returned sorted by type name."""
-        counts: dict[str, int] = {}
-        for ref in refs:
-            counts[ref.page_type] = counts.get(ref.page_type, 0) + 1
-        return sorted(counts.items())
+        return sorted(Counter(ref.page_type for ref in refs).items())
 
     def _grouped_recent_lines(self, refs: Sequence[PageRef]) -> list[str]:
         """Render recent pages as one concise shared ref per page, grouped by type.
