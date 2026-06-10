@@ -1361,7 +1361,7 @@ def test_download_bytes_uses_token_get_when_no_download_helper(
         captured["auth"] = headers.get("Authorization")
         return _Resp()
 
-    monkeypatch.setattr("thoth.slack_app.httpx.get", fake_get)
+    monkeypatch.setattr("thoth.slack_app.files.httpx.get", fake_get)
     handlers, ing, _ = _handlers(config)
     say = Recorder()
     handlers.handle_message(
