@@ -412,9 +412,10 @@ def run_summary(
     from .alerts import _make_web_client
     from .state import MarkerStore
     from .summary import SummaryEngine
+    from .vault import Vault
 
     with _cron_alerting("cron: summary", config):
-        vault = _make_vault(config)
+        vault = Vault(config)
         # The daily digest reads the liveness markers for its heartbeat (issue #15).
         engine = SummaryEngine(config, vault, markers=MarkerStore(config.state_db_path))
         digest = (
@@ -508,9 +509,9 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     from .alerts import make_alerter
     from .budget import make_budget_guard
     from .capture_walk import walk_captures
-    from .git_sync import GitSync, VaultConflictError
+    from .git_sync import GitSync
     from .inbox_drain import drain_captures
-    from .ingest import Capture, IngestError
+    from .ingest import Capture
     from .vault import Vault
 
     # With NO path argument, drain the inbox holds (issue #105): re-file each
@@ -518,22 +519,35 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     # the hold's stamped intent (curate vs --as-is, issue #95 task E) -- then remove the
     # superseded hold once it is filed. With paths, walk the file/folder tree (#80).
     drain_mode = not namespace.paths
+    limit = namespace.limit
+    vault = Vault(config)
 
-    if namespace.dry_run:
-        planned = 0
+    # Build the (target, capture, hold_rel, as_is) stream shared by the dry-run and
+    # real paths: a drain hold carries its own path so a filed hold can be removed AND
+    # its stamped intent (issue #95, task E) so the sweep re-files curate-vs-as-is as
+    # originally requested; a walked file has no hold and uses the run-wide --as-is
+    # flag. The explicit --as-is flag forces low-touch for every item even on a drain.
+    def capture_stream() -> Iterator[tuple[str, Capture, str | None, bool]]:
         if drain_mode:
-            for hold in drain_captures(Vault(config)):
-                planned += 1
-                mode = "as-is" if (namespace.as_is or hold.as_is) else "curate"
-                print(f"capture (dry-run): would re-file {hold.rel} ({mode})")
+            for hold in drain_captures(vault):
+                yield hold.rel, hold.capture, hold.rel, namespace.as_is or hold.as_is
         else:
             for capture in walk_captures(
                 namespace.paths,
                 include=namespace.include,
                 exclude=namespace.exclude,
-                limit=namespace.limit,
+                limit=limit,
             ):
-                planned += 1
+                yield capture.filename or "(capture)", capture, None, namespace.as_is
+
+    if namespace.dry_run:
+        planned = 0
+        for target, capture, hold_rel, as_is in capture_stream():
+            planned += 1
+            if hold_rel is not None:
+                mode = "as-is" if as_is else "curate"
+                print(f"capture (dry-run): would re-file {target} ({mode})")
+            else:
                 kind = "text" if capture.text is not None else "file"
                 print(f"capture (dry-run): would file {kind} {capture.filename}")
         print(f"capture: dry-run, {planned} item(s) would be filed (no writes)")
@@ -552,31 +566,8 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     counts = _CaptureCounts()
     since_commit = 0
     total = 0
-    limit = namespace.limit
 
-    # Build the (target, capture, hold_rel, as_is) stream shared by both branches: a
-    # drain hold carries its own path so a filed hold can be removed AND its stamped
-    # intent (issue #95, task E) so the sweep re-files curate-vs-as-is as originally
-    # requested; a walked file has no hold and uses the run-wide --as-is flag. The
-    # explicit --as-is flag forces low-touch for every item even on a drain.
-    vault = Vault(config)
-    if drain_mode:
-        stream: Iterator[tuple[str, Capture, str | None, bool]] = (
-            (hold.rel, hold.capture, hold.rel, namespace.as_is or hold.as_is)
-            for hold in drain_captures(vault)
-        )
-    else:
-        stream = (
-            (capture.filename or "(capture)", capture, None, namespace.as_is)
-            for capture in walk_captures(
-                namespace.paths,
-                include=namespace.include,
-                exclude=namespace.exclude,
-                limit=limit,
-            )
-        )
-
-    for target, capture, hold_rel, as_is in stream:
+    for target, capture, hold_rel, as_is in capture_stream():
         if limit is not None and total >= limit:
             break
         total += 1
@@ -589,14 +580,13 @@ def run_capture(namespace: Namespace, config: Config) -> None:
             as_is=as_is,
             index=total,
             counts=counts,
-            ingest_error=IngestError,
         )
         since_commit += 1
         if since_commit >= batch_size:
-            _commit_capture_batch(git, since_commit, VaultConflictError)
+            _commit_capture_batch(git, since_commit)
             since_commit = 0
     if since_commit:
-        _commit_capture_batch(git, since_commit, VaultConflictError)
+        _commit_capture_batch(git, since_commit)
     print(
         f"capture: {total} item(s) processed -- filed={counts.filed} "
         f"unchanged={counts.unchanged} skipped={counts.skipped} "
@@ -630,7 +620,6 @@ def _ingest_one(
     as_is: bool,
     index: int,
     counts: _CaptureCounts,
-    ingest_error: type[Exception],
 ) -> str:
     """Ingest one capture (commit deferred), tally its disposition, print a line.
 
@@ -644,9 +633,11 @@ def _ingest_one(
     idempotent) so a budget re-trip never silently deletes un-filed content. Returns the
     disposition string.
     """
+    from .ingest import IngestError
+
     try:
         report = graph.ingestor.ingest(capture, commit=False, as_is=as_is)
-    except ingest_error as exc:
+    except IngestError as exc:
         counts.failed += 1
         logger.warning("capture [%d]: %s -> FAILED (%s)", index, target, exc)
         return "failed"
@@ -680,9 +671,7 @@ def _ingest_one(
     return disposition
 
 
-def _commit_capture_batch(
-    git: Any, count: int, conflict_error: type[Exception]
-) -> None:
+def _commit_capture_batch(git: Any, count: int) -> None:
     """Commit + push one batch of imported files; surface a conflict loudly and stop.
 
     :meth:`thoth.git_sync.GitSync.commit` does add -A + commit + rebase + push in one
@@ -691,9 +680,11 @@ def _commit_capture_batch(
     aborts the import (the content is filed locally; the operator re-runs once the
     remote is reconciled -- the run is idempotent) rather than ever forcing the push.
     """
+    from .git_sync import VaultConflictError
+
     try:
         result = git.commit(f"import: batch ({count} file(s))")
-    except conflict_error as exc:
+    except VaultConflictError as exc:
         raise SystemExit(
             "capture: VAULT CONFLICT on a batch commit -- content is filed locally "
             f"but the push was refused. Resolve in Obsidian and re-run. ({exc})"
@@ -738,17 +729,12 @@ def _cron_alerting(where: str, config: Config) -> Iterator[None]:
 # ---- collaborator construction (heavy imports kept inside) -------------------------
 
 
+@dataclass
 class _Graph:
     """The constructed ingest/query collaborator graph for the Slack daemon."""
 
-    def __init__(
-        self,
-        ingestor: Any,
-        query_engine: Any,
-    ) -> None:
-        """Store the constructed collaborators."""
-        self.ingestor = ingestor
-        self.query_engine = query_engine
+    ingestor: Any
+    query_engine: Any
 
 
 def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
@@ -783,13 +769,6 @@ def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
         config, guard=guard, markers=MarkerStore(config.state_db_path)
     )
     return _Graph(ingestor=built.ingestor, query_engine=built.query_engine)
-
-
-def _make_vault(config: Config) -> Any:
-    """Build a real :class:`~thoth.vault.Vault` (import kept local)."""
-    from .vault import Vault
-
-    return Vault(config)
 
 
 if __name__ == "__main__":
