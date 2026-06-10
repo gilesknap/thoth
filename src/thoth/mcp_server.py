@@ -383,11 +383,12 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
     Reuses the canonical action scans on :class:`thoth.summary.SummaryEngine` (so the
     todo/overdue logic lives in exactly one place): open actions come from
     :meth:`~thoth.summary.SummaryEngine.open_actions`, with overdue items flagged via
-    :meth:`~thoth.summary.SummaryEngine.overdue_actions`. Each item is rendered with its
-    harness-built ``[title](obsidian-uri)`` link plus the plain vault path and the
-    ``[[wikilink]]`` (the MCP citation style the other tools use), then its status, due
-    date and priority. Done/cancelled actions are left out unless ``include_done`` is
-    true.
+    :meth:`~thoth.summary.SummaryEngine.overdue_actions` and the optional done section
+    from :meth:`~thoth.summary.SummaryEngine.closed_actions`. Each item is rendered
+    with its harness-built ``[title](obsidian-uri)`` link plus the plain vault path and
+    the ``[[wikilink]]`` (the MCP citation style the other tools use), then its status,
+    due date and priority. Done/cancelled actions are left out unless ``include_done``
+    is true.
 
     Args:
         ctx: The injected collaborator bundle.
@@ -398,7 +399,7 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         A :class:`ToolResult` listing the actions (always ``ok=True``; an empty vault
         yields a "no open actions" note).
     """
-    from thoth.summary import ACTION_OPEN_STATUSES, SummaryEngine
+    from thoth.summary import SummaryEngine
 
     engine = SummaryEngine(ctx.config, ctx.vault)
     open_actions = engine.open_actions()
@@ -411,17 +412,14 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
     else:
         lines.append("- _No open actions._")
 
-    closed = (
-        _scan_closed_actions(ctx.vault, open_statuses=set(ACTION_OPEN_STATUSES))
-        if include_done
-        else []
-    )
+    closed = engine.closed_actions() if include_done else []
     if closed:
         lines.append("")
         lines.append("**Done/closed:**")
         lines.extend(
-            f"- [{title}]({uri}) - `{path}` {wikilink} (status: {status})"
-            for title, status, wikilink, path, uri in closed
+            f"- [{item.title}]({item.obsidian_uri}) - `{item.path}` "
+            f"{item.wikilink} (status: {item.status})"
+            for item in closed
         )
 
     return ToolResult(
@@ -430,51 +428,9 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         data={
             "open": [item.path for item in open_actions],
             "overdue": sorted(overdue_paths),
-            "closed": [wikilink for _, _, wikilink, _, _ in closed],
+            "closed": [item.wikilink for item in closed],
         },
     )
-
-
-def _scan_closed_actions(
-    vault: Vault, *, open_statuses: set[str]
-) -> list[tuple[str, str, str, str, str]]:
-    """Read ``actions/*.md``; return ``(title, status, wikilink, path, obsidian_uri)``.
-
-    A closed action is one whose frontmatter ``status`` is not in ``open_statuses`` (the
-    open-action logic itself lives in :class:`thoth.summary.SummaryEngine`; this is the
-    thin "also show done" extension ``pkm_todos`` adds, read via the confined vault). A
-    missing/blank status counts as open and is therefore excluded. Results are sorted
-    by path for determinism.
-    """
-    directory = vault.root / "actions"
-    if not directory.is_dir():
-        return []
-    closed: list[tuple[str, str, str, str, str]] = []
-    for entry in sorted(directory.glob("*.md")):
-        rel = f"actions/{entry.name}"
-        try:
-            page = vault.read_page(rel)
-        except VaultError:
-            continue
-        status_value = page.frontmatter.get("status")
-        status = status_value if isinstance(status_value, str) else ""
-        if not status or status in open_statuses:
-            continue
-        title_value = page.frontmatter.get("title")
-        slug = PurePosixPath(rel).stem
-        title = title_value if isinstance(title_value, str) and title_value else slug
-        # Match SummaryEngine's folder-qualified wikilink form ([[actions/<slug>]]) so
-        # the open and closed sections render identically.
-        closed.append(
-            (
-                title,
-                status,
-                f"[[{rel.removesuffix('.md')}]]",
-                rel,
-                vault.obsidian_uri(rel),
-            )
-        )
-    return closed
 
 
 def _render_action(item: Any, *, overdue: bool) -> str:
