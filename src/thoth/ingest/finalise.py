@@ -156,12 +156,16 @@ class _FinalisePass(_IngestorBase):
         success_message: str | None,
         swallow_stage_error: bool,
         swallow_git_error: bool,
+        pre_commit: Callable[[], None] | None = None,
     ) -> IngestReport:
         """Stage or commit this capture's ``paths``; fold the outcome into ``report``.
 
         The shared git tail of :meth:`_commit` / :meth:`_commit_unchanged` /
-        :meth:`_commit_deferred`. With ``do_commit=False`` exactly ``paths`` is staged
-        under the working-tree lock (issue #85) for the caller's batched commit; a
+        :meth:`_commit_deferred`. ``pre_commit`` (when given) is a tree-mutating step
+        (e.g. the deferred path's ``log.md`` append) that must share the single
+        critical section with the stage/commit (issue #85); it runs as the first
+        statement under the working-tree lock on both paths. With ``do_commit=False``
+        exactly ``paths`` is staged under the lock for the caller's batched commit; a
         stage failure is swallowed or raised per ``swallow_stage_error`` and
         ``staged_message`` (when given) rewrites the report's message. Otherwise the
         commit/rebase/push runs under the lock: a
@@ -174,6 +178,8 @@ class _FinalisePass(_IngestorBase):
         """
         if not do_commit:
             with self._git.capture_lock:
+                if pre_commit is not None:
+                    pre_commit()
                 if paths:
                     try:
                         self._git.stage(paths)
@@ -186,6 +192,8 @@ class _FinalisePass(_IngestorBase):
                 report, committed=False, conflict=False, message=staged_message
             )
         with self._git.capture_lock:
+            if pre_commit is not None:
+                pre_commit()
             try:
                 result = self._git.commit(subject, paths=paths)
             except VaultConflictError as conflict:
@@ -337,30 +345,34 @@ class _FinalisePass(_IngestorBase):
         # The hold page, its assets, and log.md are the only paths this deferred capture
         # touched; stage exactly those (issue #85). De-duplicated, log.md last.
         commit_paths = [*raw_paths, *asset_paths, "log.md"]
-        # The log append + stage/commit is the narrow tree-mutating section: take the
-        # working-tree lock so the shared log.md append and the commit/rebase never race
-        # a concurrent capture (issue #85). The lock is re-entrant, so it is held across
-        # both the log append and the nested git finalisation.
-        with self._git.capture_lock:
+
+        # The log append + stage/commit is the narrow tree-mutating section: hand the
+        # append to :meth:`_finalise_git` as ``pre_commit`` so the shared log.md append
+        # and the commit/rebase run under ONE working-tree lock hold and never race a
+        # concurrent capture (issue #85) -- while the push liveness marker is still
+        # recorded after the lock is released.
+        def _append_deferred_log() -> None:
             try:
                 self._vault.append_log("ingest", "deferred capture", raw_paths)
             except VaultError:
                 # Navigation is best-effort here; the durable hold is what matters.
                 pass
-            return self._finalise_git(
-                report,
-                "deferred capture",
-                commit_paths,
-                do_commit=do_commit,
-                conflict_message=lambda conflict: (
-                    "Saved raw locally, curation deferred (LLM unavailable), but "
-                    f"the push was refused; resolve in Obsidian. ({conflict})"
-                ),
-                staged_message=None,
-                success_message=None,
-                swallow_stage_error=True,
-                swallow_git_error=True,
-            )
+
+        return self._finalise_git(
+            report,
+            "deferred capture",
+            commit_paths,
+            do_commit=do_commit,
+            conflict_message=lambda conflict: (
+                "Saved raw locally, curation deferred (LLM unavailable), but "
+                f"the push was refused; resolve in Obsidian. ({conflict})"
+            ),
+            staged_message=None,
+            success_message=None,
+            swallow_stage_error=True,
+            swallow_git_error=True,
+            pre_commit=_append_deferred_log,
+        )
 
     # ---- pass 8: report ----------------------------------------------------------
 

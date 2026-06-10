@@ -312,9 +312,9 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
     No second server is started: the routes are appended to the streamable-HTTP app's
     own router so discovery, registration, the authorize/callback redirect dance, and
     the token endpoint all live on the same origin as the MCP transport. Called from
-    :func:`thoth.mcp_server._run_http` *before* the bearer middleware is added; the gate
-    in :mod:`thoth.mcp_auth` allow-lists :data:`OAUTH_PUBLIC_PATHS` so these routes are
-    reachable without a token.
+    :func:`thoth.mcp_server.http._run_http` *before* the bearer middleware is added; the
+    gate in :mod:`thoth.mcp_auth` allow-lists :data:`OAUTH_PUBLIC_PATHS` so these routes
+    are reachable without a token.
 
     ``starlette`` and the four required OAuth vars are read here;
     ``config.require_oauth`` fails fast (already enforced at config load) if the
