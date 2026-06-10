@@ -1,186 +1,26 @@
-"""Rebuild or incrementally refresh the Hindsight index from the canonical vault.
-
-Hindsight is a *rebuildable derived index* over the canonical Obsidian vault (SPEC
-sections 8 and 15), never the store of record. This module is the "vault canonical,
-index disposable" mechanism made real: it walks the curated knowledge folders
-(:data:`INDEXED_DIRS`), computes a per-page content hash over the page **body**
-(everything after the closing frontmatter ``---``), and retains only the pages whose
-body changed since the last run.
-
-Two facts from the SPEC shape the design:
-
-* **One Hindsight reference == one vault-relative page path, keyed by a body hash.**
-  The hash is :meth:`thoth.vault.Vault.body_sha256` over the page body (frontmatter
-  stripped via :func:`_split_body`, the same split :meth:`thoth.vault.Vault.read_page`
-  performs), so bumping a page's ``updated:`` frontmatter without touching the body is
-  *not* a change and triggers no embedding work. The hash per page is tracked in an
-  index-side manifest **outside** the vault
-  (:func:`manifest_path` -> ``<thoth_home>/hindsight/reindex-manifest.json``, which is
-  ``.gitignore``d), so a reindex never churns curated pages' ``updated:`` dates.
-
-* **The full-rebuild bank wipe is an HTTP DELETE of the bank.**
-  Incremental runs reuse the :meth:`~thoth.hindsight.Hindsight.forget` /
-  :meth:`~thoth.hindsight.Hindsight.retain` surface (forget-then-retain per changed
-  page; forget-and-prune per deleted page). The full-rebuild wipe delegates to
-  :meth:`~thoth.hindsight.Hindsight.reset_bank` (a ``DELETE`` of the bank, which removes
-  the bank and all its data; the next retain auto-recreates it), so the reindexer never
-  touches the Hindsight transport directly and tests substitute a fake
-  :class:`~thoth.hindsight.Hindsight`.
-
-The three reindex triggers (SPEC section 8) are: per-ingest incremental (handled by the
-ingest pass, not here), nightly catch-up for out-of-band Obsidian edits (``thoth
-reindex``), and a manual/on-recovery full rebuild (``thoth reindex --full-rebuild``).
-
-Only the standard library plus :class:`thoth.config.Config`,
-:class:`thoth.hindsight.Hindsight`, and :class:`thoth.vault.Vault` are imported at
-module top level, so importing this module at pytest collection is always CI-safe even
-where the ``hindsight-api`` server is absent.
-"""
+"""The :class:`Reindexer` walk/retain/prune engine over the canonical vault."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
-
-import frontmatter
-import yaml  # transitive dep of python-frontmatter (its YAML handler)
 
 from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.hindsight import Hindsight, HindsightError
 from thoth.state import MARKER_REINDEX, MarkerStore
-from thoth.vault import ACTIONABLE_DIRS, CURATED_DIRS, Vault
+from thoth.vault import Vault
 
-__all__ = [
-    "INDEXED_DIRS",
-    "SKIP_FILES",
-    "ReindexError",
-    "ReindexResult",
-    "Reindexer",
-    "manifest_path",
-    "page_type",
-]
-
-INDEXED_DIRS: tuple[str, ...] = (*CURATED_DIRS, *ACTIONABLE_DIRS)
-"""The content folders the reindex walks (SPEC section 8; ADR 0004 + ADR 0005).
-
-Per ADR 0004, the index covers **all** content pages, so "have I ever noted anything
-about X?" reaches the reference folders (:data:`thoth.vault.CURATED_DIRS`:
-``entities``/``notes``/``memories``) **and** the actionable folder
-(:data:`thoth.vault.ACTIONABLE_DIRS`: ``actions``, which also holds the media queue).
-Recall precision for knowledge Q&A is preserved by **scoping recall on the ``page_type``
-tag** at query time (see :meth:`thoth.query.QueryEngine.recall_paths`), not by excluding
-folders here. Both lists stay canonical in :mod:`thoth.vault` so the vocabulary lives in
-one place.
-
-``inbox/`` (transient deferred-capture holding) and ``raw/`` (immutable, often-long
-source bytes needing a chunking strategy Hindsight does not do) remain excluded;
-navigational/meta and the underscore directories (``_bases/``/``_meta/``/``_archive/``)
-are structure, not facts, and are never walked.
-"""
-
-SKIP_FILES: frozenset[str] = frozenset({"SCHEMA.md", "index.md", "log.md"})
-"""Spine files never retained even if they land inside an indexed folder.
-
-``index.md`` is the Home landing page (there is no separate ``Home.md``); ``SCHEMA.md``
-holds conventions and ``log.md`` is the append-only action log. All three are structure,
-not curated knowledge.
-"""
-
-
-class ReindexError(Exception):
-    """Raised when a reindex step fails hard (a checked retain or a bank reset)."""
-
-
-@dataclass(frozen=True, slots=True)
-class ReindexResult:
-    """Counts summarising one :meth:`Reindexer.run` pass.
-
-    Attributes:
-        changed: Pages retained this run (new or body-changed, or every live page on a
-            full rebuild).
-        skipped: Live pages whose body hash matched the manifest and were not retained.
-        pruned: Manifest entries for pages no longer present that were forgotten.
-        live_pages: Distinct curated pages seen on disk this run.
-        full_rebuild: Whether this pass wiped the bank and re-retained every page.
-        aborted: Whether the daily LLM budget (issue #16) was hit mid-walk, so the run
-            stopped early; the pages retained before the cap are recorded in the
-            manifest, but pruning is skipped (the walk is incomplete) and no liveness
-            marker is recorded. ``False`` on a normal complete pass.
-    """
-
-    changed: int
-    skipped: int
-    pruned: int
-    live_pages: int
-    full_rebuild: bool
-    aborted: bool = False
-
-
-def manifest_path(config: Config) -> Path:
-    """Return the index-side manifest path for ``config``.
-
-    The manifest lives outside the vault under the Hindsight state dir
-    (``<thoth_home>/hindsight/reindex-manifest.json``) and is ``.gitignore``d, so the
-    reindex never touches the canonical vault to track its own bookkeeping.
-
-    Args:
-        config: The frozen runtime configuration (supplies ``thoth_home``).
-
-    Returns:
-        The absolute path to ``reindex-manifest.json``.
-    """
-    return config.thoth_home / "hindsight" / "reindex-manifest.json"
-
-
-def page_type(markdown: str) -> str:
-    """Return the leading frontmatter ``type:`` value, or ``"page"`` when absent.
-
-    This is used only to tag a retained fact for recall filtering (alongside the vault
-    path), never for any confinement or contract decision, so a missing, empty, or
-    unparseable type degrades to the neutral ``"page"`` rather than raising.
-
-    Args:
-        markdown: The full page text (frontmatter + body).
-
-    Returns:
-        The ``type`` value (for example ``"entity"``; non-string YAML scalars are
-        coerced with :class:`str`) or ``"page"`` when the leading frontmatter block
-        has no non-empty ``type`` key.
-    """
-    try:
-        value = frontmatter.loads(markdown).get("type")
-    except yaml.YAMLError:
-        return "page"
-    if value is None:
-        return "page"
-    return str(value) or "page"
-
-
-def _split_body(markdown: str) -> str:
-    """Strip a leading YAML frontmatter block, returning the body text.
-
-    This delegates to ``python-frontmatter`` (the same parser
-    :meth:`thoth.vault.Vault.read_page` uses), so the body fed to
-    :meth:`thoth.vault.Vault.body_sha256` here is byte-identical to
-    ``read_page(...).body`` for the same file -- guaranteeing the body-hash idempotency
-    key is consistent across the whole appliance. A document with no leading frontmatter
-    block yields its full text as the body.
-
-    Args:
-        markdown: The full page text (frontmatter + body), or a bare body.
-
-    Returns:
-        The body with any single leading frontmatter block removed.
-    """
-    return frontmatter.loads(markdown).content
-
-
-def _now_iso() -> str:
-    """Return the current UTC instant as an ISO-8601 string (manifest timestamp)."""
-    return datetime.now(UTC).isoformat()
+from ._model import (
+    INDEXED_DIRS,
+    SKIP_FILES,
+    ReindexError,
+    ReindexResult,
+    _now_iso,
+    _split_body,
+    manifest_path,
+    page_type,
+)
 
 
 class Reindexer:
@@ -228,10 +68,10 @@ class Reindexer:
     def body_hash(self, markdown: str) -> str:
         """Return the body SHA-256 idempotency key for a page's full text.
 
-        The leading frontmatter block is stripped (:func:`_split_body`) and the body is
-        hashed with :meth:`thoth.vault.Vault.body_sha256`, so the key is identical to
-        ``Vault.body_sha256(read_page(...).body)`` and is invariant under a frontmatter
-        ``updated:`` bump.
+        The leading frontmatter block is stripped (:func:`_split_body`) and the
+        body is hashed with :meth:`thoth.vault.Vault.body_sha256`, so the key is
+        identical to ``Vault.body_sha256(read_page(...).body)`` and is invariant under
+        a frontmatter ``updated:`` bump.
 
         Args:
             markdown: The full page text (frontmatter + body).
@@ -381,8 +221,8 @@ class Reindexer:
     def _iter_pages(self) -> list[tuple[str, str]]:
         """Walk the indexed folders, yielding ``(vault_rel_path, text)`` per page.
 
-        Walks each :data:`INDEXED_DIRS` folder recursively for ``*.md`` files, skipping
-        :data:`SKIP_FILES` by basename, and returns deterministic, sorted
+        Walks each :data:`INDEXED_DIRS` folder recursively for ``*.md`` files,
+        skipping :data:`SKIP_FILES` by basename, and returns deterministic, sorted
         ``(rel, text)`` pairs. Folders that do not exist are silently skipped (a fresh
         vault may lack some). The relative path uses POSIX separators so it matches the
         in-band ``SOURCE:`` sentinel and the manifest keys on every platform.
@@ -413,8 +253,8 @@ class Reindexer:
             rel: The vault-relative page path (the Hindsight reference / manifest key).
             markdown: The full page text (supplies the :func:`page_type` retain tag).
             body: The page body with the leading frontmatter already stripped
-                (:func:`_split_body`), so only the body is retained, matching the
-                body-hash idempotency key.
+                (:func:`_split_body`), so only the body is retained, matching
+                the body-hash idempotency key.
 
         Raises:
             ReindexError: if the checked retain raises
