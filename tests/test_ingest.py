@@ -619,13 +619,21 @@ def test_dataclasses_construct_with_defaults() -> None:
 
 
 def test_module_import_is_light() -> None:
-    """Importing thoth.ingest pulls in no heavy/absent third-party client."""
+    """Importing thoth.ingest pulls in no heavy/absent third-party client.
+
+    Runs in a fresh interpreter: in-process the SDKs may already sit in
+    ``sys.modules`` from earlier tests when the runtime extras are installed.
+    """
+    import subprocess
     import sys
 
-    import thoth.ingest  # noqa: F401  (import for the side effect of collection)
-
-    for heavy in ("anthropic", "firecrawl", "slack_bolt", "whisper"):
-        assert heavy not in sys.modules
+    code = (
+        "import sys, thoth.ingest; "
+        "banned = {'anthropic', 'firecrawl', 'slack_bolt', 'whisper'}; "
+        "loaded = banned & sys.modules.keys(); "
+        "assert not loaded, sorted(loaded)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 # --------------------------------------------------------------------------- #

@@ -13,6 +13,7 @@ yesterday window is reproducible. The Slack delivery seam is a tiny fake
 from __future__ import annotations
 
 import datetime as _dt
+import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -202,11 +203,18 @@ def _engine(vault: Vault, config: Config, *, now: datetime = NOW) -> SummaryEngi
 
 
 def test_module_does_not_import_slack_sdk() -> None:
-    """Importing thoth.summary pulls in no Slack/anthropic/mcp SDK."""
-    import thoth.summary  # noqa: F401  (assert on sys.modules, already imported)
+    """Importing thoth.summary pulls in no Slack/anthropic/mcp SDK.
 
-    banned = {"slack_bolt", "slack_sdk", "anthropic", "mcp", "firecrawl"}
-    assert banned.isdisjoint(sys.modules)
+    Runs in a fresh interpreter: in-process the SDKs may already sit in
+    ``sys.modules`` from earlier tests when the runtime extras are installed.
+    """
+    code = (
+        "import sys, thoth.summary; "
+        "banned = {'slack_bolt', 'slack_sdk', 'anthropic', 'mcp', 'firecrawl'}; "
+        "loaded = banned & sys.modules.keys(); "
+        "assert not loaded, sorted(loaded)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 # --------------------------------------------------------------------------------------
