@@ -36,23 +36,34 @@ MCP server.
 
 ## Finding your way around `src/thoth/`
 
-Most filenames say what they are (`slack_app.py`, `query.py`, `summary.py`,
-`lint.py`, `budget.py`, `config.py`, `state.py`, `git_sync.py`, `mcp_server.py`) —
-`ls src/thoth/` plus each module's docstring is the authoritative, never-stale
-map, so this skill deliberately does **not** restate it (a hand-kept file list
-just drifts). Only the non-obvious ones, where the name doesn't reveal the role:
+Most names say what they are (`slack_app/`, `query/`, `summary/`, `lint/`,
+`budget/`, `config/`, `state/`, `git_sync.py`, `mcp_server/`) — `ls src/thoth/`
+plus each module's docstring is the authoritative, never-stale map, so this skill
+deliberately does **not** restate it (a hand-kept file list just drifts). The
+larger subsystems are **packages**: the package `__init__` is the public surface
+(import from the package, never a submodule) and its docstring is the map of the
+submodules; underscore-prefixed submodules are private. The "Code layout" section
+of `docs/explanations/architecture.md` has the full layering and per-package
+submodule table. Only the non-obvious ones, where the name doesn't reveal the role:
 
-- `extract.py` vs `analyse.py` — `extract.py` *fetches* external content
-  (Firecrawl page→Markdown, Whisper transcription); `analyse.py` does
-  vision / OCR / PDF analysis. Easy to reach for the wrong one.
-- `llm.py` — the **single Anthropic seam** (`LLM.complete`); also owns the
-  classify/curate prompts and the curate file-plan JSON schema + validation.
-  Change LLM behavior here, via the prompt — not with output post-processing.
-- `hindsight.py` — thin wrapper around the **external Hindsight CLI** (see the
-  foot-gun below); `reindex_from_vault.py` rebuilds that index from the vault.
-- `ingest.py` — the bounded **8-pass capture pipeline** (persist raw → classify →
+- `extract.py` vs `analyse/` — `extract.py` *fetches* external content
+  (Firecrawl page→Markdown, Whisper transcription); the `analyse/` package does
+  vision / OCR / PDF analysis. Easy to reach for the wrong one — and note
+  `ingest/analyse.py` is a third thing: the ingest *pass* that calls the
+  `analyse/` package's `Analyser`.
+- `llm/` — the **single Anthropic seam** (`LLM.complete` in `llm/client.py`);
+  also owns the PKM persona and the curate file-plan contract + validation.
+  The classify/curate *prompts* live with their passes in `ingest/classify.py`
+  and `ingest/curate.py`. Change LLM behavior via the prompt — not with output
+  post-processing.
+- `hindsight.py` — **HTTP client** to the standalone `hindsight-api` server (see
+  the foot-gun below); the `reindex_from_vault/` package rebuilds that index
+  from the vault.
+- `ingest/` — the bounded **8-pass capture pipeline** (persist raw → classify →
   capture_raw → fetch_candidates → curate → retain → commit → report); raw is
-  persisted *before* any LLM call so nothing is lost on restart.
+  persisted *before* any LLM call so nothing is lost on restart. One submodule
+  per pass group (`raw_capture`, `classify`, `curate`, `finalise`), composed by
+  `pipeline.py`.
 - `intent.py` — the cheap Haiku **intent gate** (see behavior note below).
 
 ## Vault page-type model (ADR 0005)
@@ -84,13 +95,13 @@ written — they need a separate embedding-access decision first. The index is a
 rebuildable projection; recall is the last/most-expensive query pass.
 
 **The two retrieval modalities are complementary, not redundant.**
-`QueryEngine.answer` (behind `pkm_search`) runs cost-ordered passes: **grep** over
-curated folders → **wikilink** graph-follow → **semantic recall** via Hindsight,
-where recall fires only when the cheap passes returned fewer than `max_pages`
-candidates (#107 thin top-up). grep = exact / authoritative / always-fresh on the
-vault bytes; Hindsight = semantic / vocabulary-bridging but **derived, lossy,
-eventually-consistent** (it holds LLM-extracted *facts*, not text — exact tokens
-like IDs/filenames may not survive, and a just-written or budget-deferred page is
-grep-only until reindex). Don't treat grep as redundant. The open design direction
-(#143) is to **blend** both candidate sets via Reciprocal Rank Fusion (`k=60`,
-fuse on rank) rather than gate recall behind grep.
+`QueryEngine.answer` (behind `pkm_search`) blends three passes: **grep** over
+curated folders, **wikilink** graph-follow, and **semantic recall** via Hindsight.
+Recall always gets a vote when enabled — it runs concurrently in a worker thread
+and the candidate sets are fused by Reciprocal Rank Fusion (`RRF_K=60`, fuse on
+rank; #143 / ADR 0012, implemented in `query/_blend.py`) — there is no
+"only when grep looks thin" gate any more. grep = exact / authoritative /
+always-fresh on the vault bytes; Hindsight = semantic / vocabulary-bridging but
+**derived, lossy, eventually-consistent** (it holds LLM-extracted *facts*, not
+text — exact tokens like IDs/filenames may not survive, and a just-written or
+budget-deferred page is grep-only until reindex). Don't treat grep as redundant.

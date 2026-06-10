@@ -3,7 +3,7 @@
 thoth is configured entirely through environment variables, optionally seeded from a
 `.env` file at `$THOTH_HOME/.env` (chmod 600, never committed). The real environment wins
 over the `.env` file, which wins over the documented defaults; `load_config` reads them
-once at process entry and never mutates the environment. `src/thoth/config.py` is the
+once at process entry and never mutates the environment. `src/thoth/config/` is the
 single source of truth, and `deploy/.env.example` is the copy-paste starting point.
 
 Only **`PKM_VAULT`** is hard-required. Everything else has a default or is needed only for

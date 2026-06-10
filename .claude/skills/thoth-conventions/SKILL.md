@@ -32,7 +32,7 @@ tool whose `input_schema` mirrors the contract, set `tool_choice={"type": "tool"
 escaping). Keep the validator as the post-call gate — tool-use guarantees *valid
 JSON*, not a *valid plan*. Curate's `submit_file_plan` does this (#110); the loop
 helpers (`_tool_use_blocks` / `_block_id` / `tool_result_block` /
-`assistant_blocks_message`) live in `llm.py`. This was a real fix: hand-serialized
+`assistant_blocks_message`) live in `thoth.llm`. This was a real fix: hand-serialized
 JSON aborted with "Unterminated string" on ~39% of a real import, because the model
 emitted raw control chars (newlines, tabs, U+00A0) inside the JSON string.
 
@@ -60,7 +60,7 @@ existing vault content.
 
 Issue bodies and saved plans capture intent *when written* and go stale as the code
 moves. When authoring anything that mirrors a real boundary's configuration (a Helm
-chart, deploy manifest, env wiring), read the **current** source — `src/thoth/config.py`
+chart, deploy manifest, env wiring), read the **current** source — `src/thoth/config/`
 for which keys `Config` actually reads (required vs optional), and
 `deploy/*.env.example` / the systemd units for live provider/model/key choices — and
 let those win over an older issue/plan. Grep for where a value is *consumed*, not just

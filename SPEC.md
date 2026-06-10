@@ -156,6 +156,8 @@ Single language end-to-end (appliance + MCP + reindex) keeps the surface tiny. *
 | `bin/config-backup.sh` | push-only backup of the **app config** repo (carried fwd — Appendix → Backup/recovery) | 40 | 3 |
 | `pkm-slack.service` + crontab | one systemd unit (daemon) + system cron lines | — | 3 |
 
+*The Phase-5 refactor later split the larger of these single-file modules into packages (`config/`, `vault/`, `llm/`, `ingest/`, `query/`, `slack_app/`, `mcp_server/`, `summary/`, `lint/`, `reindex_from_vault/`, …) — the table above is the historical plan; see `docs/explanations/architecture.md` for the current layout.*
+
 **Totals:** core (everything but lint) ≈ **~1,930 LOC Python + ~160 bash**; with lint ≈ 2,180.
 **Afternoon** = Phases 0–2 (skeleton + capture + retrieve over Slack against the real vault). The rest is a
 few focused sessions. Every line is yours.
