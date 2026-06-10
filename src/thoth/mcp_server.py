@@ -897,12 +897,9 @@ def run(
     """Wire a real :class:`ToolContext` (if needed) and serve over the chosen transport.
 
     This is the production entry point (``thoth mcp``). When ``ctx`` is ``None`` it
-    wires the full collaborator graph -- a :class:`~thoth.vault.Vault`, an
-    :class:`~thoth.llm.LLM`, an :class:`~thoth.extract.Extractor`, a
-    :class:`~thoth.hindsight.Hindsight`, a :class:`~thoth.git_sync.GitSync`, an
-    :class:`~thoth.ingest.Ingestor` and a :class:`~thoth.query.QueryEngine` (the graph
-    ``slack_app.run`` builds) -- then builds the server via :func:`build_server` and
-    runs it.
+    wires the full collaborator graph via :func:`thoth.wiring.build_collaborators`
+    (the same construction shape ``slack_app.run`` uses) -- then builds the server via
+    :func:`build_server` and runs it.
 
     The ``transport`` selects how the server is exposed (issue #103):
 
@@ -943,31 +940,19 @@ def run(
 
     if ctx is None:
         from thoth.budget import make_budget_guard
-        from thoth.extract import Extractor
-        from thoth.hindsight import Hindsight
-        from thoth.llm import LLM
+        from thoth.wiring import build_collaborators
 
-        vault = Vault(config)
         # The daily cost guard (issue #16): one shared cap over the Anthropic +
         # Hindsight calls, persisted in state.db. MCP has no Slack target, so it blocks
-        # silently (no alerter); the cap still defers spend once reached.
-        guard = make_budget_guard(config)
-        llm = LLM(config, guard=guard)
-        extractor = Extractor(config)
-        hindsight = Hindsight(config, guard=guard)
-        git = GitSync(config)
-        # SCHEMA.md as the curate-call system_extra so curated pages match the live
-        # per-type schema (mirrors thoth.__main__._build_graph).
-        ingestor = Ingestor(
-            config, vault, llm, extractor, hindsight, git, schema_md=vault.schema_md()
-        )
-        query_engine = QueryEngine(config, vault, hindsight, llm)
+        # silently (no alerter); the cap still defers spend once reached. No markers:
+        # the daily heartbeat watches the Slack/CLI capture path, not MCP.
+        built = build_collaborators(config, guard=make_budget_guard(config))
         ctx = ToolContext(
             config=config,
-            vault=vault,
-            ingestor=ingestor,
-            query_engine=query_engine,
-            git=git,
+            vault=built.vault,
+            ingestor=built.ingestor,
+            query_engine=built.query_engine,
+            git=built.git,
         )
 
     server = build_server(ctx)
