@@ -1659,23 +1659,18 @@ class Ingestor:
         hits: list[str] = []
         if not needle:
             return hits
-        for folder in _CANDIDATE_DIRS:
-            directory = self._vault.root / folder
-            if not directory.is_dir():
+        for rel, md_path in self._vault.iter_folder_pages(_CANDIDATE_DIRS):
+            if rel in hits:
                 continue
-            for md_path in sorted(directory.glob("*.md")):
-                rel = f"{folder}/{md_path.name}"
-                if rel in hits:
-                    continue
-                haystack = md_path.name.lower()
-                try:
-                    haystack += "\n" + md_path.read_text(encoding="utf-8").lower()
-                except OSError:
-                    pass
-                if needle in haystack:
-                    hits.append(rel)
-                    if len(hits) >= limit:
-                        return hits
+            haystack = md_path.name.lower()
+            try:
+                haystack += "\n" + md_path.read_text(encoding="utf-8").lower()
+            except OSError:
+                pass
+            if needle in haystack:
+                hits.append(rel)
+                if len(hits) >= limit:
+                    return hits
         return hits
 
     # ---- internals: durable pre-LLM holding --------------------------------------
