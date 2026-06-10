@@ -60,9 +60,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import IntEnum
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 
 import frontmatter
 import yaml
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 from thoth._time import LONDON
 from thoth.config import Config
@@ -230,6 +235,15 @@ class Finding:
     """A human-readable description of the issue."""
 
 
+def _finding(
+    check: int, name: str, severity: Severity, path: str, message: str
+) -> Finding:
+    """Build one :class:`Finding` (positional shorthand used by every check)."""
+    return Finding(
+        check=check, name=name, severity=severity, path=path, message=message
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class LintReport:
     """All findings from one lint pass, grouped and counted by severity."""
@@ -333,19 +347,23 @@ class LintEngine:
             LintError: if a check cannot run (for example a missing vault root or a
                 missing ``SCHEMA.md`` for the tag audit).
         """
+        checks = (
+            self.check_orphans,
+            self.check_broken_wikilinks,
+            self.check_summaries,
+            self.check_frontmatter,
+            self.check_stale,
+            self.check_contradictions,
+            self.check_source_drift,
+            self.check_quality_signals,
+            self.check_page_size,
+            self.check_tag_audit,
+            self.check_image_hygiene,
+            self.check_log_rotation,
+        )
         findings: list[Finding] = []
-        findings.extend(self.check_orphans())
-        findings.extend(self.check_broken_wikilinks())
-        findings.extend(self.check_summaries())
-        findings.extend(self.check_frontmatter())
-        findings.extend(self.check_stale())
-        findings.extend(self.check_contradictions())
-        findings.extend(self.check_source_drift())
-        findings.extend(self.check_quality_signals())
-        findings.extend(self.check_page_size())
-        findings.extend(self.check_tag_audit())
-        findings.extend(self.check_image_hygiene())
-        findings.extend(self.check_log_rotation())
+        for check in checks:
+            findings.extend(check())
         findings.sort(key=lambda f: (int(f.severity), f.check, f.path))
         return LintReport(findings=tuple(findings))
 
@@ -385,12 +403,12 @@ class LintEngine:
             if handles & inbound:
                 continue
             findings.append(
-                Finding(
-                    check=1,
-                    name="orphan",
-                    severity=Severity.ORPHAN,
-                    path=page.path,
-                    message="reference page has no inbound [[wikilinks]]",
+                _finding(
+                    1,
+                    "orphan",
+                    Severity.ORPHAN,
+                    page.path,
+                    "reference page has no inbound [[wikilinks]]",
                 )
             )
         return findings
@@ -413,15 +431,15 @@ class LintEngine:
         findings: list[Finding] = []
         for page in pages:
             for target in extract_wikilinks(page.body):
-                if self._normalise_target(target) in resolvable:
+                if _normalise_target(target) in resolvable:
                     continue
                 findings.append(
-                    Finding(
-                        check=2,
-                        name="broken-wikilink",
-                        severity=Severity.BROKEN,
-                        path=page.path,
-                        message=f"wikilink [[{target}]] resolves to no page",
+                    _finding(
+                        2,
+                        "broken-wikilink",
+                        Severity.BROKEN,
+                        page.path,
+                        f"wikilink [[{target}]] resolves to no page",
                     )
                 )
         return findings
@@ -450,12 +468,12 @@ class LintEngine:
                 continue
             if _str_field(page.meta.get("summary")) is None:
                 findings.append(
-                    Finding(
-                        check=3,
-                        name="summary-gloss",
-                        severity=Severity.STYLE,
-                        path=page.path,
-                        message="reference page has no one-line summary: frontmatter",
+                    _finding(
+                        3,
+                        "summary-gloss",
+                        Severity.STYLE,
+                        page.path,
+                        "reference page has no one-line summary: frontmatter",
                     )
                 )
         return findings
@@ -484,15 +502,7 @@ class LintEngine:
         out: list[Finding] = []
 
         def flag(message: str) -> None:
-            out.append(
-                Finding(
-                    check=4,
-                    name="frontmatter",
-                    severity=Severity.STYLE,
-                    path=page.path,
-                    message=message,
-                )
-            )
+            out.append(_finding(4, "frontmatter", Severity.STYLE, page.path, message))
 
         for field in REQUIRED_COMMON_FIELDS:
             if meta.get(field) in (None, "", []):
@@ -551,15 +561,13 @@ class LintEngine:
             updated = _parse_date(page.meta.get("updated") or page.meta.get("created"))
             if updated is not None and updated < stale_floor:
                 findings.append(
-                    Finding(
-                        check=5,
-                        name="stale",
-                        severity=Severity.STALE,
-                        path=page.path,
-                        message=(
-                            f"reference page updated {updated.isoformat()} is older "
-                            f"than {STALE_DAYS} days"
-                        ),
+                    _finding(
+                        5,
+                        "stale",
+                        Severity.STALE,
+                        page.path,
+                        f"reference page updated {updated.isoformat()} is older "
+                        f"than {STALE_DAYS} days",
                     )
                 )
         for page in self._actionable_pages():
@@ -582,27 +590,25 @@ class LintEngine:
             due = _parse_date(page.meta.get("due_date"))
             if due is not None and due < self._today:
                 out.append(
-                    Finding(
-                        check=5,
-                        name="overdue",
-                        severity=Severity.STALE,
-                        path=page.path,
-                        message=f"action is past its due date {due.isoformat()}",
+                    _finding(
+                        5,
+                        "overdue",
+                        Severity.STALE,
+                        page.path,
+                        f"action is past its due date {due.isoformat()}",
                     )
                 )
         if status == MEDIA_OPEN_STATUS and "media" in _page_tags(page.meta):
             added = _parse_date(page.meta.get("created"))
             if added is not None and added < media_floor:
                 out.append(
-                    Finding(
-                        check=5,
-                        name="media-cold",
-                        severity=Severity.STALE,
-                        path=page.path,
-                        message=(
-                            f"media to_consume since {added.isoformat()} is older "
-                            f"than {MEDIA_STALE_DAYS} days"
-                        ),
+                    _finding(
+                        5,
+                        "media-cold",
+                        Severity.STALE,
+                        page.path,
+                        f"media to_consume since {added.isoformat()} is older "
+                        f"than {MEDIA_STALE_DAYS} days",
                     )
                 )
         return out
@@ -622,24 +628,24 @@ class LintEngine:
         for page in self._all_scanned_pages():
             if _is_truthy(page.meta.get("contested")):
                 findings.append(
-                    Finding(
-                        check=6,
-                        name="contested",
-                        severity=Severity.CONTESTED,
-                        path=page.path,
-                        message="page is marked contested: true",
+                    _finding(
+                        6,
+                        "contested",
+                        Severity.CONTESTED,
+                        page.path,
+                        "page is marked contested: true",
                     )
                 )
             contradictions = page.meta.get("contradictions")
             if isinstance(contradictions, list) and contradictions:
                 joined = ", ".join(str(item) for item in contradictions)
                 findings.append(
-                    Finding(
-                        check=6,
-                        name="contradictions",
-                        severity=Severity.CONTESTED,
-                        path=page.path,
-                        message=f"page declares contradictions: {joined}",
+                    _finding(
+                        6,
+                        "contradictions",
+                        Severity.CONTESTED,
+                        page.path,
+                        f"page declares contradictions: {joined}",
                     )
                 )
         return findings
@@ -666,15 +672,13 @@ class LintEngine:
             recomputed = Vault.body_sha256(page.body)
             if recomputed != stored:
                 findings.append(
-                    Finding(
-                        check=7,
-                        name="source-drift",
-                        severity=Severity.DRIFT,
-                        path=page.path,
-                        message=(
-                            "raw body sha256 has drifted from its frontmatter "
-                            "(raw edited or source changed)"
-                        ),
+                    _finding(
+                        7,
+                        "source-drift",
+                        Severity.DRIFT,
+                        page.path,
+                        "raw body sha256 has drifted from its frontmatter "
+                        "(raw edited or source changed)",
                     )
                 )
         return findings
@@ -696,24 +700,24 @@ class LintEngine:
             confidence = _str_field(page.meta.get("confidence"))
             if confidence == "low":
                 findings.append(
-                    Finding(
-                        check=8,
-                        name="quality",
-                        severity=Severity.STYLE,
-                        path=page.path,
-                        message="page has confidence: low",
+                    _finding(
+                        8,
+                        "quality",
+                        Severity.STYLE,
+                        page.path,
+                        "page has confidence: low",
                     )
                 )
                 continue
             sources = page.meta.get("sources")
             if isinstance(sources, list) and len(sources) == 1 and confidence is None:
                 findings.append(
-                    Finding(
-                        check=8,
-                        name="quality",
-                        severity=Severity.STYLE,
-                        path=page.path,
-                        message="single-source page has no confidence field",
+                    _finding(
+                        8,
+                        "quality",
+                        Severity.STYLE,
+                        page.path,
+                        "single-source page has no confidence field",
                     )
                 )
         return findings
@@ -735,15 +739,13 @@ class LintEngine:
             line_count = len(page.body.splitlines())
             if line_count > PAGE_SIZE_LIMIT:
                 findings.append(
-                    Finding(
-                        check=9,
-                        name="page-size",
-                        severity=Severity.STYLE,
-                        path=page.path,
-                        message=(
-                            f"body is {line_count} lines (> {PAGE_SIZE_LIMIT}); "
-                            "split into sub-topics"
-                        ),
+                    _finding(
+                        9,
+                        "page-size",
+                        Severity.STYLE,
+                        page.path,
+                        f"body is {line_count} lines (> {PAGE_SIZE_LIMIT}); "
+                        "split into sub-topics",
                     )
                 )
         return findings
@@ -775,12 +777,12 @@ class LintEngine:
             for tag in _page_tags(page.meta):
                 if tag not in taxonomy:
                     findings.append(
-                        Finding(
-                            check=10,
-                            name="tag-audit",
-                            severity=Severity.STYLE,
-                            path=page.path,
-                            message=f"tag {tag!r} is not in the SCHEMA.md taxonomy",
+                        _finding(
+                            10,
+                            "tag-audit",
+                            Severity.STYLE,
+                            page.path,
+                            f"tag {tag!r} is not in the SCHEMA.md taxonomy",
                         )
                     )
         return findings
@@ -801,39 +803,41 @@ class LintEngine:
         pages = self._all_scanned_pages()
         embedded: set[str] = set()
         findings: list[Finding] = []
-        assets = self._asset_filenames()
+        assets = self._asset_names(
+            lambda p: ASSET_SLUG_RE.fullmatch(p.name) is not None
+        )
         for page in pages:
             for embed in extract_embeds(page.body):
                 embedded.add(embed)
                 if embed not in assets:
                     findings.append(
-                        Finding(
-                            check=11,
-                            name="broken-embed",
-                            severity=Severity.BROKEN,
-                            path=page.path,
-                            message=f"embeds missing asset ![[{embed}]]",
+                        _finding(
+                            11,
+                            "broken-embed",
+                            Severity.BROKEN,
+                            page.path,
+                            f"embeds missing asset ![[{embed}]]",
                         )
                     )
         for asset in sorted(assets):
             if asset not in embedded:
                 findings.append(
-                    Finding(
-                        check=11,
-                        name="orphan-binary",
-                        severity=Severity.BROKEN,
-                        path=f"{_ASSETS_DIR}/{asset}",
-                        message="binary asset is embedded by no page",
+                    _finding(
+                        11,
+                        "orphan-binary",
+                        Severity.BROKEN,
+                        f"{_ASSETS_DIR}/{asset}",
+                        "binary asset is embedded by no page",
                     )
                 )
-        for sidecar in sorted(self._asset_sidecars()):
+        for sidecar in sorted(self._asset_names(lambda p: p.suffix == ".md")):
             findings.append(
-                Finding(
-                    check=11,
-                    name="asset-sidecar",
-                    severity=Severity.BROKEN,
-                    path=f"{_ASSETS_DIR}/{sidecar}",
-                    message="legacy per-image sidecar; merge into its owning page",
+                _finding(
+                    11,
+                    "asset-sidecar",
+                    Severity.BROKEN,
+                    f"{_ASSETS_DIR}/{sidecar}",
+                    "legacy per-image sidecar; merge into its owning page",
                 )
             )
         return findings
@@ -857,15 +861,13 @@ class LintEngine:
         count = len(_LOG_ENTRY_RE.findall(log_text))
         if count > LOG_ROTATE_LIMIT:
             return [
-                Finding(
-                    check=12,
-                    name="log-rotation",
-                    severity=Severity.STYLE,
-                    path="log.md",
-                    message=(
-                        f"log.md has {count} entries (> {LOG_ROTATE_LIMIT}); rotate to "
-                        "log-YYYY.md"
-                    ),
+                _finding(
+                    12,
+                    "log-rotation",
+                    Severity.STYLE,
+                    "log.md",
+                    f"log.md has {count} entries (> {LOG_ROTATE_LIMIT}); "
+                    "rotate to log-YYYY.md",
                 )
             ]
         return []
@@ -948,27 +950,12 @@ class LintEngine:
         pages.sort(key=lambda page: page.path)
         return pages
 
-    def _asset_filenames(self) -> set[str]:
-        """Return the set of binary (non-``.md``) filenames in ``raw/assets/``."""
+    def _asset_names(self, keep: Callable[[Path], bool]) -> set[str]:
+        """Return the ``raw/assets/`` filenames whose path satisfies ``keep``."""
         base = self._vault.root / _ASSETS_DIR
         if not base.is_dir():
             return set()
-        return {
-            path.name
-            for path in base.iterdir()
-            if path.is_file() and ASSET_SLUG_RE.fullmatch(path.name)
-        }
-
-    def _asset_sidecars(self) -> set[str]:
-        """Return the set of ``*.md`` filenames in ``raw/assets/`` (legacy sidecars)."""
-        base = self._vault.root / _ASSETS_DIR
-        if not base.is_dir():
-            return set()
-        return {
-            path.name
-            for path in base.iterdir()
-            if path.is_file() and path.suffix == ".md"
-        }
+        return {path.name for path in base.iterdir() if path.is_file() and keep(path)}
 
     def _read_text(self, vault_relative_path: str) -> str:
         """Confine and read a spine file's full text, or raise :class:`LintError`.
@@ -1004,7 +991,7 @@ class LintEngine:
         inbound: set[str] = set()
         for page in pages:
             for target in extract_wikilinks(page.body):
-                normalised = LintEngine._normalise_target(target)
+                normalised = _normalise_target(target)
                 if normalised == page.slug or normalised == page.path.removesuffix(
                     ".md"
                 ):
@@ -1022,13 +1009,6 @@ class LintEngine:
             resolvable.add(page.path.removesuffix(".md"))
             resolvable.update(page.aliases)
         return resolvable
-
-    @staticmethod
-    def _normalise_target(target: str) -> str:
-        """Strip the ``|alias`` and ``#anchor`` parts and trim a wikilink target."""
-        head = target.split("|", 1)[0]
-        head = head.split("#", 1)[0]
-        return head.strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1054,6 +1034,13 @@ class _Page:
 
 
 # ---- module-level pure helpers (also unit-tested directly) ------------------------
+
+
+def _normalise_target(target: str) -> str:
+    """Strip the ``|alias`` and ``#anchor`` parts and trim a wikilink target."""
+    head = target.split("|", 1)[0]
+    head = head.split("#", 1)[0]
+    return head.strip()
 
 
 def extract_wikilinks(body: str) -> list[str]:
@@ -1089,11 +1076,7 @@ def extract_embeds(body: str) -> list[str]:
         The embedded filenames, in document order.
     """
     stripped = _FENCE_RE.sub("", body)
-    out: list[str] = []
-    for match in _EMBED_RE.finditer(stripped):
-        inner = match.group(1).split("|", 1)[0].split("#", 1)[0].strip()
-        out.append(inner)
-    return out
+    return [_normalise_target(match.group(1)) for match in _EMBED_RE.finditer(stripped)]
 
 
 def parse_taxonomy_tags(schema_text: str) -> set[str]:
