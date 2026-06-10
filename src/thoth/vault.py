@@ -25,14 +25,13 @@ This module is also the single canonical source of the page-type / source / fold
 vocabulary (issue #19): the classify prompt (:mod:`thoth.ingest`), the lint folder walks
 (:mod:`thoth.lint`), the summary scans (:mod:`thoth.summary`) and the file-plan
 validator (:mod:`thoth.llm`) all import these constants rather than restating them, and
-:func:`slugify` is the one slug builder every caller routes through so the slug rule and
-:data:`SLUG_RE` validation grammar never drift apart.
+:func:`slugify` lives next to the :data:`SLUG_RE` validation grammar so the slug rule
+and the grammar never drift apart.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import shutil
 from collections.abc import Iterator
@@ -154,9 +153,9 @@ one-place edit."""
 SLUG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 """Slug grammar: lowercase alphanumerics in single-hyphen-separated groups."""
 
-# Caps applied by :func:`slugify` (the one slug builder). A slug keeps at most this many
-# hyphen-separated words and this many characters, so a long title yields a short,
-# filesystem-friendly slug that still satisfies :data:`SLUG_RE`.
+# Caps applied by :func:`slugify`. A slug keeps at most this many hyphen-separated
+# words and this many characters, so a long title yields a short, filesystem-friendly
+# slug that still satisfies :data:`SLUG_RE`.
 _MAX_SLUG_WORDS: int = 8
 _MAX_SLUG_LEN: int = 80
 
@@ -220,9 +219,9 @@ def slugify(text: str, *, fallback: str = "untitled") -> str:
     rather than dropping it: ``"café notes"`` becomes ``cafe-notes`` and ``"naïve
     Bayes"`` becomes ``naive-bayes``. When the input transliterates to nothing usable
     (empty, whitespace, or symbols-only) the ``fallback`` word is returned, so the slug
-    is **always** a non-empty string satisfying :data:`SLUG_RE`. This is the single slug
-    builder; every caller routes through it so the slug rule and the :data:`SLUG_RE`
-    validation grammar cannot drift apart.
+    is **always** a non-empty string satisfying :data:`SLUG_RE`. The slug rule is
+    defined here, next to the :data:`SLUG_RE` validation grammar, so the two cannot
+    drift apart.
 
     Args:
         text: The free text to slugify (typically a page title or question).
@@ -369,10 +368,7 @@ class Vault:
         """
         if not vault_relative_path:
             raise PathConfinementError("vault path must be a non-empty relative path")
-        if (
-            vault_relative_path.startswith("/")
-            or PurePosixPath(vault_relative_path).is_absolute()
-        ):
+        if PurePosixPath(vault_relative_path).is_absolute():
             raise PathConfinementError(
                 f"vault path must be relative, not absolute: {vault_relative_path!r}"
             )
@@ -385,14 +381,13 @@ class Vault:
                     f"{vault_relative_path!r}"
                 )
 
-        pure = PurePosixPath(vault_relative_path)
-        candidate = self._root / Path(*pure.parts)
+        candidate = self._root / vault_relative_path
         # Path.resolve follows symlinks in the existing prefix (so a symlinked
         # directory that escapes the vault is caught) and normalises the non-existent
         # tail lexically, so the leaf need not exist yet.
         resolved = candidate.resolve()
         resolved_root = self._root.resolve()
-        if resolved != resolved_root and resolved_root not in resolved.parents:
+        if not resolved.is_relative_to(resolved_root):
             raise PathConfinementError(
                 f"vault path escapes the vault root: {vault_relative_path!r}"
             )
@@ -435,6 +430,16 @@ class Vault:
                 f"invalid asset filename {name!r}: must match {ASSET_SLUG_RE.pattern}"
             )
         return name
+
+    @classmethod
+    def _asset_rel(cls, asset_filename: str) -> str:
+        """Validate an asset filename and return its ``raw/assets/`` relative path.
+
+        Raises:
+            SlugError: on an invalid asset filename.
+        """
+        cls.validate_asset_filename(asset_filename)
+        return f"raw/assets/{asset_filename}"
 
     @staticmethod
     def validate_folder_type(folder: str, page_type: str) -> None:
@@ -493,7 +498,7 @@ class Vault:
         absolute = self.resolve(vault_relative_path)
         if not absolute.is_file():
             raise VaultError(f"page does not exist: {vault_relative_path!r}")
-        post = frontmatter.loads(absolute.read_text(encoding="utf-8"))
+        post = frontmatter.load(absolute)
         return Page(
             path=PurePosixPath(vault_relative_path).as_posix(),
             frontmatter=dict(post.metadata),
@@ -577,8 +582,7 @@ class Vault:
             SlugError: on an invalid asset filename.
             PathConfinementError: if the destination escapes the vault root.
         """
-        self.validate_asset_filename(asset_filename)
-        return self.resolve(f"raw/assets/{asset_filename}").is_file()
+        return self.resolve(self._asset_rel(asset_filename)).is_file()
 
     def asset_sha256(self, asset_filename: str) -> str:
         """Return the hex SHA-256 of an existing asset's bytes.
@@ -599,8 +603,7 @@ class Vault:
             PathConfinementError: if the destination escapes the vault root.
             VaultError: if the asset does not exist.
         """
-        self.validate_asset_filename(asset_filename)
-        rel = f"raw/assets/{asset_filename}"
+        rel = self._asset_rel(asset_filename)
         absolute = self.resolve(rel)
         if not absolute.is_file():
             raise VaultError(f"asset does not exist: {rel!r}")
@@ -724,15 +727,14 @@ class Vault:
             PathConfinementError: if the destination escapes the vault root.
             VaultError: if the source is missing or the destination already exists.
         """
-        self.validate_asset_filename(asset_filename)
-        rel = f"raw/assets/{asset_filename}"
+        rel = self._asset_rel(asset_filename)
         destination = self.resolve(rel)
         if not tmp_path.is_file():
             raise VaultError(f"source asset does not exist: {tmp_path}")
         if destination.exists():
             raise VaultError(f"refusing to overwrite existing asset: {rel!r}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(os.fspath(tmp_path), os.fspath(destination))
+        shutil.move(tmp_path, destination)
         return rel
 
     def remove_page(self, vault_relative_path: str) -> bool:
@@ -831,7 +833,7 @@ class Vault:
         absolute = self.resolve(vault_relative_path)
         if not absolute.is_file():
             return None
-        post = frontmatter.loads(absolute.read_text(encoding="utf-8"))
+        post = frontmatter.load(absolute)
         return post.metadata.get("created")
 
     @staticmethod
@@ -858,7 +860,8 @@ class Vault:
             allow_unicode=True,
             default_flow_style=False,
         )
-        return f"---\n{block}---\n\n{body.rstrip(chr(10))}\n"
+        stripped = body.rstrip("\n")
+        return f"---\n{block}---\n\n{stripped}\n"
 
     def _write_post(
         self, vault_relative_path: str, meta: dict[str, object], body: str
