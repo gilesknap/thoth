@@ -40,6 +40,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date
+from itertools import zip_longest
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -47,7 +48,7 @@ from thoth.config import Config
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
-from thoth.vault import SchemaError, SlugError, Vault, VaultError
+from thoth.vault import Page, Vault, VaultError
 
 logger = logging.getLogger("thoth")
 
@@ -152,17 +153,26 @@ class ToolContext:
 # ---- citation / report rendering (MCP Markdown, mirrors slack_app's mrkdwn) --------
 
 
+def _ref(label: str, uri: str, path: str, wikilink: str) -> str:
+    """Render the MCP reference triple: link, plain path, and ``[[wikilink]]``.
+
+    Emits ``[label](obsidian-uri)`` (the Markdown link form), then the plain
+    vault-relative path and the ``[[wikilink]]`` on the same line, so the reference is
+    still usable when a host will not make the custom ``obsidian://`` scheme clickable
+    (SPEC Appendix). The link target is always harness-built by a collaborator; this
+    never constructs an ``obsidian://`` URI itself.
+    """
+    return f"[{label}]({uri}) - `{path}` {wikilink}"
+
+
 def _render_citation(citation: Citation) -> str:
     """Render one vault citation as Markdown: link, plain path, and ``[[wikilink]]``.
 
-    Emits ``[title](obsidian-uri)`` (the Markdown link form), then the plain
-    vault-relative path and the ``[[wikilink]]`` on the same line, so the reference is
-    still usable when a host will not make the custom ``obsidian://`` scheme clickable
-    (SPEC Appendix). The link target is taken verbatim from the harness-built
-    :class:`~thoth.query.Citation`; this never constructs an ``obsidian://`` URI itself.
+    The link target is taken verbatim from the harness-built
+    :class:`~thoth.query.Citation` (see :func:`_ref`).
     """
     label = citation.title or citation.path
-    return f"[{label}]({citation.obsidian_uri}) - `{citation.path}` {citation.wikilink}"
+    return _ref(label, citation.obsidian_uri, citation.path, citation.wikilink)
 
 
 def _render_query_result(result: QueryResult) -> str:
@@ -208,15 +218,16 @@ def _render_ingest_report(report: IngestReport) -> str:
 
     parts = [head]
     refs: list[str] = []
-    for uri, wikilink in zip(report.obsidian_links, report.wikilinks, strict=False):
-        refs.append(f"[open]({uri}) {wikilink}")
-    for uri in report.obsidian_links[len(report.wikilinks) :]:
-        refs.append(f"[open]({uri})")
-    for wikilink in report.wikilinks[len(report.obsidian_links) :]:
-        refs.append(wikilink)
+    for uri, wikilink in zip_longest(report.obsidian_links, report.wikilinks):
+        if uri is not None and wikilink is not None:
+            refs.append(f"[open]({uri}) {wikilink}")
+        elif uri is not None:
+            refs.append(f"[open]({uri})")
+        elif wikilink is not None:
+            refs.append(wikilink)
     if refs:
         parts.append(" - ".join(refs))
-    if report.message and not report.conflict:
+    if report.message:
         parts.append(report.message)
     return "\n".join(parts)
 
@@ -234,6 +245,15 @@ def _looks_like_base64_blob(value: str) -> bool:
         return True
     stripped = value.strip()
     return bool(_BASE64_BLOB_RE.fullmatch(stripped))
+
+
+def _reject_outside(path: str) -> ToolResult:
+    """Build the path-confinement rejection for a path outside the vault root."""
+    return ToolResult(
+        ok=False,
+        text=f"Path is outside the vault and was rejected: `{path}`",
+        data={"rejected": "path_confinement", "path": path},
+    )
 
 
 # ---- the pkm_* tool bodies (pure delegations on a ToolContext) ---------------------
@@ -266,14 +286,11 @@ def pkm_ingest(
         A :class:`ToolResult`: ``ok=True`` with the rendered report on success, else
         ``ok=False`` with the rejection or error message.
     """
-    provided = [
-        name for name, value in (("text", text), ("url", url), ("path", path)) if value
-    ]
-    if not provided:
+    if not (text or url or path):
         return ToolResult(
             ok=False,
             text="Provide exactly one of text, url, or path to ingest.",
-            data={"provided": provided},
+            data={"provided": []},
         )
     for value in (text, url, path):
         if value is not None and _looks_like_base64_blob(value):
@@ -289,11 +306,7 @@ def pkm_ingest(
     resolved_path: Any = None
     if path is not None:
         if not ctx.vault.is_inside(path):
-            return ToolResult(
-                ok=False,
-                text=f"Path is outside the vault and was rejected: `{path}`",
-                data={"rejected": "path_confinement", "path": path},
-            )
+            return _reject_outside(path)
         resolved_path = ctx.vault.resolve(path)
 
     capture = Capture(
@@ -417,8 +430,8 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
         lines.append("")
         lines.append("**Done/closed:**")
         lines.extend(
-            f"- [{item.title}]({item.obsidian_uri}) - `{item.path}` "
-            f"{item.wikilink} (status: {item.status})"
+            f"- {_ref(item.title, item.obsidian_uri, item.path, item.wikilink)} "
+            f"(status: {item.status})"
             for item in closed
         )
 
@@ -448,10 +461,8 @@ def _render_action(item: Any, *, overdue: bool) -> str:
     if item.due_date is not None:
         due = item.due_date.isoformat()
         bits.append(f"due: {due}{' (OVERDUE)' if overdue else ''}")
-    return (
-        f"- [{item.title}]({item.obsidian_uri}) - `{item.path}` "
-        f"{item.wikilink} ({', '.join(bits)})"
-    )
+    ref = _ref(item.title, item.obsidian_uri, item.path, item.wikilink)
+    return f"- {ref} ({', '.join(bits)})"
 
 
 def pkm_recent(ctx: ToolContext, *, days: int = 7, limit: int = 20) -> ToolResult:
@@ -482,10 +493,8 @@ def pkm_recent(ctx: ToolContext, *, days: int = 7, limit: int = 20) -> ToolResul
         for page in pages:
             uri = ctx.vault.obsidian_uri(page.path)
             updated = page.updated.isoformat() if page.updated is not None else "?"
-            lines.append(
-                f"- [{page.title or page.path}]({uri}) - `{page.path}` "
-                f"{page.wikilink} ({page.page_type}, {updated})"
-            )
+            ref = _ref(page.title or page.path, uri, page.path, page.wikilink)
+            lines.append(f"- {ref} ({page.page_type}, {updated})")
             rendered.append({"path": page.path, "obsidian_uri": uri})
     else:
         lines.append("- _No recent pages._")
@@ -543,7 +552,7 @@ def _commit_written_page(
             data={"path": rel, "committed": False},
         )
 
-    head = f"{action} [{rel}]({uri}) - `{rel}` {wikilink}"
+    head = f"{action} {_ref(rel, uri, rel, wikilink)}"
     if not result.committed:
         head += " (not yet committed)"
     return ToolResult(
@@ -593,8 +602,6 @@ def pkm_write_page(
     """
     try:
         rel = ctx.vault.write_page(folder, slug, frontmatter, body, today=today)
-    except (SchemaError, SlugError) as exc:
-        return ToolResult(ok=False, text=f"Vault rejected the page: {exc}", data={})
     except VaultError as exc:
         return ToolResult(ok=False, text=f"Vault rejected the page: {exc}", data={})
 
@@ -615,11 +622,7 @@ def _resolve_page(ctx: ToolContext, path: str) -> str | ToolResult:
     path on success, otherwise the failure :class:`ToolResult` to return as-is.
     """
     if not ctx.vault.is_inside(path):
-        return ToolResult(
-            ok=False,
-            text=f"Path is outside the vault and was rejected: `{path}`",
-            data={"rejected": "path_confinement", "path": path},
-        )
+        return _reject_outside(path)
     # A full path (or a slug that happens to resolve to an existing file) is used as-is.
     if ctx.vault.page_exists(path):
         return PurePosixPath(path).as_posix()
@@ -653,6 +656,23 @@ def _resolve_page(ctx: ToolContext, path: str) -> str | ToolResult:
     )
 
 
+def _load_page(ctx: ToolContext, path: str) -> tuple[str, Page] | ToolResult:
+    """Resolve ``path`` (full path or bare slug) and read the page, or fail typed.
+
+    Combines :func:`_resolve_page` with :meth:`thoth.vault.Vault.read_page`: returns
+    ``(rel, page)`` on success, otherwise the failure :class:`ToolResult` to return
+    as-is (a :class:`~thoth.vault.VaultError` on the read is surfaced ``ok=False``,
+    never raised into the MCP runtime).
+    """
+    resolved = _resolve_page(ctx, path)
+    if isinstance(resolved, ToolResult):
+        return resolved
+    try:
+        return resolved, ctx.vault.read_page(resolved)
+    except VaultError as exc:
+        return ToolResult(ok=False, text=f"Could not read that page: {exc}", data={})
+
+
 def pkm_read_page(ctx: ToolContext, *, path: str) -> ToolResult:
     """Read a page's raw frontmatter + body verbatim (the read-then-write-back half).
 
@@ -673,14 +693,10 @@ def pkm_read_page(ctx: ToolContext, *, path: str) -> ToolResult:
         A :class:`ToolResult`: ``ok=True`` with ``{path, frontmatter, body}`` in
         ``data`` plus a rendered raw-markdown block in ``text``, else ``ok=False``.
     """
-    resolved = _resolve_page(ctx, path)
-    if isinstance(resolved, ToolResult):
-        return resolved
-    rel = resolved
-    try:
-        page = ctx.vault.read_page(rel)
-    except VaultError as exc:
-        return ToolResult(ok=False, text=f"Could not read that page: {exc}", data={})
+    loaded = _load_page(ctx, path)
+    if isinstance(loaded, ToolResult):
+        return loaded
+    rel, page = loaded
 
     text = f"`{rel}`\n\n```markdown\n{_render_raw_page(page.frontmatter, page.body)}```"
     return ToolResult(
@@ -740,14 +756,10 @@ def pkm_edit_page(
             text="No edit to make: old_string and new_string are identical.",
             data={},
         )
-    resolved = _resolve_page(ctx, path)
-    if isinstance(resolved, ToolResult):
-        return resolved
-    rel = resolved
-    try:
-        page = ctx.vault.read_page(rel)
-    except VaultError as exc:
-        return ToolResult(ok=False, text=f"Could not read that page: {exc}", data={})
+    loaded = _load_page(ctx, path)
+    if isinstance(loaded, ToolResult):
+        return loaded
+    rel, page = loaded
 
     count = page.body.count(old_string)
     if count == 0:
