@@ -29,19 +29,19 @@ Design constraints (the same closed-surface rules as the rest of the app):
   CI). The real Slack ``WebClient`` is built lazily by :func:`make_alerter` only when a
   target is configured; the testable :class:`Alerter` logic takes an injected poster.
 
-Only the standard library plus :mod:`thoth.config` is imported at module level, so this
-module is always import-safe under pytest collection.
+Only the standard library plus ``thoth._time`` and :mod:`thoth.config` is imported at
+module level, so this module is always import-safe under pytest collection.
 """
 
 from __future__ import annotations
 
-import datetime as _dt
 import logging
 import traceback
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Protocol
 
+from thoth._time import utc_now
 from thoth.config import Config
 
 __all__ = ["AlertPoster", "Alerter", "make_alerter"]
@@ -95,7 +95,7 @@ class Alerter:
         """
         self._target = target
         self._poster = poster
-        self._clock = clock if clock is not None else _utc_now
+        self._clock = clock if clock is not None else utc_now
 
     @property
     def enabled(self) -> bool:
@@ -274,11 +274,6 @@ def _make_web_client(config: Config) -> AlertPoster:
     from slack_sdk import WebClient
 
     return WebClient(token=bot_token)
-
-
-def _utc_now() -> datetime:
-    """Return the current UTC time (the default alert clock)."""
-    return datetime.now(_dt.UTC)
 
 
 def _iso(when: datetime) -> str:

@@ -66,6 +66,7 @@ from typing import Any, Protocol
 
 from thoth.budget import BudgetExceededError
 from thoth.config import Config
+from thoth.filetypes import IMAGE_EXTS as _IMAGE_EXTS
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.intent import IntentClassifier, IntentDecision
@@ -81,12 +82,6 @@ DEDUPE_TTL_SECONDS: float = 3600.0
 # A free-text message whose body, once stripped, begins with one of these prefixes is
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
 _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
-
-# Image file extensions (no dot) that mark a Slack upload as an image, so a multi-file
-# message of only images is captured as ONE page (issue #84). Mirrors the ingest
-# pipeline's image kinds; a mimetype check is tried first in
-# :meth:`Handlers._is_image_file`.
-_IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 
 # The safe routing verdict used when the gate is bypassed (no classifier wired): route
 # to the vault-only query with no keywords, so the read path greps the raw text -- the

@@ -57,12 +57,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import PurePosixPath
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
 import frontmatter
 import yaml
 
+from thoth._time import LONDON
 from thoth.config import Config
+from thoth.fmfields import _is_truthy, _page_tags, _parse_date, _str_field
 from thoth.render import render_vault_ref
 from thoth.state import HEARTBEAT_MARKERS, MarkerStore
 from thoth.vault import CURATED_DIRS, Vault
@@ -87,14 +88,6 @@ _MARKER_LABELS: dict[str, str] = {
     "reindex": "reindex",
     "push": "push",
 }
-
-LONDON: ZoneInfo = ZoneInfo("Europe/London")
-"""The Europe/London timezone used for every calendar-date computation (SPEC section 9).
-
-Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is declared as a base
-dependency so this resolves identically across the 3.11-3.14 matrix even on a minimal
-container with no OS time-zone database.
-"""
 
 ACTION_OPEN_STATUSES: frozenset[str] = frozenset({"todo", "in_progress"})
 """Action ``status`` values treated as still open (SPEC frontmatter contract)."""
@@ -776,57 +769,9 @@ def _title(meta: dict[str, object], slug: str) -> str:
     return slug
 
 
-def _str_field(value: object) -> str | None:
-    """Return ``value`` as a stripped string, or ``None`` when absent/blank."""
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    if value is None:
-        return None
-    return str(value)
-
-
-def _page_tags(meta: dict[str, object]) -> list[str]:
-    """Return a page's ``tags`` frontmatter as a list of trimmed strings."""
-    raw = meta.get("tags")
-    if isinstance(raw, list):
-        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
-    if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
-    return []
-
-
 def _is_flagged(meta: dict[str, object]) -> bool:
     """Return ``True`` if frontmatter marks a page for review (``review`` / status)."""
-    review = meta.get("review")
-    if review is True:
-        return True
-    if isinstance(review, str) and review.strip().lower() in {"true", "yes", "1"}:
+    if _is_truthy(meta.get("review")):
         return True
     status = meta.get("status")
     return isinstance(status, str) and status.strip().lower() == _REVIEW_STATUS
-
-
-def _parse_date(value: object) -> date | None:
-    """Coerce a frontmatter date-ish value to a :class:`date`, else ``None``.
-
-    Accepts a real :class:`~datetime.date` or :class:`~datetime.datetime` (YAML often
-    parses bare ``YYYY-MM-DD`` to a ``date``), and a string in ``YYYY-MM-DD`` or
-    ``YYYY-MM-DD HH:MM`` form (the trailing time is dropped). Any other value, an empty
-    string, or an unparseable string yields ``None`` -- a malformed date is treated as
-    "no date" and never raises.
-    """
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        head = text.split()[0]
-        try:
-            return date.fromisoformat(head)
-        except ValueError:
-            return None
-    return None

@@ -36,15 +36,15 @@ The design mirrors the rest of the closed-surface appliance:
   :class:`~thoth.state.EventStore` uses) so every *later* blocked call that day stays
   silent -- one notification, not one per blocked call.
 
-Only the standard library, :mod:`zoneinfo`, :mod:`thoth.config`, and :mod:`thoth.alerts`
-(itself standard-library-only at import) are imported at module level, so importing this
-module at pytest collection is always safe. The clock is injectable so the day boundary
-and the alert timestamp are deterministic in tests without touching the wall clock.
+Only the standard library, ``thoth._time``, :mod:`thoth.config`, and :mod:`thoth.alerts`
+(themselves standard-library-only at import) are imported at module level, so importing
+this module at pytest collection is always safe. The clock is injectable so the day
+boundary and the alert timestamp are deterministic in tests without touching the wall
+clock.
 """
 
 from __future__ import annotations
 
-import datetime as _dt
 import logging
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -52,8 +52,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
-from zoneinfo import ZoneInfo
 
+from thoth._time import LONDON, utc_now
 from thoth.config import Config
 
 __all__ = [
@@ -70,14 +70,6 @@ __all__ = [
 ]
 
 _LOG = logging.getLogger("thoth.budget")
-
-LONDON: ZoneInfo = ZoneInfo("Europe/London")
-"""The persona's timezone; the budget day rolls over at London midnight (SPEC Appendix).
-
-Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is a declared base
-dependency so the zone is present on every platform (mirrors
-:data:`thoth.summary.LONDON`).
-"""
 
 KIND_ANTHROPIC: str = "anthropic"
 """Counter name for the appliance's own Anthropic ``messages.create`` calls."""
@@ -279,7 +271,7 @@ class BudgetGuard:
         self._store = store
         self._limit = limit
         self._alerter = alerter
-        self._clock = clock if clock is not None else _utc_now
+        self._clock = clock if clock is not None else utc_now
 
     @property
     def enabled(self) -> bool:
@@ -387,8 +379,3 @@ def make_budget_guard(
         alerter=alerter,
         clock=clock,
     )
-
-
-def _utc_now() -> datetime:
-    """Return the current UTC time (the default budget clock)."""
-    return datetime.now(_dt.UTC)

@@ -22,9 +22,10 @@ The walk is deliberately conservative for a vault import:
   ``drafts/*`` excludes a subtree and ``*.md`` includes only Markdown); ``--limit`` caps
   the total number of captures yielded across all roots.
 
-Only the standard library plus a single deferred import of :data:`thoth.ingest.Capture`
-(inside the generator body, so the heavy ``thoth.ingest`` module is not pulled in merely
-by importing this module) is used, honouring the package's import-safety contract.
+Only the standard library, the shared :mod:`thoth.filetypes` extension sets, plus a
+single deferred import of :data:`thoth.ingest.Capture` (inside the generator body, so
+the heavy ``thoth.ingest`` module is not pulled in merely by importing this module) are
+used, honouring the package's import-safety contract.
 """
 
 from __future__ import annotations
@@ -34,6 +35,10 @@ from collections.abc import Iterator, Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from thoth.filetypes import AUDIO_EXTS as _AUDIO_EXTS
+from thoth.filetypes import IMAGE_EXTS as _IMAGE_EXTS
+from thoth.filetypes import TEXT_EXTS as _TEXT_EXTS
 
 if TYPE_CHECKING:
     from thoth.ingest import Capture
@@ -56,15 +61,9 @@ _SKIP_DIRS: frozenset[str] = frozenset({".obsidian", ".git", "_bases"})
 # importing a thoth vault never re-ingests them.
 _SPINE_FILES: frozenset[str] = frozenset({"index.md", "SCHEMA.md", "log.md"})
 
-# Extensions (no dot, lowercase) that select a capture kind, mirroring thoth.ingest's
-# kind detection. A bulk import is conservative: a file whose extension is in none of
-# these sets is skipped (logged), rather than defaulting to an image like the Slack/MCP
-# upload path does -- so a stray binary never triggers a surprise analyse spend (#80).
-_TEXT_EXTS: frozenset[str] = frozenset(
-    {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
-)
-_IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
-_AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
+# A bulk import is conservative: a file whose extension is in none of the known sets is
+# skipped (logged), rather than defaulting to an image like the Slack/MCP upload path
+# does -- so a stray binary never triggers a surprise analyse spend (#80).
 _PDF_EXTS: frozenset[str] = frozenset({"pdf"})
 
 
