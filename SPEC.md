@@ -143,7 +143,7 @@ Single language end-to-end (appliance + MCP + reindex) keeps the surface tiny. *
 | `config.py` | load vault path, tokens, model ids from `.env`/`config.toml` (~a dozen vars, not 350) | 40 | 0 |
 | `vault.py` | frontmatter read/write, slug/path helpers, `obsidian://` links, `log.md` edits, asset embed | 280 | 1 |
 | `bin/vault-pull`, `bin/vault-commit` (bash) + `git_sync.py` | pull-before-write / commit+push wrappers (carried fwd verbatim — Appendix → Git wrappers) + thin shell-out | 80 + 40 | 1 |
-| `llm.py` | Anthropic client + prompt caching; the system persona; the file-plan / answer schemas | 180 | 1 |
+| `llm.py` | Anthropic client + prompt caching; the system persona; the file-plan contract | 180 | 1 |
 | `extract.py` | URL→markdown (Firecrawl extract), PDF, image save, STT hook (local whisper) | 160 | 2 |
 | `ingest.py` | INGEST: classify → capture raw → curate (bounded passes) → nav → retain → commit (§6; Appendix → Routing & persona) | 350 | 2 |
 | `query.py` | structural (index/grep) + Hindsight recall → compose answer + canonical links (§7; Appendix → Retrieval & obsidian links) | 180 | 2 |

@@ -10,7 +10,6 @@ import pytest
 
 from thoth.config import Config, ConfigError, load_config
 from thoth.llm import (
-    DATED_MODEL_FALLBACK,
     DEFAULT_MAX_TOKENS,
     LLM,
     PERSONA,
@@ -27,8 +26,6 @@ from thoth.llm import (
     parse_json_block,
     response_content_blocks,
     tool_result_block,
-    user_blocks_message,
-    validate_answer,
     validate_file_plan,
 )
 from thoth.vault import (
@@ -96,11 +93,6 @@ def test_persona_has_concise_tone_clause() -> None:
     assert "## Tone" in PERSONA
     assert "Concise" in PERSONA
     assert "not a\n  conversationalist" in PERSONA
-
-
-def test_dated_model_fallback_value() -> None:
-    """The proven dated fallback id is exposed for callers that hit a 404 alias."""
-    assert DATED_MODEL_FALLBACK == "claude-sonnet-4-20250514"
 
 
 # --- build_system_blocks -----------------------------------------------------
@@ -388,14 +380,6 @@ def test_tool_result_block_keys_to_tool_use_id_and_flags_error() -> None:
     assert err["is_error"] is True
 
 
-def test_user_blocks_message_wraps_blocks_as_user_turn() -> None:
-    """user_blocks_message wraps tool_result blocks as a single user turn."""
-    blocks = [tool_result_block("t1", "r")]
-    msg = user_blocks_message(blocks)
-    assert msg.role == "user"
-    assert msg.content == blocks
-
-
 def test_build_create_kwargs_passes_structured_block_content_through() -> None:
     """A Message carrying block-list content is forwarded to messages verbatim."""
     blocks = [tool_result_block("t1", "r")]
@@ -589,72 +573,6 @@ def test_validate_file_plan_collects_multiple_problems() -> None:
     assert "action" in message
     assert "wikilinks" in message
     assert "title" in message
-
-
-# --- answer validation -------------------------------------------------------
-
-
-def _good_answer() -> dict[str, Any]:
-    """A well-formed blended-answer object."""
-    return {
-        "answer": "The PMC coordinates motion.",
-        "page_paths": ["entities/program-motion-controller.md"],
-        "used_web": False,
-        "web_sources": [],
-    }
-
-
-def test_validate_answer_accepts_good_answer() -> None:
-    """A fully valid answer passes without raising."""
-    validate_answer(_good_answer())
-
-
-def test_validate_answer_accepts_web_answer() -> None:
-    """An answer that used the web with sources is valid."""
-    obj = _good_answer()
-    obj["used_web"] = True
-    obj["web_sources"] = ["https://example.com/a"]
-    validate_answer(obj)
-
-
-def test_validate_answer_rejects_missing_answer() -> None:
-    """A missing 'answer' key is reported."""
-    obj = _good_answer()
-    del obj["answer"]
-    with pytest.raises(SchemaValidationError, match="answer"):
-        validate_answer(obj)
-
-
-def test_validate_answer_rejects_empty_answer() -> None:
-    """A blank 'answer' string is reported."""
-    obj = _good_answer()
-    obj["answer"] = "   "
-    with pytest.raises(SchemaValidationError, match="answer"):
-        validate_answer(obj)
-
-
-def test_validate_answer_rejects_non_list_page_paths() -> None:
-    """A non-list 'page_paths' is reported."""
-    obj = _good_answer()
-    obj["page_paths"] = "entities/foo.md"
-    with pytest.raises(SchemaValidationError, match="page_paths"):
-        validate_answer(obj)
-
-
-def test_validate_answer_rejects_non_string_page_paths() -> None:
-    """A 'page_paths' list with a non-string element is reported."""
-    obj = _good_answer()
-    obj["page_paths"] = ["ok", 123]
-    with pytest.raises(SchemaValidationError, match="page_paths"):
-        validate_answer(obj)
-
-
-def test_validate_answer_rejects_non_bool_used_web() -> None:
-    """A non-boolean 'used_web' is reported."""
-    obj = _good_answer()
-    obj["used_web"] = "yes"
-    with pytest.raises(SchemaValidationError, match="used_web"):
-        validate_answer(obj)
 
 
 # --- make_client seam --------------------------------------------------------

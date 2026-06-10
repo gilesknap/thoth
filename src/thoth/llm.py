@@ -1,4 +1,4 @@
-"""Anthropic client wrapper, the PKM persona, and the file-plan / answer schemas.
+"""Anthropic client wrapper, the PKM persona, and the file-plan contract.
 
 This module owns three framework-independent things the ingest and query phases
 build on:
@@ -9,13 +9,12 @@ build on:
 * helpers that assemble the ``messages.create`` keyword arguments with prompt caching
   (a stable :data:`PERSONA` prefix carrying a ``cache_control`` breakpoint), plus a
   thin injectable :class:`LLM` wrapper around the Anthropic SDK; and
-* the JSON schemas (:data:`FILE_PLAN_SCHEMA`, :data:`ANSWER_SCHEMA`) the harness holds
-  model output to, with validators (:func:`validate_file_plan` /
-  :func:`validate_answer`).
+* the curate file-plan contract (:func:`file_plan_contract_text`) the harness holds
+  model output to, with its validator (:func:`validate_file_plan`).
 
 The ``anthropic`` SDK is imported **lazily**, only inside :func:`make_client`, so that
 importing :mod:`thoth.llm` (for example at pytest collection or by a tool that only
-needs the schemas) never requires the package to be installed. The client is also
+needs the contract) never requires the package to be installed. The client is also
 **injectable** so tests substitute a fake exposing ``.messages.create(**kwargs)``.
 
 The file-plan validator deliberately reuses the *same* validators that
@@ -49,10 +48,7 @@ from thoth.vault import (
 )
 
 __all__ = [
-    "ANSWER_SCHEMA",
-    "DATED_MODEL_FALLBACK",
     "DEFAULT_MAX_TOKENS",
-    "FILE_PLAN_SCHEMA",
     "file_plan_contract_text",
     "PERSONA",
     "AnthropicLike",
@@ -69,8 +65,6 @@ __all__ = [
     "parse_json_block",
     "response_content_blocks",
     "tool_result_block",
-    "user_blocks_message",
-    "validate_answer",
     "validate_file_plan",
 ]
 
@@ -141,78 +135,9 @@ a rebuildable index, the ``obsidian://open`` link template, the ``Europe/London`
 timezone, and the concise tone.
 """
 
-DATED_MODEL_FALLBACK: str = "claude-sonnet-4-20250514"
-"""Proven dated Anthropic model id, used as a fallback when a bare alias 404s."""
-
 DEFAULT_MAX_TOKENS: int = 4096
 """Default ``max_tokens`` for a ``messages.create`` call."""
 
-
-# --- JSON schemas the harness validates model output against -----------------
-# These are documentation-grade plain dicts. The authoritative *checks* live in the
-# validators below, which reuse thoth.vault so the rules cannot diverge from disk.
-
-FILE_PLAN_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "required": ["pages"],
-    "properties": {
-        "pages": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": [
-                    "action",
-                    "folder",
-                    "slug",
-                    "frontmatter",
-                    "body",
-                    "wikilinks",
-                ],
-                "properties": {
-                    "action": {"enum": ["create", "update"]},
-                    "folder": {"type": "string"},
-                    "slug": {"type": "string"},
-                    "frontmatter": {"type": "object"},
-                    "body": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "wikilinks": {"type": "array", "minItems": 2},
-                    "embeds": {"type": "array"},
-                    "confidence": {"enum": ["high", "medium", "low"]},
-                },
-            },
-        },
-        "log": {
-            "type": "object",
-            "required": ["action", "subject", "files"],
-        },
-    },
-}
-"""Shape of the curate-pass file-plan the appliance model returns (see SPEC §6).
-
-Each ``pages[*]`` entry maps 1:1 onto :meth:`thoth.vault.Vault.write_page`
-(``action``/``folder``/``slug``/``frontmatter``/``body``), carries ``>= 2`` outbound
-``wikilinks`` and optional ``embeds``, and -- for a reference page
-(:data:`~thoth.vault.SUMMARY_TYPES`) -- an optional one-line ``summary`` the curate pass
-routes into the page's frontmatter (the canonical, rebuildable gloss; ADR 0008). ``log``
-feeds :meth:`thoth.vault.Vault.append_log`. Authoritative validation is
-:func:`validate_file_plan`.
-"""
-
-ANSWER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "required": ["answer", "page_paths", "used_web", "web_sources"],
-    "properties": {
-        "answer": {"type": "string"},
-        "page_paths": {"type": "array", "items": {"type": "string"}},
-        "used_web": {"type": "boolean"},
-        "web_sources": {"type": "array", "items": {"type": "string"}},
-    },
-}
-"""Shape of a blended-answer object (see SPEC §7.1); see :func:`validate_answer`.
-
-``answer`` is the prose; ``page_paths`` are vault-relative pages cited; ``used_web``
-flags whether the web was consulted; ``web_sources`` lists the cited URLs.
-"""
 
 # Valid actions for the file-plan ``log`` block (mirrors thoth.vault.append_log).
 _VALID_LOG_ACTIONS: frozenset[str] = frozenset(
@@ -517,6 +442,22 @@ class LLM:
         return self.client.messages.create(**kwargs)
 
 
+def _field(obj: Any, key: str) -> Any:
+    """Read ``key`` from a dict or an attribute-style object (``None`` when absent).
+
+    The real Anthropic SDK returns responses and content blocks as typed objects;
+    test fakes use plain dicts. Every response-shape helper here reads both through
+    this one accessor.
+    """
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
+def _content_list(response: Any) -> list[Any]:
+    """Return a response's content blocks (``[]`` when there is no content)."""
+    content = _field(response, "content")
+    return [] if content is None else content
+
+
 def extract_text(response: Any) -> str:
     """Concatenate the text from an Anthropic response's content blocks.
 
@@ -530,22 +471,10 @@ def extract_text(response: Any) -> str:
     Returns:
         The concatenated text of every ``text`` block, in order.
     """
-    content = (
-        response.get("content")
-        if isinstance(response, dict)
-        else getattr(response, "content", None)
-    )
-    if content is None:
-        return ""
     parts: list[str] = []
-    for block in content:
-        if isinstance(block, dict):
-            block_type = block.get("type")
-            text = block.get("text")
-        else:
-            block_type = getattr(block, "type", None)
-            text = getattr(block, "text", None)
-        if block_type == "text" and isinstance(text, str):
+    for block in _content_list(response):
+        text = _field(block, "text")
+        if _field(block, "type") == "text" and isinstance(text, str):
             parts.append(text)
     return "".join(parts)
 
@@ -599,14 +528,7 @@ def response_content_blocks(response: Any) -> list[dict[str, Any]]:
     Returns:
         The content blocks as plain dicts, in order (empty when there is no content).
     """
-    content = (
-        response.get("content")
-        if isinstance(response, dict)
-        else getattr(response, "content", None)
-    )
-    if content is None:
-        return []
-    return [_block_as_dict(block) for block in content]
+    return [_block_as_dict(block) for block in _content_list(response)]
 
 
 # ---- tool-use response-shape helpers (tolerant of SDK objects and dict fakes) -----
@@ -626,30 +548,16 @@ def _tool_use_blocks(response: Any) -> list[Any]:
     Returns:
         The list of ``tool_use`` blocks, in order (possibly empty).
     """
-    content = (
-        response.get("content")
-        if isinstance(response, dict)
-        else getattr(response, "content", None)
-    )
-    if content is None:
-        return []
-    blocks: list[Any] = []
-    for block in content:
-        block_type = (
-            block.get("type")
-            if isinstance(block, dict)
-            else getattr(block, "type", None)
-        )
-        if block_type == "tool_use":
-            blocks.append(block)
-    return blocks
+    return [
+        block
+        for block in _content_list(response)
+        if _field(block, "type") == "tool_use"
+    ]
 
 
 def _block_name(block: Any) -> str:
     """Return a ``tool_use`` block's tool ``name`` as a string (``''`` when absent)."""
-    name = (
-        block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
-    )
+    name = _field(block, "name")
     return name if isinstance(name, str) else ""
 
 
@@ -660,15 +568,13 @@ def _block_id(block: Any) -> str:
     carried through verbatim (the Messages API rejects a ``tool_result`` whose
     ``tool_use_id`` matches no prior ``tool_use`` block).
     """
-    value = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
+    value = _field(block, "id")
     return value if isinstance(value, str) else ""
 
 
 def _block_input(block: Any) -> dict[str, Any]:
     """Return a ``tool_use`` block's ``input`` map (``{}`` when absent/ill-typed)."""
-    value = (
-        block.get("input") if isinstance(block, dict) else getattr(block, "input", None)
-    )
+    value = _field(block, "input")
     return value if isinstance(value, dict) else {}
 
 
@@ -737,18 +643,6 @@ def tool_result_block(
     if is_error:
         block["is_error"] = True
     return block
-
-
-def user_blocks_message(blocks: list[dict[str, Any]]) -> Message:
-    """Wrap a list of content blocks (typically ``tool_result``) as a user turn.
-
-    Args:
-        blocks: The content blocks to send as one user turn.
-
-    Returns:
-        A :class:`Message` with ``role='user'`` and structured-block content.
-    """
-    return Message(role="user", content=blocks)
 
 
 # Matches a ```json ... ``` (or bare ``` ... ```) fenced block; group 1 is the body.
@@ -863,7 +757,7 @@ def _check_page(page: object, idx: int, problems: list[str]) -> None:
 
 
 def validate_file_plan(obj: dict[str, Any]) -> None:
-    """Validate a file-plan against :data:`FILE_PLAN_SCHEMA` and the vault contract.
+    """Validate a file-plan against the vault contract.
 
     Reuses :mod:`thoth.vault`'s validators so a passing plan is guaranteed to survive
     :meth:`thoth.vault.Vault.write_page`. Each ``pages[*]`` entry is checked for a known
@@ -911,40 +805,3 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
         raise SchemaValidationError(
             "file plan failed validation: " + "; ".join(problems)
         )
-
-
-def validate_answer(obj: dict[str, Any]) -> None:
-    """Validate a blended-answer object against :data:`ANSWER_SCHEMA`.
-
-    Args:
-        obj: The decoded answer object.
-
-    Raises:
-        SchemaValidationError: listing every problem found.
-    """
-    problems: list[str] = []
-
-    answer = obj.get("answer")
-    if not isinstance(answer, str):
-        problems.append("'answer' must be a string")
-    elif not answer.strip():
-        problems.append("'answer' must not be empty")
-
-    page_paths = obj.get("page_paths")
-    if not isinstance(page_paths, list):
-        problems.append("'page_paths' must be a list")
-    elif not all(isinstance(p, str) for p in page_paths):
-        problems.append("'page_paths' must be a list of strings")
-
-    used_web = obj.get("used_web")
-    if not isinstance(used_web, bool):
-        problems.append("'used_web' must be a boolean")
-
-    web_sources = obj.get("web_sources")
-    if not isinstance(web_sources, list):
-        problems.append("'web_sources' must be a list")
-    elif not all(isinstance(s, str) for s in web_sources):
-        problems.append("'web_sources' must be a list of strings")
-
-    if problems:
-        raise SchemaValidationError("answer failed validation: " + "; ".join(problems))
