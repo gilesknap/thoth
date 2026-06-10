@@ -56,7 +56,6 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import PurePosixPath
-from typing import Any, Protocol
 
 import frontmatter
 import yaml
@@ -64,7 +63,7 @@ import yaml
 from thoth._time import LONDON
 from thoth.config import Config
 from thoth.fmfields import _is_truthy, _page_tags, _parse_date, _str_field
-from thoth.render import render_vault_ref
+from thoth.render import SlackPoster, render_vault_ref
 from thoth.state import HEARTBEAT_MARKERS, MarkerStore
 from thoth.vault import CURATED_DIRS, Vault
 
@@ -124,20 +123,6 @@ _REVIEW_STATUS: str = "review"
 
 class SummaryError(Exception):
     """Raised when a digest cannot be composed (for example a missing vault root)."""
-
-
-class SlackPoster(Protocol):
-    """The slice of the Slack web client used to deliver a digest.
-
-    Only ``chat.postMessage`` is needed; both the real Bolt ``WebClient`` and a test
-    fake satisfy this protocol, so :class:`SummaryEngine` never imports a Slack SDK.
-    """
-
-    def chat_postMessage(  # noqa: N802 - Slack SDK method name
-        self, *, channel: str, text: str, **kwargs: Any
-    ) -> Any:
-        """Post ``text`` to ``channel`` (the Slack ``chat.postMessage`` API)."""
-        ...
 
 
 @dataclass(frozen=True, slots=True)

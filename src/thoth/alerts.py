@@ -39,10 +39,10 @@ import logging
 import traceback
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Protocol
 
 from thoth._time import utc_now
 from thoth.config import Config
+from thoth.render import SlackPoster as AlertPoster
 
 __all__ = ["AlertPoster", "Alerter", "make_alerter"]
 
@@ -51,21 +51,6 @@ _LOG = logging.getLogger("thoth.alerts")
 # Cap how much of a formatted traceback / message is posted so a runaway exception
 # cannot post a multi-megabyte Slack message; the tail (the actual error line) is kept.
 _MAX_DETAIL_CHARS: int = 1500
-
-
-class AlertPoster(Protocol):
-    """The ``chat.postMessage`` slice used to deliver an alert.
-
-    Identical in shape to :class:`thoth.summary.SlackPoster` and
-    :class:`thoth.slack_app.SlackClientLike`; the real Bolt ``WebClient`` and a test
-    fake both satisfy it, so :class:`Alerter` never imports a Slack SDK.
-    """
-
-    def chat_postMessage(  # noqa: N802 - Slack SDK method name
-        self, *, channel: str, text: str, **kwargs: Any
-    ) -> Any:
-        """Post ``text`` to ``channel`` (the Slack ``chat.postMessage`` API)."""
-        ...
 
 
 class Alerter:

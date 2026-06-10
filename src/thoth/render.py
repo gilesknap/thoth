@@ -13,10 +13,30 @@ only about Slack output).
 
 This module imports nothing from the rest of ``thoth`` (and nothing from
 :mod:`thoth.slack_app` / :mod:`thoth.summary`, which both import *it*) so it can be the
-shared leaf with no risk of an import cycle.
+shared leaf with no risk of an import cycle. The same leaf role makes it the home of
+:class:`SlackPoster`, the one ``chat.postMessage`` protocol every Slack output surface
+shares.
 """
 
 from __future__ import annotations
+
+from typing import Any, Protocol
+
+
+class SlackPoster(Protocol):
+    """The ``chat.postMessage`` slice of the Slack web client.
+
+    The one poster protocol shared by every Slack output surface: re-exported as
+    :class:`thoth.summary.SlackPoster` and :class:`thoth.alerts.AlertPoster`, and
+    extended by :class:`thoth.slack_app.SlackClientLike`. The real Bolt ``WebClient``
+    and a test fake both satisfy it, so none of those consumers imports a Slack SDK.
+    """
+
+    def chat_postMessage(  # noqa: N802 - Slack SDK method name
+        self, *, channel: str, text: str, **kwargs: Any
+    ) -> Any:
+        """Post ``text`` to ``channel`` (the Slack ``chat.postMessage`` API)."""
+        ...
 
 
 def render_vault_ref(*, obsidian_uri: str, title: str, path: str) -> str:

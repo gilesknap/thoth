@@ -401,7 +401,7 @@ def run_summary(
     ``WebClient`` from ``config.slack_bot_token``, and posts via
     :meth:`~thoth.summary.SummaryEngine.post`. ``poster_factory`` is injectable so a
     test can substitute a fake poster without the Slack SDK; in production it defaults
-    to :func:`_make_web_client`.
+    to :func:`thoth.alerts._make_web_client`.
 
     Args:
         namespace: The parsed args (``kind`` and ``--skip-when-empty``).
@@ -409,6 +409,7 @@ def run_summary(
         poster_factory: Builds a :class:`~thoth.summary.SlackPoster` from ``config``;
             defaults to a real Slack ``WebClient`` builder.
     """
+    from .alerts import _make_web_client
     from .state import MarkerStore
     from .summary import SummaryEngine
 
@@ -811,20 +812,6 @@ def _make_vault(config: Config) -> Any:
     from .vault import Vault
 
     return Vault(config)
-
-
-def _make_web_client(config: Config) -> Any:
-    """Build a Slack ``WebClient`` from ``config.slack_bot_token`` (lazy import).
-
-    ``slack_sdk`` ships with ``slack_bolt`` (a runtime-only optional dependency absent
-    in CI), so it is imported here, never at module top level. The bot token is required
-    for a summary post; :meth:`~thoth.config.Config.require_slack` raises a clear
-    :class:`~thoth.config.ConfigError` if it is unset.
-    """
-    bot_token, _ = config.require_slack()
-    from slack_sdk import WebClient
-
-    return WebClient(token=bot_token)
 
 
 if __name__ == "__main__":
