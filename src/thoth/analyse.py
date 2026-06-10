@@ -38,7 +38,6 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from thoth.llm import LLM, LLMError, Message, extract_text, parse_json_block
@@ -97,6 +96,20 @@ def image_media_type(ext: str) -> str:
         unrecognised extension (the common phone-screenshot case).
     """
     return _IMAGE_MEDIA_TYPES.get(ext.lower().lstrip("."), _DEFAULT_IMAGE_MEDIA_TYPE)
+
+
+def _base64_source_block(
+    block_type: str, media_type: str, data: bytes
+) -> dict[str, Any]:
+    """A vision/document block carrying ``data`` as transient base64 (ADR 0006)."""
+    return {
+        "type": block_type,
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": base64.standard_b64encode(data).decode("ascii"),
+        },
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,14 +255,7 @@ class Analyser:
         if not images:
             raise ValueError("analyse_images requires at least one image")
         blocks: list[dict[str, Any]] = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": image_media_type(ext),
-                    "data": base64.standard_b64encode(image_bytes).decode("ascii"),
-                },
-            }
+            _base64_source_block("image", image_media_type(ext), image_bytes)
             for image_bytes, ext in images
         ]
         return self._run([*blocks, {"type": "text", "text": _IMAGE_PROMPT}])
@@ -272,14 +278,7 @@ class Analyser:
             thoth.budget.BudgetExceededError: when the daily cap is reached (propagated
                 so the ingest pass defers).
         """
-        block = {
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": "application/pdf",
-                "data": base64.standard_b64encode(pdf_bytes).decode("ascii"),
-            },
-        }
+        block = _base64_source_block("document", "application/pdf", pdf_bytes)
         return self._run([block, {"type": "text", "text": _PDF_PROMPT}])
 
     def _run(self, content: list[dict[str, Any]]) -> Analysis:
@@ -330,14 +329,7 @@ class Analyser:
         Raises:
             Nothing: every failure mode is caught and turned into ``None``.
         """
-        block = {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": image_media_type(ext),
-                "data": base64.standard_b64encode(image_bytes).decode("ascii"),
-            },
-        }
+        block = _base64_source_block("image", image_media_type(ext), image_bytes)
         message = Message(
             role="user",
             content=[block, {"type": "text", "text": _EXCALIDRAW_PROMPT}],
@@ -352,7 +344,7 @@ class Analyser:
         except Exception:  # noqa: BLE001 -- best-effort enhancement, never propagate
             return None
         raw = obj.get("elements")
-        if not isinstance(raw, list) or not raw:
+        if not isinstance(raw, list):
             return None
         specs = [element for element in raw if isinstance(element, dict)]
         if not specs:
@@ -361,16 +353,6 @@ class Analyser:
         if not elements:
             return None
         return _excalidraw_markdown(elements, text_elements)
-
-
-def analyse_image_path(analyser: Analyser, path: Path, *, ext: str) -> Analysis:
-    """Read a staged image file and analyse its bytes (convenience for the ingestor)."""
-    return analyser.analyse_image(path.read_bytes(), ext=ext)
-
-
-def analyse_pdf_path(analyser: Analyser, path: Path) -> Analysis:
-    """Read a staged PDF file and analyse its bytes (convenience for the ingestor)."""
-    return analyser.analyse_pdf(path.read_bytes())
 
 
 _RESULT_SHAPE = (
@@ -602,10 +584,9 @@ def _build_excalidraw_elements(
             geometry[eid] = (x, y, w, h)
             label = _spec_label(spec)
             if label:
-                label_id = _text_block_id(f"{eid}:label")
-                elements.append(_bound_text_element(label_id, label, eid, (x, y, w, h)))
-                _add_bound_element(shape, "text", label_id)
-                text_rows.append({"id": label_id, "text": label})
+                _attach_bound_label(
+                    shape, eid, label, (x, y, w, h), elements, text_rows
+                )
         elif etype == "text":
             label = _spec_label(spec)
             if not label:
@@ -631,13 +612,32 @@ def _build_excalidraw_elements(
                 _add_bound_element(shapes[ref], "arrow", eid)
         label = _spec_label(spec)
         if label:
-            label_id = _text_block_id(f"{eid}:label")
-            elements.append(
-                _bound_text_element(label_id, label, eid, _connector_midbox(element))
+            _attach_bound_label(
+                element, eid, label, _connector_midbox(element), elements, text_rows
             )
-            _add_bound_element(element, "text", label_id)
-            text_rows.append({"id": label_id, "text": label})
     return elements, text_rows
+
+
+def _attach_bound_label(
+    host: dict[str, Any],
+    eid: str,
+    label: str,
+    box: tuple[float, float, float, float],
+    elements: list[dict[str, Any]],
+    text_rows: list[dict[str, str]],
+) -> None:
+    """Attach a label to its host (a shape or a connector) as a *bound* text element.
+
+    One place owns the bound-label invariant: the label gets a deterministic 8-char id
+    (:func:`_text_block_id`, seeded ``{eid}:label``) used identically for the text
+    element's JSON ``id``, the host's ``boundElements`` reference, and the
+    ``## Text Elements`` index row appended to ``text_rows``. ``box`` is the host's
+    ``(x, y, w, h)`` (a connector passes its zero-size midpoint box).
+    """
+    label_id = _text_block_id(f"{eid}:label")
+    elements.append(_bound_text_element(label_id, label, eid, box))
+    _add_bound_element(host, "text", label_id)
+    text_rows.append({"id": label_id, "text": label})
 
 
 def _text_block_id(seed: str) -> str:
