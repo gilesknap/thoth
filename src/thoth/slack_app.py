@@ -48,8 +48,8 @@ Design constraints enforced here:
   straddles a daemon restart is still recognised as already-processed. The in-memory
   set alone is lost on restart; the table survives it.
 
-Only the standard library plus ``thoth`` modules are imported at module level, so the
-module is always import-safe under pytest collection.
+Only the standard library, ``httpx`` (a base dependency) and ``thoth`` modules are
+imported at module level, so the module is always import-safe under pytest collection.
 """
 
 from __future__ import annotations
@@ -57,12 +57,13 @@ from __future__ import annotations
 import logging
 import tempfile
 import time
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
+
+import httpx
 
 from thoth.budget import BudgetExceededError
 from thoth.config import Config, _strip_user_token
@@ -82,6 +83,9 @@ DEDUPE_TTL_SECONDS: float = 3600.0
 # A free-text message whose body, once stripped, begins with one of these prefixes is
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
 _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
+
+# The vault ``source`` value for Slack-originated captures.
+_SOURCE: str = "slack"
 
 # The safe routing verdict used when the gate is bypassed (no classifier wired): route
 # to the vault-only query with no keywords, so the read path greps the raw text -- the
@@ -241,7 +245,7 @@ def render_ingest_report(report: IngestReport) -> str:
             head += " (not yet committed)"
         parts.append(head)
 
-    if report.message and not report.conflict:
+    if report.message:
         parts.append(report.message)
     return "\n".join(parts)
 
@@ -311,12 +315,13 @@ class EventDedupe:
             return False
         if event_id in self._seen:
             return True
-        if self._store is not None:
-            already = self._store.seen(event_id, ttl_seconds=self._ttl)
-            self._seen[event_id] = self._clock()
-            return already
+        already = (
+            self._store.seen(event_id, ttl_seconds=self._ttl)
+            if self._store is not None
+            else False
+        )
         self._seen[event_id] = self._clock()
-        return False
+        return already
 
     def mark(self, event_id: str) -> None:
         """Record ``event_id`` as processed now in the cache and the durable store."""
@@ -408,10 +413,7 @@ class Responder:
 
     def _emit(self, text: str) -> None:
         """Post a fresh reply via the bare ``say``, threading it when set."""
-        if self._thread_ts:
-            self._say(text, thread_ts=self._thread_ts)
-        else:
-            self._say(text)
+        self._say(text, **self._thread_kwargs())
 
     def _thread_kwargs(self) -> dict[str, str]:
         """The ``thread_ts`` kwargs for a client post, or ``{}`` at top level."""
@@ -601,15 +603,15 @@ class Handlers:
         text = str(event.get("text", "")).strip()
         if not text:
             return
-        source = self._source_label()
-        if self._is_capture_text(text):
-            capture = Capture(text=self._strip_capture_prefix(text), source=source)
+        body = self._capture_body(text)
+        if body is not None:
+            capture = Capture(text=body, source=_SOURCE)
             self._do_ingest(capture, responder)
         elif self._looks_like_url(text):
-            capture = Capture(url=text, source=source)
+            capture = Capture(url=text, source=_SOURCE)
             self._do_ingest(capture, responder)
         else:
-            self._route_free_text(text, source, responder)
+            self._route_free_text(text, _SOURCE, responder)
 
     def _ingest_uploaded_files(
         self,
@@ -647,7 +649,7 @@ class Handlers:
         if not isinstance(files, list) or not files:
             responder.say(":warning: That upload carried no files I could read.")
             return
-        source = self._source_label()
+        source = _SOURCE
         caption = str(event.get("text", "")).strip() or None
         infos = [f for f in files if isinstance(f, dict)]
         if len(infos) > 1 and all(self._is_image_file(f) for f in infos):
@@ -855,7 +857,7 @@ class Handlers:
             try:
                 div = git.divergence()
             except (GitSyncError, OSError):  # pragma: no cover - divergence is total
-                ahead, since = -1, None
+                pass
             else:
                 ahead, since = div.commits_ahead, div.since
         self.alerter.alert_unpushed_divergence(
@@ -888,10 +890,6 @@ class Handlers:
             responder.finish(f":x: Could not answer that: {exc}")
             return
         responder.finish(render_query_result(result))
-
-    def _source_label(self) -> str:
-        """The vault ``source`` value for Slack-originated captures."""
-        return "slack"
 
     @staticmethod
     def _channel(event: dict[str, Any]) -> str:
@@ -958,19 +956,19 @@ class Handlers:
         return text.startswith("http://") or text.startswith("https://")
 
     @staticmethod
-    def _is_capture_text(text: str) -> bool:
-        """Return ``True`` iff the text carries an explicit capture prefix."""
-        lowered = text.lower()
-        return any(lowered.startswith(prefix) for prefix in _CAPTURE_PREFIXES)
+    def _capture_body(text: str) -> str | None:
+        """Return the body of an explicitly-prefixed capture message, else ``None``.
 
-    @staticmethod
-    def _strip_capture_prefix(text: str) -> str:
-        """Strip the leading ``capture:``/``note:``/``save:`` marker from text."""
+        A leading ``capture:``/``note:``/``save:`` marker is an explicit "save this
+        thought" signal: the marker is stripped and the (possibly empty) remainder
+        returned. Text without a marker yields ``None`` -- it is not an explicit
+        capture and routes elsewhere.
+        """
         lowered = text.lower()
         for prefix in _CAPTURE_PREFIXES:
             if lowered.startswith(prefix):
                 return text[len(prefix) :].strip()
-        return text
+        return None
 
     @staticmethod
     def _is_image_file(file_info: dict[str, Any]) -> bool:
@@ -1018,11 +1016,14 @@ class Handlers:
             raise SlackError("Slack client has no token to download the file")
         if not url.startswith("https://"):
             raise SlackError(f"refusing to download a non-https file URL: {url!r}")
-        request = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {token}"}
+        response = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            follow_redirects=True,
         )
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            return bytes(response.read())
+        response.raise_for_status()
+        return response.content
 
 
 def _build_handlers(
