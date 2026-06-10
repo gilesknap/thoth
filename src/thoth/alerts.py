@@ -37,7 +37,8 @@ from __future__ import annotations
 
 import logging
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 from thoth._time import utc_now
@@ -259,6 +260,34 @@ def _make_web_client(config: Config) -> AlertPoster:
     from slack_sdk import WebClient
 
     return WebClient(token=bot_token)
+
+
+@contextmanager
+def _cron_alerting(where: str, config: Config) -> Iterator[None]:
+    """Report a cron-entrypoint crash to the errors-to-Slack target, then re-raise.
+
+    A one-shot cron job that dies only writes to its ``/var/log`` file, which nobody
+    watches on an isolated VPS (issue #15). This wraps the job body so an unhandled
+    exception is posted to the alert target (:class:`Alerter`, best-effort)
+    before being re-raised -- so the cron log still records the non-zero exit, and a
+    human gets a Slack message. Building the alerter is itself guarded: a failure to
+    even construct it must not mask the original error.
+
+    Args:
+        where: A short label for the failing entrypoint (e.g. ``"cron: reindex"``).
+        config: The frozen runtime config (resolves the alert target + bot token).
+
+    Yields:
+        ``None``; the caller runs its job body inside the ``with`` block.
+    """
+    try:
+        yield
+    except BaseException as exc:  # noqa: BLE001 - report ANY crash, then re-raise
+        try:
+            make_alerter(config).alert_exception(where, exc)
+        except Exception:  # noqa: BLE001 - alerting must never mask the real error
+            pass
+        raise
 
 
 def _iso(when: datetime) -> str:
