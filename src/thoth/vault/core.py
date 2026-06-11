@@ -582,15 +582,6 @@ class Vault:
             encoding="utf-8",
         )
 
-    def embed_asset_markdown(self, asset_filename: str) -> str:
-        """Return the Obsidian embed string ``![[<asset_filename>]]`` (validated).
-
-        Raises:
-            SlugError: if ``asset_filename`` is not a valid asset filename.
-        """
-        self.validate_asset_filename(asset_filename)
-        return f"![[{asset_filename}]]"
-
     # ---- internals ---------------------------------------------------------------
 
     def _validate_common_fields(self, meta: dict[str, object]) -> None:

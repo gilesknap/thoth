@@ -17,7 +17,6 @@ dependencies = [
     "httpx",
     "python-dotenv",
     "python-frontmatter",
-    "python-slugify",
     "pyyaml",
     "tenacity",
     "tzdata",
