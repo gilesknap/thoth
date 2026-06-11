@@ -394,12 +394,14 @@ class Handlers:
         try:
             report = self.ingestor.ingest(capture, on_phase=on_phase)
         except VaultConflictError as exc:
+            logger.warning("capture conflict: %s", exc)
             responder.finish(
                 f":warning: *Vault conflict* - {exc}. Resolve in Obsidian, then retry."
             )
             self._alert_divergence(str(exc))
             return
         except IngestError as exc:
+            logger.warning("capture failed: %s", exc)
             responder.finish(f":x: Could not file that: {exc}")
             return
         if report.conflict:

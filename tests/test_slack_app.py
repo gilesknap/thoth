@@ -933,6 +933,46 @@ def test_handle_message_ingest_error_is_fail_loud(config: Config) -> None:
     assert "bad file plan" in say.messages[0]
 
 
+def test_handle_message_ingest_error_logs_warning(
+    config: Config, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed capture leaves a WARNING in the journal, not just a Slack reply."""
+    ing = FakeIngestor(error=IngestError("bad file plan"))
+    handlers, _, _ = _handlers(config, ingestor=ing)
+    say = Recorder()
+    with caplog.at_level("WARNING", logger="thoth.slack_app"):
+        handlers.handle_message(
+            {"user": ALLOWED, "text": "https://example.com", "ts": "7.8"}, say
+        )
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "capture failed" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "bad file plan" in warnings[0].getMessage()
+
+
+def test_handle_message_vault_conflict_logs_warning(
+    config: Config, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A vault-conflict capture also leaves a WARNING in the journal."""
+    ing = FakeIngestor(error=VaultConflictError("VAULT CONFLICT on entities/foo.md"))
+    handlers, _, _ = _handlers(config, ingestor=ing)
+    say = Recorder()
+    with caplog.at_level("WARNING", logger="thoth.slack_app"):
+        handlers.handle_message(
+            {"user": ALLOWED, "text": "https://example.com", "ts": "8.9"}, say
+        )
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "capture conflict" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "entities/foo.md" in warnings[0].getMessage()
+
+
 def test_handle_message_vault_conflict_named_path(config: Config) -> None:
     """A VaultConflictError from the ingestor is rendered fail-loud with its detail."""
     ing = FakeIngestor(error=VaultConflictError("VAULT CONFLICT on entities/foo.md"))

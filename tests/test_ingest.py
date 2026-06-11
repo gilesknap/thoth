@@ -3160,6 +3160,61 @@ def test_curate_files_page_with_nbsp_and_nested_bullets(
     assert "**bold**" in page_text
 
 
+def test_curate_unwraps_string_encoded_pages_array(harness: IngestHarness) -> None:
+    """A ``pages`` value JSON-encoded as a STRING is unwrapped to the decoded list.
+
+    Live testing exposed a stochastic Anthropic slip: the forced ``submit_file_plan``
+    tool call sometimes returns ``"pages": "[{...}]"`` despite the schema declaring an
+    array. The deterministic unwrap decodes it so the capture files on the first
+    attempt instead of burning the corrective retry on a known model slip.
+    """
+    plan_input = _file_plan_input(slug="string-pages")
+    wrapped = dict(plan_input)
+    wrapped["pages"] = json.dumps(plan_input["pages"])
+    client = _ScriptedClient.from_responses(
+        _tool_use_response("submit_file_plan", dict(wrapped)),
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    # Unit shape: the parse helper returns the plan with pages already decoded.
+    parsed = ingestor._parse_and_validate_plan(
+        _tool_use_response("submit_file_plan", dict(wrapped))
+    )
+    assert parsed["pages"] == plan_input["pages"]
+    # End-to-end: the same wrapped response files successfully, first try.
+    cls = Classification(page_type="note", slug="string-pages", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    plan = ingestor.curate(Capture(text="x"), cls, raw, [])
+    assert plan["_written"] == ["notes/string-pages.md"]
+    assert len(client.messages.calls) == 1  # no repair turn burned
+
+
+def test_curate_non_json_string_pages_still_rejected(harness: IngestHarness) -> None:
+    """A ``pages`` string that is not JSON (or not a list) stays with validation.
+
+    The unwrap only applies when the string decodes to a list; anything else is left
+    untouched so ``validate_file_plan`` rejects it and the existing repair loop (and
+    final abort) handles it exactly as before.
+    """
+    client = _ScriptedClient.from_responses(
+        _tool_use_response("submit_file_plan", {"pages": "not json at all"}),
+    )
+    ingestor = _build_ingestor(
+        harness,
+        client=client,
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+    )
+    cls = Classification(page_type="note", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    with pytest.raises(IngestError, match="'pages' must be a list"):
+        ingestor.curate(Capture(text="x"), cls, raw, [])
+
+
 def test_curate_prompt_inlines_extracted_body_for_audio(
     harness: IngestHarness,
 ) -> None:

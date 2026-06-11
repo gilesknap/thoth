@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -337,8 +338,11 @@ class _CuratePass(_IngestorBase):
         The curate pass FORCES the ``submit_file_plan`` tool, so the plan arrives as a
         structured ``tool_use.input`` dict (escaping handled by the SDK -- no more
         invalid-JSON aborts, issue #110). A response with no such tool call is treated
-        like a parse failure: recoverable by the repair loop. ``validate_file_plan``
-        stays the authoritative gate (tool-use guarantees valid JSON, not a valid plan).
+        like a parse failure: recoverable by the repair loop. A ``pages`` value the
+        model stochastically JSON-encoded as a STRING (a known slip despite the array
+        schema) is deterministically unwrapped here rather than burning the corrective
+        retry. ``validate_file_plan`` stays the authoritative gate (tool-use guarantees
+        valid JSON, not a valid plan).
 
         Raises:
             IngestError: if the model did not call the tool or the plan fails
@@ -348,6 +352,15 @@ class _CuratePass(_IngestorBase):
         plan = extract_tool_use(response, "submit_file_plan")
         if plan is None:
             raise IngestError("curate did not call submit_file_plan tool")
+        pages = plan.get("pages")
+        if isinstance(pages, str):
+            try:
+                decoded = json.loads(pages)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, list):
+                plan["pages"] = decoded
+                logger.info("curate: unwrapped string-encoded 'pages' array")
         try:
             validate_file_plan(plan)
         except SchemaValidationError as exc:
