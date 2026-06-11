@@ -102,3 +102,16 @@ problem discovered in passing rather than folding it into the current change.
   back-and-forth branches.
 - For boundary/SDK changes, verify live before merging (see the `thoth-testing`
   skill).
+
+### Stacked PRs — GitHub mechanics that bite
+
+- Deleting a branch that is the **base of another open PR closes that PR** (no
+  auto-retarget), and a PR whose base branch is gone **cannot be reopened**.
+  Retarget dependents FIRST — `gh api -X PATCH repos/<o>/<r>/pulls/<N> -f base=main`
+  (`gh pr edit --base` currently aborts on a projectCards GraphQL deprecation) —
+  then delete the base branch.
+- PR checks build a synthetic merge of head into the **base tip at trigger time**.
+  A fix landed on the base needs a **freshly triggered** run to be picked up;
+  `gh run rerun` replays the original merge snapshot and proves nothing. For a
+  stack, ripple the fix upward with plain merge commits (base → each branch) —
+  no rebase needed, and each push triggers fresh runs.
