@@ -1,0 +1,1381 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Architecture overview &#8212; thoth 0.9.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=0790524f97105ba85085" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=0790524f97105ba85085"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
+
+    <script src="../_static/documentation_options.js?v=39bb1c6d"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=30646c52"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+    <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
+
+
+
+
+
+const initStyles = () => {
+    const defaultStyle = document.createElement('style');
+    defaultStyle.textContent = `pre.mermaid {
+    /* Same as .mermaid-container > pre */
+    display: block;
+    width: 100%;
+}
+
+pre.mermaid > svg {
+    /* Same as .mermaid-container > pre > svg */
+    height: 500px;
+    width: 100%;
+    max-width: 100% !important;
+}`;
+    document.head.appendChild(defaultStyle);
+
+    const fullscreenStyle = document.createElement('style');
+    fullscreenStyle.textContent = `.mermaid-container {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+}
+
+.mermaid-container > pre {
+    display: block;
+    width: 100%;
+}
+
+.mermaid-container > pre > svg {
+    height: 500px;
+    width: 100%;
+    max-width: 100% !important;
+}
+
+.mermaid-fullscreen-btn {
+    width: 28px;
+    height: 28px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    color: #333;
+}
+
+.mermaid-fullscreen-btn:hover {
+    opacity: 100% !important;
+    background: rgba(255, 255, 255, 1);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+    transform: scale(1.1);
+}
+
+.mermaid-fullscreen-btn.dark-theme {
+    background: rgba(50, 50, 50, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: #e0e0e0;
+}
+
+.mermaid-fullscreen-btn.dark-theme:hover {
+    background: rgba(60, 60, 60, 1);
+    box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);
+}
+
+.mermaid-fullscreen-modal {
+    display: none;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 95vw;
+    height: 100vh;
+    background: rgba(255, 255, 255, 0.98);
+    z-index: 9999;
+    padding: 20px;
+    overflow: auto;
+}
+
+.mermaid-fullscreen-modal.dark-theme {
+    background: rgba(0, 0, 0, 0.98);
+}
+
+.mermaid-fullscreen-modal.active {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mermaid-container-fullscreen {
+    position: relative;
+    width: 95vw;
+    height: 90vh;
+    max-width: 95vw;
+    max-height: 90vh;
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mermaid-container-fullscreen.dark-theme {
+    background: #1a1a1a;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+}
+
+.mermaid-container-fullscreen pre.mermaid {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mermaid-container-fullscreen .mermaid svg {
+    height: 100% !important;
+    width: 100% !important;
+    cursor: grab;
+}
+
+.mermaid-fullscreen-close {
+    position: fixed !important;
+    top: 20px !important;
+    right: 20px !important;
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    transition: all 0.2s;
+    font-size: 24px;
+    line-height: 1;
+    color: #333;
+}
+
+.mermaid-fullscreen-close:hover {
+    background: white;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    transform: scale(1.1);
+}
+
+.mermaid-fullscreen-close.dark-theme {
+    background: rgba(50, 50, 50, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e0e0e0;
+}
+
+.mermaid-fullscreen-close.dark-theme:hover {
+    background: rgba(60, 60, 60, 1);
+    box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);
+}
+
+.mermaid-fullscreen-modal .mermaid-fullscreen-btn {
+    display: none !important;
+}`;
+    document.head.appendChild(fullscreenStyle);
+}
+
+// Detect if page has dark background
+const isDarkTheme = () => {
+    // We use a set of heuristics:
+    // 1. Check for common dark mode classes or attributes
+    // 2. Check computed background color brightness
+    if (document.documentElement.classList.contains('dark') ||
+        document.documentElement.getAttribute('data-theme') === 'dark' ||
+        document.body.classList.contains('dark') ||
+        document.body.getAttribute('data-theme') === 'dark') {
+        // console.log("Dark theme detected via class/attribute");
+        return true;
+    }
+    if (document.documentElement.classList.contains('light') ||
+        document.documentElement.getAttribute('data-theme') === 'light' ||
+        document.body.classList.contains('light') ||
+        document.body.getAttribute('data-theme') === 'light') {
+        // console.log("Light theme detected via class/attribute");
+        return false;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        // console.log("Dark theme detected via prefers-color-scheme");
+        return true;
+    }
+    const bgColor = window.getComputedStyle(document.body).backgroundColor;
+    const match = bgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        const r = parseInt(match[1]);
+        const g = parseInt(match[2]);
+        const b = parseInt(match[3]);
+        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+        // console.log("Background color brightness:", brightness);
+        return brightness < 128;
+    }
+    // console.log("No dark or light theme detected, defaulting to light theme");
+    return false;
+};
+
+let darkTheme = isDarkTheme();
+let modal = null;
+let modalContent = null;
+let previousScrollOffset = [window.scrollX, window.scrollY];
+
+const runMermaid = async (rerun) => {
+    console.log("Running mermaid diagrams, rerun =", rerun);
+    // clear all existing mermaid charts
+    let all_mermaids = document.querySelectorAll(".mermaid");
+
+    if (rerun) {
+        all_mermaids.forEach((el) => {
+            if(!el.hasAttribute("data-original-code")) {
+                // store original code
+                // console.log(`Storing original code for first run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+            if(el.getAttribute("data-processed") === "true") {
+                // remove and restore original
+                el.removeAttribute("data-processed");
+                // console.log(`Restoring original code for re-run: `, el.getAttribute('data-original-code'));
+                el.innerHTML = el.getAttribute('data-original-code');
+            } else {
+                // store original code
+                // console.log(`Storing original code for re-run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+        });
+        await mermaid.run();
+    }
+
+    all_mermaids = document.querySelectorAll(".mermaid");
+    const mermaids_processed = document.querySelectorAll(".mermaid[data-processed='true']");
+
+    if ("False" === "True") {
+        const mermaids_to_add_zoom = -1 === -1 ? all_mermaids.length : -1;
+        if(mermaids_to_add_zoom > 0) {
+            var svgs = d3.selectAll("");
+            if(all_mermaids.length !== mermaids_processed.length) {
+                setTimeout(() => runMermaid(false), 200);
+                return;
+            } else if(svgs.size() !== mermaids_to_add_zoom) {
+                setTimeout(() => runMermaid(false), 200);
+                return;
+            } else {
+                svgs.each(function() {
+                    var svg = d3.select(this);
+                    svg.html("<g class='wrapper'>" + svg.html() + "</g>");
+                    var inner = svg.select("g");
+                    var zoom = d3.zoom().on("zoom", function(event) {
+                        inner.attr("transform", event.transform);
+                    });
+                    svg.call(zoom);
+                });
+            }
+        }
+    } else if(all_mermaids.length !== mermaids_processed.length) {
+        // Wait for mermaid to process all diagrams
+        setTimeout(() => runMermaid(false), 200);
+        return;
+    }
+
+    // Stop here if not adding fullscreen capability
+    if ("True" !== "True") return;
+
+    if (modal !== null ) {
+        // Destroy existing modal
+        modal.remove();
+        modal = null;
+        modalContent = null;
+    }
+
+    modal = document.createElement('div');
+    modal.className = 'mermaid-fullscreen-modal' + (darkTheme ? ' dark-theme' : '');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Fullscreen diagram viewer');
+    modal.innerHTML = `
+        <button class="mermaid-fullscreen-close${darkTheme ? ' dark-theme' : ''}" aria-label="Close fullscreen">✕</button>
+        <div class="mermaid-container-fullscreen${darkTheme ? ' dark-theme' : ''}"></div>
+    `;
+    document.body.appendChild(modal);
+
+    modalContent = modal.querySelector('.mermaid-container-fullscreen');
+    const closeBtn = modal.querySelector('.mermaid-fullscreen-close');
+
+    const closeModal = () => {
+        modal.classList.remove('active');
+        modalContent.innerHTML = '';
+        document.body.style.overflow = ''
+        window.scrollTo({left: previousScrollOffset[0], top: previousScrollOffset[1], behavior: 'instant'});
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('active')) {
+            closeModal();
+        }
+    });
+
+    document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+        if (mermaidDiv.parentNode.classList.contains('mermaid-container') ||
+            mermaidDiv.closest('.mermaid-fullscreen-modal')) {
+            // Already processed, adjust button class if needed
+            const existingBtn = mermaidDiv.parentNode.querySelector('.mermaid-fullscreen-btn');
+            if (existingBtn) {
+                existingBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+            }
+            return;
+        }
+
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        mermaidDiv.parentNode.insertBefore(container, mermaidDiv);
+        container.appendChild(mermaidDiv);
+
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+        fullscreenBtn.setAttribute('aria-label', 'View diagram in fullscreen');
+        fullscreenBtn.textContent = '⛶';
+        fullscreenBtn.style.opacity = '50%';
+
+        // Calculate dynamic position based on diagram's margin and padding
+        const diagramStyle = window.getComputedStyle(mermaidDiv);
+        const marginTop = parseFloat(diagramStyle.marginTop) || 0;
+        const marginRight = parseFloat(diagramStyle.marginRight) || 0;
+        const paddingTop = parseFloat(diagramStyle.paddingTop) || 0;
+        const paddingRight = parseFloat(diagramStyle.paddingRight) || 0;
+        fullscreenBtn.style.top = `${marginTop + paddingTop + 4}px`;
+        fullscreenBtn.style.right = `${marginRight + paddingRight + 4}px`;
+
+        fullscreenBtn.addEventListener('click', () => {
+            previousScrollOffset = [window.scroll, window.scrollY];
+            const clone = mermaidDiv.cloneNode(true);
+            modalContent.innerHTML = '';
+            modalContent.appendChild(clone);
+
+            const svg = clone.querySelector('svg');
+            if (svg) {
+                svg.removeAttribute('width');
+                svg.removeAttribute('height');
+                svg.style.width = '100%';
+                svg.style.height = 'auto';
+                svg.style.maxWidth = '100%';
+                svg.style.sdisplay = 'block';
+
+                if ("False" === "True") {
+                    setTimeout(() => {
+                        const g = svg.querySelector('g');
+                        if (g) {
+                            var svgD3 = d3.select(svg);
+                            svgD3.html("<g class='wrapper'>" + svgD3.html() + "</g>");
+                            var inner = svgD3.select("g");
+                            var zoom = d3.zoom().on("zoom", function(event) {
+                                inner.attr("transform", event.transform);
+                            });
+                            svgD3.call(zoom);
+                        }
+                    }, 100);
+                }
+            }
+
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        });
+        container.appendChild(fullscreenBtn);
+    });
+};
+
+const load = async () => {
+    initStyles();
+
+    await runMermaid(true);
+
+    const reRunIfThemeChanges = async () => {
+        const newDarkTheme = isDarkTheme();
+        if (newDarkTheme !== darkTheme) {
+            darkTheme = newDarkTheme;
+            console.log("Theme change detected, re-running mermaid with", darkTheme ? "dark" : "default", "theme");
+            await mermaid.initialize(
+                {...JSON.parse(
+                    `{"startOnLoad": false}`
+                ),
+                ...{ darkMode: darkTheme, theme: darkTheme ? 'dark' : 'default' },
+                }
+            );
+            await runMermaid(true);
+        }
+    };
+
+    // Update theme classes when theme changes
+    const themeObserver = new MutationObserver(reRunIfThemeChanges);
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+    themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+};
+
+
+
+
+
+console.log("Initializing mermaid with", darkTheme ? "dark" : "default", "theme");
+mermaid.initialize(
+    {...JSON.parse(
+        `{"startOnLoad": false}`
+    ),
+    ...{ darkMode: darkTheme, theme: darkTheme ? 'dark' : 'default' },
+    }
+);
+
+window.addEventListener("load", load);
+window.runMermaid = runMermaid;</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/architecture';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.9.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="icon" href="../_static/dls-logo.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Architecture review notes" href="architecture-review.html" />
+    <link rel="prev" title="Explanations" href="../explanations.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.9.0" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/dls-logo.svg" class="logo__image only-light" alt=""/>
+    <img src="../_static/dls-logo.svg" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">thoth</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../tutorials.html">
+    Tutorials
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../how-to.html">
+    How-to Guides
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../explanations.html">
+    Explanations
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../reference.html">
+    Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/gilesknap/thoth" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/thoth" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fas fa-cube fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../tutorials.html">
+    Tutorials
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../how-to.html">
+    How-to Guides
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../explanations.html">
+    Explanations
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../reference.html">
+    Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/gilesknap/thoth" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/thoth" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fas fa-cube fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item pst-sidebar-collapse"><button id="pst-collapse-sidebar-button" aria-expanded="true" aria-controls="pst-primary-sidebar"><svg class="pst-icon svg-inline--fa" role="img" aria-hidden="true" focusable="false" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <path fill="currentColor" d="M3 15.5C2.36232 15.5 1.74874 15.2564 1.28478 14.8189C0.820828 14.3815 0.541576 13.7832 0.504167 13.1467L0.5 13L0.5 3C0.499965 2.36232 0.743605 1.74874 1.18107 1.28478C1.61854 0.820828 2.21676 0.541576 2.85333 0.504167L3 0.5L13 0.5C13.6377 0.499965 14.2513 0.743605 14.7152 1.18107C15.1792 1.61854 15.4584 2.21676 15.4958 2.85333L15.5 3L15.5 13C15.5 13.6377 15.2564 14.2513 14.8189 14.7152C14.3815 15.1792 13.7832 15.4584 13.1467 15.4958L13 15.5L3 15.5ZM3 13.8333L10.5 13.8333L10.5 2.16667L3 2.16667C2.79589 2.16669 2.59889 2.24163 2.44636 2.37726C2.29383 2.5129 2.19638 2.69979 2.1725 2.9025L2.16667 3L2.16667 13C2.16669 13.2041 2.24163 13.4011 2.37726 13.5536C2.5129 13.7062 2.69979 13.8036 2.9025 13.8275L3 13.8333ZM6.65583 10.325L6.5775 10.2558L4.91083 8.58917C4.76735 8.44567 4.68116 8.25476 4.66843 8.05223C4.65569 7.84971 4.71729 7.6495 4.84167 7.48917L4.91083 7.41083L6.5775 5.74417C6.72747 5.59471 6.9287 5.50794 7.14032 5.50148C7.35194 5.49502 7.55809 5.56935 7.7169 5.70937C7.8757 5.8494 7.97525 6.04463 7.99533 6.25539C8.01541 6.46616 7.95451 6.67667 7.825 6.84417L7.75583 6.9225L6.67917 8L7.75583 9.0775C7.89931 9.22099 7.98551 9.41191 7.99824 9.61443C8.01097 9.81695 7.94938 10.0172 7.825 10.1775L7.75583 10.2558C7.61234 10.3993 7.42142 10.4855 7.2189 10.4982C7.01638 10.511 6.81617 10.4494 6.65583 10.325Z"/>
+  </svg>
+  <span class="pst-collapse-sidebar-label">Collapse Sidebar</span>
+  <span class="pst-expand-sidebar-label">Expand Sidebar</span>
+</button></div>
+        <div class="sidebar-primary-item">
+
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Architecture overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture-review.html">Architecture review notes</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="decisions.html">Architectural Decision Records</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
+</ul>
+</details></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../explanations.html" class="nav-link">Explanations</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Architecture overview</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="architecture-overview">
+<h1>Architecture overview<a class="headerlink" href="#architecture-overview" title="Link to this heading">#</a></h1>
+<p>thoth is a self-hostable personal knowledge-management appliance. You send messages
+and files to a Slack bot; an LLM pipeline classifies, curates, and files them as
+clean Markdown notes into an Obsidian vault backed by git. Claude Code (or
+claude.ai) can then query that knowledge base through an MCP
+server — no separate web UI, no proprietary database, no lock-in.</p>
+<p>Two principles drive every design decision:</p>
+<ul class="simple">
+<li><p><strong>The vault is canonical.</strong> Everything else — the semantic index, the SQLite
+state, the LLM calls — is a disposable, rebuildable projection of the
+plain-Markdown git repository. Lose the index; rebuild it. Lose the process;
+restart it. The knowledge is always in the vault.</p></li>
+<li><p><strong>The tool surface is closed.</strong> The appliance LLM has no shell and no arbitrary
+filesystem access — only a fixed set of validated tools. Prompt-injection
+from ingested web pages can, at worst, mis-classify a note; it cannot execute
+commands or exfiltrate data. Security by construction, not by guard-rails.</p></li>
+</ul>
+<section id="slack-ingest-pipeline">
+<h2>Slack ingest pipeline<a class="headerlink" href="#slack-ingest-pipeline" title="Link to this heading">#</a></h2>
+<p>When you drop a message or file into Slack, thoth runs it through eight bounded,
+validated passes. Critically, the raw content is persisted to the vault <em>before</em>
+any LLM call — so nothing is lost if the process restarts mid-flight.</p>
+<pre  class="mermaid">
+        flowchart TB
+    slack([&quot;Slack&lt;br&gt;(Bolt Socket-Mode)&quot;])
+    slack --&gt; sa[&quot;slack_app/&lt;br&gt;handlers · dedupe&quot;]
+    sa --&gt; ig{&quot;intent.py&lt;br&gt;Claude Haiku&lt;br&gt;classify intent&quot;}
+    ig --&gt;|capture| ing[&quot;ingest/&lt;br&gt;8-pass pipeline&quot;]
+    ig --&gt;|query| qry[&quot;query/&quot;]
+    ing --&gt; ext[&quot;extract.py&lt;br&gt;Firecrawl · Whisper&lt;br&gt;fetch URLs · transcribe audio&quot;]
+    ing --&gt; an[&quot;analyse/&lt;br&gt;vision: kind · transcribe&lt;br&gt;Excalidraw via Opus&quot;]
+    ing --&gt; llm[&quot;llm/&lt;br&gt;Claude Sonnet API&lt;br&gt;classify · curate&quot;]
+    an --&gt; llm
+    ing --&gt; va[&quot;vault/&lt;br&gt;path-confined writes&lt;br&gt;schema validation&quot;]
+    ing --&gt; hs[&quot;hindsight.py&lt;br&gt;hindsight-api HTTP&lt;br&gt;semantic index&quot;]
+    va --&gt; gs[&quot;git_sync.py&lt;br&gt;vault-pull · vault-commit&quot;]
+    gs --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
+    hs -.-&gt; ov
+    </pre><p><strong>The eight passes:</strong> <code class="docutils literal notranslate"><span class="pre">persist_inbound</span></code> (durable raw hold before any LLM call) →
+<code class="docutils literal notranslate"><span class="pre">classify</span></code> → <code class="docutils literal notranslate"><span class="pre">capture_raw</span></code> → <code class="docutils literal notranslate"><span class="pre">fetch_candidates</span></code> (fetch URLs found in the message)
+→ <code class="docutils literal notranslate"><span class="pre">curate</span></code> (Sonnet emits a schema-validated JSON file-plan) → <code class="docutils literal notranslate"><span class="pre">retain</span></code> (Hindsight
+fact-extraction) → <code class="docutils literal notranslate"><span class="pre">commit</span></code> (git pull/push) → <code class="docutils literal notranslate"><span class="pre">report</span></code> (Slack reply).</p>
+<p>The <strong>intent gate</strong> (one cheap Haiku call) routes bare free-text to <em>capture</em> or
+<em>query</em>, with query as the safe fallback. Explicit prefixes (<code class="docutils literal notranslate"><span class="pre">capture:</span></code>, <code class="docutils literal notranslate"><span class="pre">note:</span></code>,
+raw URLs, or file uploads) skip the gate entirely and go straight to ingest.</p>
+<p>A binary capture (image or PDF) passes through the <strong>analyse seam</strong>
+(<code class="docutils literal notranslate"><span class="pre">thoth.analyse</span></code>) during <code class="docutils literal notranslate"><span class="pre">capture_raw</span></code>: one vision call returns the extracted
+text, a routing hint, entities/concepts, and an image <em>kind</em> (<code class="docutils literal notranslate"><span class="pre">diagram</span></code> /
+<code class="docutils literal notranslate"><span class="pre">document</span></code> / <code class="docutils literal notranslate"><span class="pre">screenshot</span></code> / <code class="docutils literal notranslate"><span class="pre">photo</span></code>). That kind drives best-effort, kind-specific
+handling — a diagram becomes an editable <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> saved alongside the
+original (a second vision call, pinned to <strong>Opus</strong> by default because
+reconstructing layout into valid Excalidraw JSON needs spatial reasoning), and a
+document gets a faithful structured-markdown transcription in its body. The
+original is always kept and a derivation failure never defers the capture
+(ADR-0009). See <a class="reference internal" href="#models"><span class="std std-ref">Models</span></a> for the per-call model strategy.</p>
+<section id="what-you-can-capture">
+<h3>What you can capture<a class="headerlink" href="#what-you-can-capture" title="Link to this heading">#</a></h3>
+<p>A single Slack message (or <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span> <span class="pre">&lt;path&gt;</span></code>) accepts any of:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Input</p></th>
+<th class="head"><p>Handling</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Text</strong></p></td>
+<td><p>Filed as a note; the intent gate routes bare free-text to capture / query.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>URL</strong></p></td>
+<td><p>Fetched server-side and extracted to clean Markdown (Firecrawl), SSRF-guarded.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Image</strong> (PNG/JPG/…)</p></td>
+<td><p>One vision call: OCR text, routing hint, entities, and an image <em>kind</em>. Images over 2 MB are downscaled first (<a class="reference internal" href="../reference/configuration.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">THOTH_IMAGE_RESIZE_THRESHOLD_BYTES</span></code></span></a>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>PDF</strong></p></td>
+<td><p>Vision analysis → text + a structured-Markdown transcription in the page body.</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Audio / voice</strong></p></td>
+<td><p>Transcribed locally via the Whisper CLI, then filed as text (the title comes from the speech).</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Hand-drawn diagram</strong></p></td>
+<td><p>Reconstructed into an editable <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> scene alongside the original (ADR-0009).</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Multi-image batch</strong></p></td>
+<td><p>All images in one message → one curated page, shared summary/tags, every image embedded (capped per call by <a class="reference internal" href="../reference/configuration.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">THOTH_MAX_ANALYSE_IMAGES</span></code></span></a>).</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="mcp-query-pipeline">
+<h2>MCP query pipeline<a class="headerlink" href="#mcp-query-pipeline" title="Link to this heading">#</a></h2>
+<p>Claude Code and claude.ai reach the vault through seven <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tools served
+over a bearer-authenticated FastMCP HTTP socket (<code class="docutils literal notranslate"><span class="pre">thoth-mcp.service</span></code>, loopback
+<code class="docutils literal notranslate"><span class="pre">127.0.0.1:8765</span></code>, fronted by a cloudflared tunnel — see
+<a class="reference internal" href="../how-to/mcp-server-setup.html"><span class="doc">Set up the MCP server</span></a> and ADR
+<a class="reference internal" href="decisions/0011-mcp-http-transport-and-tiered-auth.html"><span class="doc">11. MCP HTTP transport with tiered authentication</span></a>). The same
+path-confinement and schema-validation rules apply here as in ingest — the MCP
+surface cannot escape the vault either.</p>
+<pre  class="mermaid">
+        flowchart TB
+    cc([&quot;Claude Code&lt;br&gt;or claude.ai&quot;])
+    cc --&gt; mcp[&quot;mcp_server/&lt;br&gt;FastMCP · 7 pkm_* tools&quot;]
+    mcp --&gt; qry[&quot;query/&lt;br&gt;vault-only retrieval&lt;br&gt;grep ∪ recall · RRF blend&quot;]
+    qry --&gt; va[&quot;vault/&lt;br&gt;read-only&quot;]
+    qry --&gt; hs[&quot;hindsight.py&lt;br&gt;hindsight-api recall&quot;]
+    va --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
+    hs -.-&gt; ov
+    </pre><p><code class="docutils literal notranslate"><span class="pre">thoth.query</span></code> blends <strong>two retrieval sources</strong> and fuses them with <strong>Reciprocal
+Rank Fusion</strong> (RRF, <code class="docutils literal notranslate"><span class="pre">K=60</span></code>): a <em>structural</em> pass (grep + wikilink traversal) and
+a <em>semantic</em> pass (Hindsight recall). The semantic pass <strong>always gets a vote</strong>
+when enabled — there is no “only when results look thin” gate — and runs
+<strong>concurrently</strong> in a worker thread so its latency overlaps grep rather than
+serialising after it. Each unique page scores <code class="docutils literal notranslate"><span class="pre">Σ</span> <span class="pre">1/(60+rank)</span></code> across the sources
+that surfaced it; the top <code class="docutils literal notranslate"><span class="pre">max_pages</span></code> are cited, each tagged with its
+<em>provenance</em> (which method — grep / wikilink / recall — found it). A Hindsight
+failure degrades gracefully to structural-only. grep scans the whole file
+including frontmatter, so a page’s one-line <code class="docutils literal notranslate"><span class="pre">summary:</span></code> gloss is matched there,
+and a caller can pass <code class="docutils literal notranslate"><span class="pre">search_keywords</span></code> to seed the whole-word grep with
+de-pluralised/synonym terms; <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a static set of Bases dashboards that
+retrieval never reads. See ADR
+<a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html"><span class="doc">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</span></a>.</p>
+</section>
+<section id="code-layout">
+<h2>Code layout<a class="headerlink" href="#code-layout" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">src/thoth/</span></code> is layered, and imports point strictly downward — a lower layer never
+imports a higher one:</p>
+<ol class="arabic simple">
+<li><p><strong>Shared leaf modules</strong> — <code class="docutils literal notranslate"><span class="pre">_time.py</span></code> (the persona timezone and the injectable
+UTC clock), <code class="docutils literal notranslate"><span class="pre">filetypes.py</span></code> (the capture-kind extension sets), <code class="docutils literal notranslate"><span class="pre">fmfields.py</span></code>
+(tolerant frontmatter scalar coercions), and <code class="docutils literal notranslate"><span class="pre">render.py</span></code> (the one Slack <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code>
+formatter for a vault-page reference, plus the shared <code class="docutils literal notranslate"><span class="pre">SlackPoster</span></code> protocol).
+These are stdlib-only and import nothing from the rest of <code class="docutils literal notranslate"><span class="pre">thoth</span></code>, so any module
+can use them with no risk of an import cycle.</p></li>
+<li><p><strong>Domain modules</strong> — single-file collaborators with one responsibility each:
+<code class="docutils literal notranslate"><span class="pre">extract.py</span></code> (SSRF-guarded URL fetch and Whisper transcription), <code class="docutils literal notranslate"><span class="pre">git_sync.py</span></code>
+(the deterministic git wrapper — stdlib-only by contract, so the vault sync
+can never grow a third-party dependency), <code class="docutils literal notranslate"><span class="pre">hindsight.py</span></code> (the HTTP client to
+<code class="docutils literal notranslate"><span class="pre">hindsight-api</span></code>), <code class="docutils literal notranslate"><span class="pre">intent.py</span></code> (the Haiku intent gate), <code class="docutils literal notranslate"><span class="pre">images.py</span></code> (downscaling),
+<code class="docutils literal notranslate"><span class="pre">alerts.py</span></code> (errors-to-Slack), <code class="docutils literal notranslate"><span class="pre">templates.py</span></code> (the packaged vault spine),
+<code class="docutils literal notranslate"><span class="pre">capture_walk.py</span></code> and <code class="docutils literal notranslate"><span class="pre">inbox_drain.py</span></code> (bulk import and the held-capture sweep),
+and <code class="docutils literal notranslate"><span class="pre">mcp_auth.py</span></code> / <code class="docutils literal notranslate"><span class="pre">mcp_oauth.py</span></code> (bearer and OAuth 2.1 auth for the MCP HTTP
+transport). These stay single files deliberately: splitting them would bury a
+seam that tests patch directly (<code class="docutils literal notranslate"><span class="pre">extract.py</span></code>’s SSRF helpers, for example) or
+add package ceremony a small module doesn’t need.</p></li>
+<li><p><strong>Boundary packages</strong> — the larger subsystems, each a package of focused
+submodules behind one public <code class="docutils literal notranslate"><span class="pre">__init__</span></code> (the table below).</p></li>
+<li><p><strong>Entry points</strong> — <code class="docutils literal notranslate"><span class="pre">__main__.py</span></code> (the <code class="docutils literal notranslate"><span class="pre">thoth</span></code> CLI dispatch, with <code class="docutils literal notranslate"><span class="pre">cli_parser.py</span></code>
+and <code class="docutils literal notranslate"><span class="pre">cli_capture.py</span></code> split out) and <code class="docutils literal notranslate"><span class="pre">wiring.py</span></code>, whose <code class="docutils literal notranslate"><span class="pre">build_collaborators</span></code> is
+the single place the ingest/query collaborator graph is constructed — both the
+CLI/daemon and the MCP server call it, so the two wirings cannot drift.</p></li>
+</ol>
+<section id="what-each-package-s-submodules-own">
+<h3>What each package’s submodules own<a class="headerlink" href="#what-each-package-s-submodules-own" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Package</p></th>
+<th class="head"><p>Submodules</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">config/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">model.py</span></code> — the frozen <code class="docutils literal notranslate"><span class="pre">Config</span></code> dataclass and <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code>; the package <code class="docutils literal notranslate"><span class="pre">__init__</span></code> owns env loading and validation (<code class="docutils literal notranslate"><span class="pre">load_config</span></code>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">state/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_db.py</span></code> — shared SQLite plumbing (WAL, short-lived connections); <code class="docutils literal notranslate"><span class="pre">events.py</span></code> — Slack redelivery dedupe; <code class="docutils literal notranslate"><span class="pre">markers.py</span></code> — liveness/heartbeat markers.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">budget/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">store.py</span></code> — persistent per-day call counters; <code class="docutils literal notranslate"><span class="pre">guard.py</span></code> — the fail-safe circuit-breaker and its notification seams.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">vault/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">contract.py</span></code> — the canonical page-type/source/folder vocabulary and slug grammar; <code class="docutils literal notranslate"><span class="pre">redact.py</span></code> — secret redaction before filing; <code class="docutils literal notranslate"><span class="pre">core.py</span></code> — page records, errors, and the path-confined <code class="docutils literal notranslate"><span class="pre">Vault</span></code> facade.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">llm/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">client.py</span></code> — the injectable Anthropic wrapper and prompt-caching kwargs; <code class="docutils literal notranslate"><span class="pre">persona.py</span></code> — the PKM persona system prompt; <code class="docutils literal notranslate"><span class="pre">contract.py</span></code> — the curate file-plan contract; <code class="docutils literal notranslate"><span class="pre">validation.py</span></code> — its validator (reusing <code class="docutils literal notranslate"><span class="pre">vault</span></code>’s disk-write validators); <code class="docutils literal notranslate"><span class="pre">responses.py</span></code> — response-shape helpers.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">analyse/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">analyser.py</span></code> — the injectable vision <code class="docutils literal notranslate"><span class="pre">Analyser</span></code>; <code class="docutils literal notranslate"><span class="pre">prompts.py</span></code> — the analyse and Excalidraw prompts; <code class="docutils literal notranslate"><span class="pre">result.py</span></code> — the structured <code class="docutils literal notranslate"><span class="pre">Analysis</span></code> parse; <code class="docutils literal notranslate"><span class="pre">excalidraw.py</span></code> / <code class="docutils literal notranslate"><span class="pre">excalidraw_elements.py</span></code> — deterministic <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> scene assembly.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ingest/</span></code></p></td>
+<td><p>One submodule per pass group: <code class="docutils literal notranslate"><span class="pre">raw_capture.py</span></code> (durable hold + raw capture), <code class="docutils literal notranslate"><span class="pre">analyse.py</span></code> (the binary-analysis pass), <code class="docutils literal notranslate"><span class="pre">classify.py</span></code>, <code class="docutils literal notranslate"><span class="pre">curate.py</span></code> (candidate fetch + file-plan), <code class="docutils literal notranslate"><span class="pre">finalise.py</span></code> (retain · commit · report), plus <code class="docutils literal notranslate"><span class="pre">assets.py</span></code> (the idempotent <code class="docutils literal notranslate"><span class="pre">raw/assets</span></code> store), <code class="docutils literal notranslate"><span class="pre">_shared.py</span></code> (pass types and vocabulary) and <code class="docutils literal notranslate"><span class="pre">pipeline.py</span></code> (the composed <code class="docutils literal notranslate"><span class="pre">Ingestor</span></code>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">query/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_retrieval.py</span></code> — the grep/wikilink/recall passes as pure functions; <code class="docutils literal notranslate"><span class="pre">_blend.py</span></code> — RRF fusion with the recall thread overlapped; <code class="docutils literal notranslate"><span class="pre">_compose.py</span></code> — citation minting and prose composition; <code class="docutils literal notranslate"><span class="pre">_engine.py</span></code> — the <code class="docutils literal notranslate"><span class="pre">QueryEngine</span></code> facade; <code class="docutils literal notranslate"><span class="pre">_shared.py</span></code> — types and constants.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">slack_app/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">daemon.py</span></code> — Bolt build/serve; <code class="docutils literal notranslate"><span class="pre">handlers.py</span></code> — allow-list and routing; <code class="docutils literal notranslate"><span class="pre">events.py</span></code> — pure readers over raw Slack events; <code class="docutils literal notranslate"><span class="pre">files.py</span></code> — upload staging; <code class="docutils literal notranslate"><span class="pre">dedupe.py</span></code> — redelivery dedupe; <code class="docutils literal notranslate"><span class="pre">rendering.py</span></code> — <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code> renderers; <code class="docutils literal notranslate"><span class="pre">responder.py</span></code> — the placeholder-then-edit reply seam.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mcp_server/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">server.py</span></code> — FastMCP construction and the <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code> entry; <code class="docutils literal notranslate"><span class="pre">http.py</span></code> — the auth-gated HTTP transport; <code class="docutils literal notranslate"><span class="pre">context.py</span></code> — the <code class="docutils literal notranslate"><span class="pre">ToolContext</span></code> injection bundle; <code class="docutils literal notranslate"><span class="pre">tools_query.py</span></code> / <code class="docutils literal notranslate"><span class="pre">tools_pages.py</span></code> / <code class="docutils literal notranslate"><span class="pre">tools_ingest.py</span></code> — the tool bodies as plain testable functions; <code class="docutils literal notranslate"><span class="pre">render.py</span></code> — MCP Markdown rendering.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">summary/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">types.py</span></code> — the frozen digest item types; <code class="docutils literal notranslate"><span class="pre">engine.py</span></code> — frontmatter scans and digest composition; <code class="docutils literal notranslate"><span class="pre">render.py</span></code> — sorting and <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code> rendering.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">lint/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">model.py</span></code> — severities, findings, the report; <code class="docutils literal notranslate"><span class="pre">parse.py</span></code> — pure markdown extractors; <code class="docutils literal notranslate"><span class="pre">checks_links.py</span></code> / <code class="docutils literal notranslate"><span class="pre">checks_metadata.py</span></code> / <code class="docutils literal notranslate"><span class="pre">checks_freshness.py</span></code> — the checks by theme; <code class="docutils literal notranslate"><span class="pre">engine.py</span></code> — the vault walk and <code class="docutils literal notranslate"><span class="pre">LintEngine</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">reindex_from_vault/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_model.py</span></code> — reindex vocabulary and pure helpers; <code class="docutils literal notranslate"><span class="pre">reindexer.py</span></code> — the <code class="docutils literal notranslate"><span class="pre">Reindexer</span></code> walk/retain/prune engine.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="package-conventions">
+<h3>Package conventions<a class="headerlink" href="#package-conventions" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>The package <code class="docutils literal notranslate"><span class="pre">__init__</span></code> is the public surface.</strong> Each package re-exports its
+public names (listed in <code class="docutils literal notranslate"><span class="pre">__all__</span></code>) from its <code class="docutils literal notranslate"><span class="pre">__init__</span></code>, whose docstring is the
+authoritative map of the package. Callers import from the package
+(<code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">thoth.vault</span> <span class="pre">import</span> <span class="pre">Vault</span></code>), never from a submodule; underscore-prefixed
+submodules (<code class="docutils literal notranslate"><span class="pre">query/_engine.py</span></code>, <code class="docutils literal notranslate"><span class="pre">state/_db.py</span></code>, …) make the privacy explicit.</p></li>
+<li><p><strong>Heavy SDKs import lazily.</strong> <code class="docutils literal notranslate"><span class="pre">anthropic</span></code>, <code class="docutils literal notranslate"><span class="pre">slack_bolt</span></code> and <code class="docutils literal notranslate"><span class="pre">mcp</span></code> are imported
+only inside the functions that need them (<code class="docutils literal notranslate"><span class="pre">llm</span></code>’s client factory, <code class="docutils literal notranslate"><span class="pre">slack_app</span></code>’s
+daemon, <code class="docutils literal notranslate"><span class="pre">mcp_server</span></code>’s server/transport) — never at module top level. Importing
+any <code class="docutils literal notranslate"><span class="pre">thoth</span></code> package therefore needs only the base dependencies: pytest
+collection and CI run without the runtime extra installed. <code class="docutils literal notranslate"><span class="pre">wiring.py</span></code> follows
+the same rule for the whole collaborator graph, which also keeps test patches
+on a collaborator’s defining module effective.</p></li>
+<li><p><strong>One logger per package.</strong> A package that logs defines a single
+<code class="docutils literal notranslate"><span class="pre">logging.getLogger(&quot;thoth.&lt;package&gt;&quot;)</span></code> in its shared submodule and the other
+submodules import it, so log filtering follows responsibilities, not file
+boundaries.</p></li>
+</ul>
+</section>
+</section>
+<section id="models">
+<span id="id1"></span><h2>Models<a class="headerlink" href="#models" title="Link to this heading">#</a></h2>
+<p>thoth is multi-model by design: each LLM call runs on the cheapest tier that can
+do its job, and the three jobs that justify a stronger (or weaker) model than the
+default are pinned independently. Every model id is configurable through the
+environment (<code class="docutils literal notranslate"><span class="pre">deploy/.env.example</span></code> documents the keys), so the deployment can
+re-tier without code changes.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Call</p></th>
+<th class="head"><p>Default model</p></th>
+<th class="head"><p>Env override</p></th>
+<th class="head"><p>Why this tier</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Intent gate</strong> (<code class="docutils literal notranslate"><span class="pre">intent.py</span></code>)</p></td>
+<td><p>Claude Haiku (<code class="docutils literal notranslate"><span class="pre">claude-haiku-4-5</span></code>)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code> (unset = the default Haiku, not <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code>)</p></td>
+<td><p>A one-shot routing guess (capture / query) — fast and cheap is the whole point</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Classify · curate</strong> (<code class="docutils literal notranslate"><span class="pre">thoth.ingest</span></code> → <code class="docutils literal notranslate"><span class="pre">thoth.llm</span></code>)</p></td>
+<td><p>Claude Sonnet (<code class="docutils literal notranslate"><span class="pre">claude-sonnet-4-6</span></code>)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code></p></td>
+<td><p>The pipeline workhorse: schema-validated classification and the curate file-plan</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Analyse / transcribe</strong> (<code class="docutils literal notranslate"><span class="pre">thoth.analyse</span></code>)</p></td>
+<td><p>Sonnet (the default — Sonnet is multimodal)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">THOTH_ANALYSE_MODEL</span></code></p></td>
+<td><p>One vision call for OCR text, routing hint, kind, and document transcription; can drop to Haiku for cheaper A/B work</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Excalidraw reconstruction</strong> (<code class="docutils literal notranslate"><span class="pre">thoth.analyse</span></code>)</p></td>
+<td><p><strong>Opus</strong> (<code class="docutils literal notranslate"><span class="pre">claude-opus-4-8</span></code>)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL</span></code></p></td>
+<td><p>Rebuilding a hand-drawn diagram into valid Excalidraw JSON needs spatial reasoning — worth a stronger model than the default</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code> sets the default for every call that does not pin its own model;
+<code class="docutils literal notranslate"><span class="pre">THOTH_ANALYSE_MODEL</span></code> and <code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL</span></code> are per-call overrides that fall
+back to <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code> when unset; <code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code> overrides the intent gate
+and, when unset, falls back to its own cheap Haiku default rather than <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code>.
+The default deployment ships
+<code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL=claude-opus-4-8</span></code> and leaves the rest on Sonnet. The configured
+model ids are used as-is — a wrong id surfaces as an API error rather than a silent
+substitution; a daily call-count budget (<code class="docutils literal notranslate"><span class="pre">thoth.budget</span></code>) guards every model
+chokepoint against redelivery storms.</p>
+</section>
+<section id="the-stack">
+<h2>The stack<a class="headerlink" href="#the-stack" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Component</p></th>
+<th class="head"><p>Role</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>Slack Bolt</strong></p></td>
+<td><p>Socket-Mode event handling — the inbound capture channel</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Anthropic Claude API</strong></p></td>
+<td><p>Multi-model LLM backend — intent gate (Haiku), classify/curate/analyse (Sonnet), Excalidraw reconstruction (Opus). See <a class="reference internal" href="#models"><span class="std std-ref">Models</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Hindsight</strong></p></td>
+<td><p>Semantic search backend: fact-extraction (not token-chunking) and recall over the vault. The <code class="docutils literal notranslate"><span class="pre">hindsight.py</span></code> seam is an <strong>HTTP client</strong> (<code class="docutils literal notranslate"><span class="pre">httpx</span></code>) to a standalone <code class="docutils literal notranslate"><span class="pre">hindsight-api</span></code> server (<a class="reference internal" href="../reference/configuration.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BASE_URL</span></code></span></a>, default <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8888</span></code>); the bank is a URL path segment and a page’s vault-relative path round-trips as the memory <code class="docutils literal notranslate"><span class="pre">document_id</span></code>. A standalone server (vs an embedded library) is the foundation for moving the index to its own scaled deployment later. On the appliance the server is loopback; on Kubernetes (following #157) it is a networked Service reached over <code class="docutils literal notranslate"><span class="pre">THOTH_HINDSIGHT_BASE_URL</span></code> (<code class="docutils literal notranslate"><span class="pre">http://&lt;release&gt;-hindsight:8888</span></code>), with its index data on its own disposable PVC — rebuildable from the vault. See <a class="reference internal" href="../how-to/deploy-kubernetes.html"><span class="doc">Deploy thoth on Kubernetes</span></a>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Firecrawl</strong></p></td>
+<td><p>Web page extraction to clean Markdown during ingest</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Whisper</strong></p></td>
+<td><p>Local CLI for audio/voice message transcription</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>FastMCP</strong></p></td>
+<td><p>MCP server framework — exposes the <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tool surface to Claude Code and claude.ai</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>git</strong></p></td>
+<td><p>Vault version control and two-way sync (Obsidian Git plugin + appliance bash wrappers)</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Obsidian</strong></p></td>
+<td><p>Markdown vault viewer and editor on the workstation</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>python-frontmatter</strong></p></td>
+<td><p>YAML frontmatter parsing for vault page metadata</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>tenacity</strong></p></td>
+<td><p>Retry hardening around transient Hindsight HTTP failures (5xx + transport errors)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../explanations.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Explanations</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="architecture-review.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Architecture review notes</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slack-ingest-pipeline">Slack ingest pipeline</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-you-can-capture">What you can capture</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-query-pipeline">MCP query pipeline</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#code-layout">Code layout</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-each-package-s-submodules-own">What each package’s submodules own</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#package-conventions">Package conventions</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#models">Models</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-stack">The stack</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/gilesknap/thoth/edit/0.9.0/docs/explanations/architecture.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/explanations/architecture.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.18.0.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>
