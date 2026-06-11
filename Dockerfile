@@ -12,7 +12,9 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://packages.buildkite.com/helm-linux/helm-debian/gpgkey | gpg --dearmor | tee /usr/share/keyrings/helm.gpg > /dev/null \
     && echo "deb [signed-by=/usr/share/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" | tee /etc/apt/sources.list.d/helm-stable-debian.list \
     && apt-get update && apt-get install -y helm && apt-get dist-clean
-RUN helm plugin install https://github.com/losisin/helm-values-schema-json
+# --verify=false: Helm 4 (now shipped by the apt repo) requires signed plugins by
+# default and this plugin source does not support verification.
+RUN helm plugin install https://github.com/losisin/helm-values-schema-json --verify=false
 
 # The build stage installs the context into the venv
 FROM developer AS build
