@@ -845,15 +845,15 @@ def test_ingest_routes_summary_into_page_frontmatter(harness: IngestHarness) -> 
     assert "summary: attention-based sequence models" in head
 
 
-def test_ingest_omits_summary_for_action_pages(harness: IngestHarness) -> None:
-    """An action page gets no ``summary:`` even if the plan supplies one (#72)."""
+def test_ingest_applies_summary_to_action_pages(harness: IngestHarness) -> None:
+    """An action page carries the plan's ``summary:`` too (ADR 0013: all 4 types)."""
     doc = ExtractedDoc(source_url="https://e.com/a", title="T", markdown="body")
     plan = _file_plan_json(
         folder="actions",
         slug="ship-it",
         page_type="action",
         title="Ship it",
-        summary="should be ignored for actions",
+        summary="ship the release",
     )
     # An action page needs status; inject it via a raw plan tweak.
     plan_obj = json.loads(plan)
@@ -868,7 +868,7 @@ def test_ingest_omits_summary_for_action_pages(harness: IngestHarness) -> None:
     ingestor.ingest(Capture(url="https://e.com/a"))
 
     page_text = (harness.work / "actions/ship-it.md").read_text(encoding="utf-8")
-    assert "summary:" not in page_text.split("---", 2)[1]
+    assert "summary: ship the release" in page_text.split("---", 2)[1]
 
 
 # --------------------------------------------------------------------------- #

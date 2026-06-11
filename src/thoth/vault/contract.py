@@ -30,8 +30,8 @@ ADR 0005 collapsed the eight folders into four flat, equal folders, so a capture
 of exactly four content types: ``entity`` (nouns), ``note`` (everything written,
 differentiated by a ``tags:`` value such as ``concept``/``comparison``/``query``),
 ``memory`` (personal reference), and ``action`` (carries ``status``/``due``; a media
-item is an ``action`` tagged ``media``). ``summary`` is no longer a content type -- it
-survives only as the label on the spine ``index.md`` Home page.
+item is an ``action`` with ``kind: media``, ADR 0013). ``summary`` is no longer a
+content type -- it survives only as the label on the spine ``index.md`` Home page.
 """
 
 INBOX_TYPE: str = "inbox"
@@ -78,7 +78,8 @@ FOLDER_TYPE_CONTRACT: dict[str, frozenset[str]] = {
 Four flat content folders plus the ``inbox/`` holding folder. ``entities/`` absorbs the
 old ``people/``; ``notes/`` absorbs ``concepts/``/``comparisons/``/``queries/``
 (differentiated by a ``tags:`` value, not a folder); ``actions/`` absorbs ``media/`` (a
-media item is an ``action`` tagged ``media``); ``memories/`` is kept as its own folder.
+media item is an ``action`` with ``kind: media``); ``memories/`` is kept as its own
+folder.
 """
 
 CURATED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
@@ -94,7 +95,8 @@ ACTIONABLE_DIRS: tuple[str, ...] = ("actions",)
 """The lifecycle-bearing folder(s) scanned for overdue / cold checks (ADR 0005).
 
 A page here carries ``status``/``due`` and shows in the actionable Bases dashboards; the
-to-consume media queue lives here too (an ``action`` tagged ``media``). Together with
+to-consume media queue lives here too (an ``action`` with ``kind: media``). Together
+with
 :data:`CURATED_DIRS` and the ``inbox/`` holding folder these are the
 :data:`FOLDER_TYPE_CONTRACT` folders (a consistency the tests assert), so adding a
 folder is a one-place edit.
@@ -140,29 +142,97 @@ REQUIRED_COMMON_FIELDS: tuple[str, ...] = (
     "source",
     "tags",
 )
-"""Frontmatter fields required on every curated/life-admin page."""
+"""Frontmatter fields required on every content page, enforced at write time.
 
-SUMMARY_TYPES: frozenset[str] = REFERENCE_TYPES
+This is the *write-gate* set :meth:`thoth.vault.Vault.write_page` and the file-plan
+validator (:func:`thoth.llm.validate_file_plan`) enforce. The curate pass fills the
+richer :data:`CONTENT_COMMON_FIELDS` superset, but ``summary``/``personal`` must NOT be
+required here: the plan validator requires exactly these keys in plan frontmatter, and
+``summary`` arrives via the page-level plan field (applied after validation), so
+hard-requiring it would reject every plan.
+"""
+
+CONTENT_COMMON_FIELDS: tuple[str, ...] = (
+    *REQUIRED_COMMON_FIELDS,
+    "summary",
+    "personal",
+)
+"""The universal frontmatter set every *content* page carries (ADR 0013).
+
+The write-gate :data:`REQUIRED_COMMON_FIELDS` plus the two curate-authored universals:
+``summary`` (a crisp one-line gloss, now on actions too) and ``personal`` (a real
+boolean separating private-life items from work/technical ones -- the property the
+Work/Personal Bases view variants filter on). Enforced by lint (check 4), not by the
+write gate.
+"""
+
+INBOX_REQUIRED_FIELDS: tuple[str, ...] = (
+    "title",
+    "type",
+    "created",
+    "updated",
+    "source",
+    "sha256",
+)
+"""The frontmatter set for ``inbox/`` holding pages (machinery, ADR 0013).
+
+Inbox holds are pre-curate machinery, not content: they carry the body digest
+(``sha256``, the idempotency key) and **no** ``tags`` (the taxonomy describes curated
+content; a hold has not been classified yet) and none of the content universals.
+"""
+
+ACTION_STATUS_VOCAB: tuple[str, ...] = ("todo", "in_progress", "done", "cancelled")
+"""The single action ``status`` lifecycle (ADR 0013).
+
+One vocabulary for every action regardless of kind: media-ness is carried by the
+``kind`` property, not by parallel status values (the old ``to_consume``/``consuming``/
+``consumed`` media statuses are gone). Ordered for prompt rendering.
+"""
+
+ACTION_KIND_VOCAB: tuple[str, ...] = ("task", "media", "errand")
+"""Allowed action ``kind`` values (ADR 0013): the view-critical action facet.
+
+Replaces the old ``action-kind/*`` tag facet -- Bases view filters need a frontmatter
+property, not a nested tag. Ordered for prompt rendering.
+"""
+
+PRIORITY_VOCAB: tuple[str, ...] = ("1 - Urgent", "2 - High", "3 - Medium", "4 - Low")
+"""Allowed ``priority`` values (SPEC frontmatter table); ordered for prompts."""
+
+MEDIA_TYPE_VOCAB: tuple[str, ...] = (
+    "book",
+    "film",
+    "tv",
+    "podcast",
+    "article",
+    "video",
+    "music",
+)
+"""Allowed ``media_type`` values (SPEC frontmatter table). Ordered for prompt
+rendering."""
+
+SUMMARY_TYPES: frozenset[str] = frozenset(TYPE_ENUMERATION)
 """Page ``type`` values that carry a one-line ``summary:`` frontmatter gloss (#72).
 
-The lifecycle-free reference types (``entity``/``note``/``memory``) each carry an
-optional one-line ``summary:`` frontmatter field authored by the curate pass -- the
-canonical, rebuildable home of a page's gloss (replacing the old agent-maintained
-``index.md`` catalog; ADR 0008). ``action``/``inbox`` pages do not get one (they are
-surfaced by the Bases dashboards, not a summary). The ``summary`` is plain frontmatter
-that round-trips through :meth:`thoth.vault.Vault.read_page` /
-:meth:`thoth.vault.Vault.write_page` like any other field, so it needs no special write
-path; this constant exists so the curate contract
-(:func:`thoth.llm.file_plan_contract_text`) and the lint invariant
-(:meth:`thoth.lint.LintEngine.check_summaries`) share one definition of "which pages are
-glossed" with :data:`REFERENCE_TYPES`.
+All four content types (ADR 0013 extended the gloss to ``action`` pages so the Bases
+dashboards have a Summary column to show). ``inbox`` holds do not get one (machinery,
+not content). The ``summary`` is plain frontmatter that round-trips through
+:meth:`thoth.vault.Vault.read_page` / :meth:`thoth.vault.Vault.write_page` like any
+other field, so it needs no special write path; this constant exists so the curate
+contract (:func:`thoth.llm.file_plan_contract_text`) and the lint invariant
+(:meth:`thoth.lint.LintEngine.check_summaries`) share one definition of "which pages
+are glossed".
 """
 
 # created/updated are stamped by write_page, so the caller need not supply them; the
-# remaining required common fields must be present in the input frontmatter.
+# remaining required fields must be present in the input frontmatter (content pages
+# and inbox holds have different sets -- inbox is machinery with no tags, ADR 0013).
 _STAMPED_FIELDS: frozenset[str] = frozenset({"created", "updated"})
 _AUTHOR_REQUIRED_FIELDS: tuple[str, ...] = tuple(
     field for field in REQUIRED_COMMON_FIELDS if field not in _STAMPED_FIELDS
+)
+_AUTHOR_REQUIRED_INBOX_FIELDS: tuple[str, ...] = tuple(
+    field for field in INBOX_REQUIRED_FIELDS if field not in _STAMPED_FIELDS
 )
 
 # Actions accepted by append_log (SPEC log.md seed template).

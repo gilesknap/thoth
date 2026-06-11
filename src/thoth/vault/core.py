@@ -16,9 +16,11 @@ from thoth.config import Config
 
 from .contract import (
     _AUTHOR_REQUIRED_FIELDS,
+    _AUTHOR_REQUIRED_INBOX_FIELDS,
     _LOG_ACTIONS,
     ASSET_SLUG_RE,
     FOLDER_TYPE_CONTRACT,
+    INBOX_TYPE,
     RAW_SUBDIRS,
     SEED_DIRS,
     SLUG_RE,
@@ -440,6 +442,10 @@ class Vault:
             raise SchemaError("frontmatter 'type' must be a string")
         self.validate_folder_type(folder, page_type)
         self._validate_common_fields(meta)
+        if page_type != INBOX_TYPE:
+            # Every content page carries the universal ``personal`` boolean (ADR
+            # 0013); default to work (False) when the caller does not say otherwise.
+            meta.setdefault("personal", False)
 
         rel = f"{folder}/{slug}.md"
         stamp = today or date.today()
@@ -589,11 +595,16 @@ class Vault:
 
         ``created`` and ``updated`` are intentionally not required here: they are
         stamped by :meth:`write_page` (the caller supplies neither), so requiring them
-        pre-stamp would be wrong.
+        pre-stamp would be wrong. An ``inbox`` hold is machinery with its own set
+        (:data:`~thoth.vault.INBOX_REQUIRED_FIELDS` -- ``sha256`` instead of ``tags``,
+        ADR 0013).
         """
-        missing = [
-            field for field in _AUTHOR_REQUIRED_FIELDS if meta.get(field) in (None, "")
-        ]
+        required = (
+            _AUTHOR_REQUIRED_INBOX_FIELDS
+            if meta.get("type") == INBOX_TYPE
+            else _AUTHOR_REQUIRED_FIELDS
+        )
+        missing = [field for field in required if meta.get(field) in (None, "")]
         if missing:
             raise SchemaError(
                 f"missing required frontmatter field(s): {', '.join(missing)}"
