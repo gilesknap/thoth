@@ -183,8 +183,8 @@ class _ClassifyPass(_IngestorBase):
             f"JSON object with keys: type (one of {type_list}), slug "
             "(lowercase-hyphen), title, entities (list of names), and concepts (list "
             "of names). Use 'note' for anything written (a concept, comparison, or "
-            "query, differentiated by a tag); use 'action' for a todo or a to-consume "
-            "item (a media item is an action tagged 'media').\n\n"
+            "query, differentiated by a tag); use 'action' for a todo, an errand, or "
+            "a to-consume media item (book/film/podcast to enjoy later).\n\n"
             f"Captured item:\n{what}"
         )
 

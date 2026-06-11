@@ -446,6 +446,7 @@ def _good_page(slug: str = "program-motion-controller") -> dict[str, Any]:
             "updated": "2026-05-30",
             "source": "slack",
             "tags": ["controls"],
+            "personal": False,
         },
         "body": "PMC coordinates motion. See [[drive-control-module]].",
         "summary": "central coordinator in the motor-control stack",
@@ -480,6 +481,57 @@ def test_validate_file_plan_accepts_page_without_summary() -> None:
     """``summary`` is optional: a page omitting it still validates."""
     page = _good_page()
     del page["summary"]
+    validate_file_plan({"pages": [page]})
+
+
+def _good_action_page() -> dict[str, Any]:
+    """A well-formed action page (kind + status required, ADR 0013)."""
+    page = _good_page("ship-the-release")
+    page["folder"] = "actions"
+    page["frontmatter"].update({"type": "action", "kind": "task", "status": "todo"})
+    return page
+
+
+def test_validate_file_plan_accepts_action_with_kind_and_status() -> None:
+    """An action page carrying kind + status validates."""
+    validate_file_plan({"pages": [_good_action_page()]})
+
+
+def test_validate_file_plan_rejects_action_missing_kind_and_status() -> None:
+    """An action page must carry kind and status (ADR 0013)."""
+    page = _good_action_page()
+    del page["frontmatter"]["kind"]
+    del page["frontmatter"]["status"]
+    with pytest.raises(SchemaValidationError) as exc:
+        validate_file_plan({"pages": [page]})
+    message = str(exc.value)
+    assert "'kind'" in message and "'status'" in message
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("status", "to_consume"),  # the retired media status
+        ("kind", "movie"),
+        ("priority", "urgent"),
+        ("media_type", "vinyl"),
+    ],
+)
+def test_validate_file_plan_enum_checks_vocab_fields(
+    field: str, bad_value: str
+) -> None:
+    """status/kind/priority/media_type values outside the vault vocab are reported."""
+    page = _good_action_page()
+    page["frontmatter"][field] = bad_value
+    with pytest.raises(SchemaValidationError, match=field):
+        validate_file_plan({"pages": [page]})
+
+
+def test_validate_file_plan_does_not_require_personal_or_summary() -> None:
+    """personal/summary are prompt+lint enforced, never plan-rejection grounds."""
+    page = _good_page()
+    del page["summary"]
+    del page["frontmatter"]["personal"]
     validate_file_plan({"pages": [page]})
 
 
@@ -630,11 +682,27 @@ def test_file_plan_contract_text_covers_validator_contract() -> None:
         assert field in text, f"required field {field!r} missing from contract"
     assert "create" in text and "update" in text
     assert "wikilinks" in text
-    # The per-page summary instruction is present and names the reference types it
-    # applies to (#72), but the removed catalog vocabulary is gone.
+    # The per-page summary instruction is present and now covers EVERY page
+    # including actions (ADR 0013); the removed catalog vocabulary is gone.
     assert "summary" in text
+    assert "EVERY page, including actions" in text
     assert "index_entries" not in text
     assert "catalog" not in text
+    # The universal personal boolean and the action kind/status vocabularies are
+    # rendered from the vault constants (ADR 0013).
+    assert '"personal": true|false' in text
+    for value in ("task", "media", "errand"):
+        assert value in text, f"kind {value!r} missing from contract"
+    for value in ("todo", "in_progress", "done", "cancelled"):
+        assert value in text, f"status {value!r} missing from contract"
+    for value in ("book", "film", "podcast"):
+        assert value in text, f"media_type {value!r} missing from contract"
+    assert "memory_date" in text
+    # Tags are descriptive only -- the promoted facets must not be duplicated.
+    assert "never duplicate type, kind, or" in text
+    # The retired media statuses are gone from the prompt surface.
+    assert "to_consume" not in text
+    assert "tagged 'media'" not in text
 
 
 def test_file_plan_contract_text_describes_a_pages_envelope() -> None:

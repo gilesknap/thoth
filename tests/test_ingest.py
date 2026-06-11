@@ -399,10 +399,14 @@ def _file_plan_json(
             "updated": "2026-05-30",
             "source": "slack",
             "tags": ["ai-ml"],
+            "personal": False,
         },
         "body": body,
         "wikilinks": wikilinks or ["[[attention]]", "[[neural-networks]]"],
     }
+    if page_type == "action":
+        # Action pages require kind + status (validate_file_plan, ADR 0013).
+        page["frontmatter"].update({"kind": "task", "status": "todo"})
     if summary is not None:
         page["summary"] = summary
     if embeds is not None:
@@ -4345,6 +4349,28 @@ def test_ingest_as_is_skips_curate_and_files_verbatim(harness: IngestHarness) ->
     assert "source: import" in page_text.split("---", 2)[1]
     # The filed page was indexed through the same retain pass.
     assert [r.rel_path for r in hindsight.retained] == ["notes/my-note.md"]
+
+
+def test_ingest_as_is_action_gets_status_and_kind_defaults(
+    harness: IngestHarness,
+) -> None:
+    """An as-is action import stamps status: todo + kind: task (ADR 0013)."""
+    client = _ScriptedClient(_classify_json(page_type="action", slug="buy-milk"))
+    ingestor = _build_ingestor(
+        harness, client=client, extractor=FakeExtractor(), hindsight=FakeHindsight()
+    )
+
+    report = ingestor.ingest(Capture(text="buy milk", source="import"), as_is=True)
+
+    assert report.page_paths == ["actions/buy-milk.md"]
+    head = (
+        (harness.work / "actions/buy-milk.md")
+        .read_text(encoding="utf-8")
+        .split("---", 2)[1]
+    )
+    assert "status: todo" in head
+    assert "kind: task" in head
+    assert "personal: false" in head
 
 
 def test_ingest_as_is_omits_curating_phase(harness: IngestHarness) -> None:

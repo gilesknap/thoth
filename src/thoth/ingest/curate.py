@@ -76,7 +76,8 @@ _SUBMIT_FILE_PLAN_TOOL: dict[str, Any] = {
                         "frontmatter": {
                             "type": "object",
                             "description": (
-                                "title, type, created, updated, source, tags"
+                                "title, type, created, updated, source, tags, "
+                                "personal (+ kind/status on actions)"
                             ),
                             "additionalProperties": True,
                         },
@@ -86,7 +87,7 @@ _SUBMIT_FILE_PLAN_TOOL: dict[str, Any] = {
                         },
                         "summary": {
                             "type": "string",
-                            "description": "one-line gloss (reference pages only)",
+                            "description": "one-line gloss (every page)",
                         },
                         "wikilinks": {
                             "type": "array",
@@ -259,8 +260,9 @@ class _CuratePass(_IngestorBase):
         The low-touch import mode (ADR 0010): the cheap classify call has already chosen
         the routing (``type``/``slug``/``title``), so this writes ONE page into that
         type's content folder with the **original body verbatim** and a minimal derived
-        frontmatter (``title``/``type``/``source``/``tags``) -- no second (curate) LLM
-        call, no reshaping, no wikilink/dedup-merge, no summary synthesis. Any saved
+        frontmatter (``title``/``type``/``source``/``tags``/``personal``, plus the
+        ``status``/``kind`` defaults on an action) -- no second (curate) LLM call, no
+        reshaping, no wikilink/dedup-merge, no summary synthesis. Any saved
         asset is embedded and any analysed OCR text appended (the same enrichment the
         curated path applies), so a binary import is still searchable on its content.
 
@@ -296,7 +298,13 @@ class _CuratePass(_IngestorBase):
             "type": cls.page_type,
             "source": capture.source,
             "tags": [],
+            # No curate pass runs, so stamp the universal + action defaults the
+            # contract expects (ADR 0013); write_page would default personal anyway.
+            "personal": False,
         }
+        if cls.page_type == "action":
+            frontmatter["status"] = "todo"
+            frontmatter["kind"] = "task"
         try:
             rel = self._vault.write_page(folder, cls.slug, frontmatter, body)
         except (SchemaError, SlugError, VaultError) as exc:
@@ -452,15 +460,16 @@ class _CuratePass(_IngestorBase):
 
     @staticmethod
     def _apply_summary(frontmatter: dict[str, Any], page: dict[str, Any]) -> None:
-        """Route a reference page's per-plan ``summary`` into its frontmatter (#72).
+        """Route a content page's per-plan ``summary`` into its frontmatter (#72).
 
-        The curate plan carries a one-line ``summary`` per page; for a reference page
-        (:data:`~thoth.vault.SUMMARY_TYPES`: ``entity``/``note``/``memory``) it is the
-        canonical, rebuildable gloss and is written into frontmatter as ``summary:`` so
-        :meth:`thoth.query.QueryEngine.grep` (which scans the whole file including
-        frontmatter) finds it -- the page now owns its gloss instead of an ``index.md``
-        catalog (ADR 0008). A blank/whitespace summary, an ``action``/``inbox`` page, or
-        a page that already carries its own ``summary`` frontmatter is left untouched.
+        The curate plan carries a one-line ``summary`` per page; for every content page
+        (:data:`~thoth.vault.SUMMARY_TYPES`: all four types, including ``action`` since
+        ADR 0013) it is the canonical, rebuildable gloss and is written into
+        frontmatter as ``summary:`` so :meth:`thoth.query.QueryEngine.grep` (which
+        scans the whole file including frontmatter) finds it and the Bases dashboards
+        can show a Summary column -- the page owns its gloss instead of an ``index.md``
+        catalog (ADR 0008). A blank/whitespace summary, an ``inbox`` hold, or a page
+        that already carries its own ``summary`` frontmatter is left untouched.
         """
         if "summary" in frontmatter:
             return

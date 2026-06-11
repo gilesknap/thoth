@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from thoth.vault import (
+    ACTION_KIND_VOCAB,
+    ACTION_STATUS_VOCAB,
+    MEDIA_TYPE_VOCAB,
+    PRIORITY_VOCAB,
     REQUIRED_COMMON_FIELDS,
     VALID_SOURCES,
     SchemaError,
@@ -14,6 +18,18 @@ from thoth.vault import (
 
 from .client import SchemaValidationError
 from .contract import _MIN_WIKILINKS, _VALID_LOG_ACTIONS
+
+# Optional enum-valued frontmatter fields the repair loop can self-correct on
+# (ADR 0013). ``personal``/``summary`` are deliberately NOT hard-required here:
+# the curate prompt asks for them, lint enforces them, but a plan omitting them
+# must not be rejected (write_page defaults personal; summary arrives via the
+# page-level plan field).
+_ENUM_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("status", ACTION_STATUS_VOCAB),
+    ("kind", ACTION_KIND_VOCAB),
+    ("priority", PRIORITY_VOCAB),
+    ("media_type", MEDIA_TYPE_VOCAB),
+)
 
 
 def _check_frontmatter(
@@ -40,6 +56,18 @@ def _check_frontmatter(
             f"{where}: invalid source {source!r} (allowed: "
             f"{', '.join(sorted(VALID_SOURCES))})"
         )
+    if page_type == "action":
+        for field in ("kind", "status"):
+            if field not in frontmatter:
+                problems.append(
+                    f"{where}: action page missing required frontmatter field '{field}'"
+                )
+    for field, vocab in _ENUM_FIELDS:
+        value = frontmatter.get(field)
+        if value is not None and value not in vocab:
+            problems.append(
+                f"{where}: invalid {field} {value!r} (allowed: {', '.join(vocab)})"
+            )
 
 
 def _check_page(page: object, idx: int, problems: list[str]) -> None:
@@ -93,8 +121,11 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
     Reuses :mod:`thoth.vault`'s validators so a passing plan is guaranteed to survive
     :meth:`thoth.vault.Vault.write_page`. Each ``pages[*]`` entry is checked for a known
     ``action``, a valid ``slug``, an allowed ``folder`` x ``type`` pairing, the required
-    common frontmatter fields, a valid ``source``, a string ``summary`` when present,
-    and ``>= 2`` ``wikilinks``. Any ``log`` block is shape-checked too.
+    common frontmatter fields (plus ``kind``/``status`` on action pages, with
+    ``status``/``kind``/``priority``/``media_type`` values enum-checked against the
+    vault vocabularies -- the repair loop self-corrects on the listed values), a valid
+    ``source``, a string ``summary`` when present, and ``>= 2`` ``wikilinks``. Any
+    ``log`` block is shape-checked too.
 
     Args:
         obj: The decoded file-plan object.
