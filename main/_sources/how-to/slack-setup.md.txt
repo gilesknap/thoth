@@ -121,7 +121,7 @@ thread* to save.
 
 thoth reads its configuration from the environment, optionally seeded from
 `~/.thoth/.env` (chmod 600). The Slack-related variables (verified against
-`src/thoth/config.py`):
+`src/thoth/config/`):
 
 | Variable | Required? | What it is |
 | --- | --- | --- |

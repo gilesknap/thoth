@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architecture overview &#8212; thoth 0.8.0b4.dev9+g1baf62858 documentation</title>
+    <title>Architecture overview &#8212; thoth 0.8.0b4.dev40+gf4c5eaf04 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=f6e25015"></script>
+    <script src="../_static/documentation_options.js?v=d31bef0a"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -960,15 +960,15 @@ any LLM call — so nothing is lost if the process restarts mid-flight.</p>
 <pre  class="mermaid">
         flowchart TB
     slack([&quot;Slack&lt;br&gt;(Bolt Socket-Mode)&quot;])
-    slack --&gt; sa[&quot;slack_app.py&lt;br&gt;handler · dedup&quot;]
+    slack --&gt; sa[&quot;slack_app/&lt;br&gt;handlers · dedupe&quot;]
     sa --&gt; ig{&quot;intent.py&lt;br&gt;Claude Haiku&lt;br&gt;classify intent&quot;}
-    ig --&gt;|capture| ing[&quot;ingest.py&lt;br&gt;8-pass pipeline&quot;]
-    ig --&gt;|query| qry[&quot;query.py&quot;]
+    ig --&gt;|capture| ing[&quot;ingest/&lt;br&gt;8-pass pipeline&quot;]
+    ig --&gt;|query| qry[&quot;query/&quot;]
     ing --&gt; ext[&quot;extract.py&lt;br&gt;Firecrawl · Whisper&lt;br&gt;fetch URLs · transcribe audio&quot;]
-    ing --&gt; an[&quot;analyse.py&lt;br&gt;vision: kind · transcribe&lt;br&gt;Excalidraw via Opus&quot;]
-    ing --&gt; llm[&quot;llm.py&lt;br&gt;Claude Sonnet API&lt;br&gt;classify · curate&quot;]
+    ing --&gt; an[&quot;analyse/&lt;br&gt;vision: kind · transcribe&lt;br&gt;Excalidraw via Opus&quot;]
+    ing --&gt; llm[&quot;llm/&lt;br&gt;Claude Sonnet API&lt;br&gt;classify · curate&quot;]
     an --&gt; llm
-    ing --&gt; va[&quot;vault.py&lt;br&gt;path-confined writes&lt;br&gt;schema validation&quot;]
+    ing --&gt; va[&quot;vault/&lt;br&gt;path-confined writes&lt;br&gt;schema validation&quot;]
     ing --&gt; hs[&quot;hindsight.py&lt;br&gt;hindsight-api HTTP&lt;br&gt;semantic index&quot;]
     va --&gt; gs[&quot;git_sync.py&lt;br&gt;vault-pull · vault-commit&quot;]
     gs --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
@@ -981,7 +981,7 @@ fact-extraction) → <code class="docutils literal notranslate"><span class="pre
 <em>query</em>, with query as the safe fallback. Explicit prefixes (<code class="docutils literal notranslate"><span class="pre">capture:</span></code>, <code class="docutils literal notranslate"><span class="pre">note:</span></code>,
 raw URLs, or file uploads) skip the gate entirely and go straight to ingest.</p>
 <p>A binary capture (image or PDF) passes through the <strong>analyse seam</strong>
-(<code class="docutils literal notranslate"><span class="pre">analyse.py</span></code>) during <code class="docutils literal notranslate"><span class="pre">capture_raw</span></code>: one vision call returns the extracted
+(<code class="docutils literal notranslate"><span class="pre">thoth.analyse</span></code>) during <code class="docutils literal notranslate"><span class="pre">capture_raw</span></code>: one vision call returns the extracted
 text, a routing hint, entities/concepts, and an image <em>kind</em> (<code class="docutils literal notranslate"><span class="pre">diagram</span></code> /
 <code class="docutils literal notranslate"><span class="pre">document</span></code> / <code class="docutils literal notranslate"><span class="pre">screenshot</span></code> / <code class="docutils literal notranslate"><span class="pre">photo</span></code>). That kind drives best-effort, kind-specific
 handling — a diagram becomes an editable <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> saved alongside the
@@ -1028,7 +1028,7 @@ original is always kept and a derivation failure never defers the capture
 </section>
 <section id="mcp-query-pipeline">
 <h2>MCP query pipeline<a class="headerlink" href="#mcp-query-pipeline" title="Link to this heading">#</a></h2>
-<p>Claude Code and claude.ai reach the vault through five <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tools served
+<p>Claude Code and claude.ai reach the vault through seven <code class="docutils literal notranslate"><span class="pre">pkm_*</span></code> tools served
 over a bearer-authenticated FastMCP HTTP socket (<code class="docutils literal notranslate"><span class="pre">thoth-mcp.service</span></code>, loopback
 <code class="docutils literal notranslate"><span class="pre">127.0.0.1:8765</span></code>, fronted by a cloudflared tunnel — see
 <a class="reference internal" href="../how-to/mcp-server-setup.html"><span class="doc">Set up the MCP server</span></a> and ADR
@@ -1038,13 +1038,13 @@ surface cannot escape the vault either.</p>
 <pre  class="mermaid">
         flowchart TB
     cc([&quot;Claude Code&lt;br&gt;or claude.ai&quot;])
-    cc --&gt; mcp[&quot;mcp_server.py&lt;br&gt;FastMCP · 5 pkm_* tools&quot;]
-    mcp --&gt; qry[&quot;query.py&lt;br&gt;vault-only retrieval&lt;br&gt;grep ∪ recall · RRF blend&quot;]
-    qry --&gt; va[&quot;vault.py&lt;br&gt;read-only&quot;]
+    cc --&gt; mcp[&quot;mcp_server/&lt;br&gt;FastMCP · 7 pkm_* tools&quot;]
+    mcp --&gt; qry[&quot;query/&lt;br&gt;vault-only retrieval&lt;br&gt;grep ∪ recall · RRF blend&quot;]
+    qry --&gt; va[&quot;vault/&lt;br&gt;read-only&quot;]
     qry --&gt; hs[&quot;hindsight.py&lt;br&gt;hindsight-api recall&quot;]
     va --&gt; ov[(&quot;Obsidian vault&lt;br&gt;git-backed Markdown&quot;)]
     hs -.-&gt; ov
-    </pre><p><code class="docutils literal notranslate"><span class="pre">query.py</span></code> blends <strong>two retrieval sources</strong> and fuses them with <strong>Reciprocal
+    </pre><p><code class="docutils literal notranslate"><span class="pre">thoth.query</span></code> blends <strong>two retrieval sources</strong> and fuses them with <strong>Reciprocal
 Rank Fusion</strong> (RRF, <code class="docutils literal notranslate"><span class="pre">K=60</span></code>): a <em>structural</em> pass (grep + wikilink traversal) and
 a <em>semantic</em> pass (Hindsight recall). The semantic pass <strong>always gets a vote</strong>
 when enabled — there is no “only when results look thin” gate — and runs
@@ -1058,6 +1058,109 @@ and a caller can pass <code class="docutils literal notranslate"><span class="pr
 de-pluralised/synonym terms; <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a static set of Bases dashboards that
 retrieval never reads. See ADR
 <a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html"><span class="doc">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</span></a>.</p>
+</section>
+<section id="code-layout">
+<h2>Code layout<a class="headerlink" href="#code-layout" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">src/thoth/</span></code> is layered, and imports point strictly downward — a lower layer never
+imports a higher one:</p>
+<ol class="arabic simple">
+<li><p><strong>Shared leaf modules</strong> — <code class="docutils literal notranslate"><span class="pre">_time.py</span></code> (the persona timezone and the injectable
+UTC clock), <code class="docutils literal notranslate"><span class="pre">filetypes.py</span></code> (the capture-kind extension sets), <code class="docutils literal notranslate"><span class="pre">fmfields.py</span></code>
+(tolerant frontmatter scalar coercions), and <code class="docutils literal notranslate"><span class="pre">render.py</span></code> (the one Slack <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code>
+formatter for a vault-page reference, plus the shared <code class="docutils literal notranslate"><span class="pre">SlackPoster</span></code> protocol).
+These are stdlib-only and import nothing from the rest of <code class="docutils literal notranslate"><span class="pre">thoth</span></code>, so any module
+can use them with no risk of an import cycle.</p></li>
+<li><p><strong>Domain modules</strong> — single-file collaborators with one responsibility each:
+<code class="docutils literal notranslate"><span class="pre">extract.py</span></code> (SSRF-guarded URL fetch and Whisper transcription), <code class="docutils literal notranslate"><span class="pre">git_sync.py</span></code>
+(the deterministic git wrapper — stdlib-only by contract, so the vault sync
+can never grow a third-party dependency), <code class="docutils literal notranslate"><span class="pre">hindsight.py</span></code> (the HTTP client to
+<code class="docutils literal notranslate"><span class="pre">hindsight-api</span></code>), <code class="docutils literal notranslate"><span class="pre">intent.py</span></code> (the Haiku intent gate), <code class="docutils literal notranslate"><span class="pre">images.py</span></code> (downscaling),
+<code class="docutils literal notranslate"><span class="pre">alerts.py</span></code> (errors-to-Slack), <code class="docutils literal notranslate"><span class="pre">templates.py</span></code> (the packaged vault spine),
+<code class="docutils literal notranslate"><span class="pre">capture_walk.py</span></code> and <code class="docutils literal notranslate"><span class="pre">inbox_drain.py</span></code> (bulk import and the held-capture sweep),
+and <code class="docutils literal notranslate"><span class="pre">mcp_auth.py</span></code> / <code class="docutils literal notranslate"><span class="pre">mcp_oauth.py</span></code> (bearer and OAuth 2.1 auth for the MCP HTTP
+transport). These stay single files deliberately: splitting them would bury a
+seam that tests patch directly (<code class="docutils literal notranslate"><span class="pre">extract.py</span></code>’s SSRF helpers, for example) or
+add package ceremony a small module doesn’t need.</p></li>
+<li><p><strong>Boundary packages</strong> — the larger subsystems, each a package of focused
+submodules behind one public <code class="docutils literal notranslate"><span class="pre">__init__</span></code> (the table below).</p></li>
+<li><p><strong>Entry points</strong> — <code class="docutils literal notranslate"><span class="pre">__main__.py</span></code> (the <code class="docutils literal notranslate"><span class="pre">thoth</span></code> CLI dispatch, with <code class="docutils literal notranslate"><span class="pre">cli_parser.py</span></code>
+and <code class="docutils literal notranslate"><span class="pre">cli_capture.py</span></code> split out) and <code class="docutils literal notranslate"><span class="pre">wiring.py</span></code>, whose <code class="docutils literal notranslate"><span class="pre">build_collaborators</span></code> is
+the single place the ingest/query collaborator graph is constructed — both the
+CLI/daemon and the MCP server call it, so the two wirings cannot drift.</p></li>
+</ol>
+<section id="what-each-package-s-submodules-own">
+<h3>What each package’s submodules own<a class="headerlink" href="#what-each-package-s-submodules-own" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Package</p></th>
+<th class="head"><p>Submodules</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">config/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">model.py</span></code> — the frozen <code class="docutils literal notranslate"><span class="pre">Config</span></code> dataclass and <code class="docutils literal notranslate"><span class="pre">ConfigError</span></code>; the package <code class="docutils literal notranslate"><span class="pre">__init__</span></code> owns env loading and validation (<code class="docutils literal notranslate"><span class="pre">load_config</span></code>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">state/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_db.py</span></code> — shared SQLite plumbing (WAL, short-lived connections); <code class="docutils literal notranslate"><span class="pre">events.py</span></code> — Slack redelivery dedupe; <code class="docutils literal notranslate"><span class="pre">markers.py</span></code> — liveness/heartbeat markers.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">budget/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">store.py</span></code> — persistent per-day call counters; <code class="docutils literal notranslate"><span class="pre">guard.py</span></code> — the fail-safe circuit-breaker and its notification seams.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">vault/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">contract.py</span></code> — the canonical page-type/source/folder vocabulary and slug grammar; <code class="docutils literal notranslate"><span class="pre">redact.py</span></code> — secret redaction before filing; <code class="docutils literal notranslate"><span class="pre">core.py</span></code> — page records, errors, and the path-confined <code class="docutils literal notranslate"><span class="pre">Vault</span></code> facade.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">llm/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">client.py</span></code> — the injectable Anthropic wrapper and prompt-caching kwargs; <code class="docutils literal notranslate"><span class="pre">persona.py</span></code> — the PKM persona system prompt; <code class="docutils literal notranslate"><span class="pre">contract.py</span></code> — the curate file-plan contract; <code class="docutils literal notranslate"><span class="pre">validation.py</span></code> — its validator (reusing <code class="docutils literal notranslate"><span class="pre">vault</span></code>’s disk-write validators); <code class="docutils literal notranslate"><span class="pre">responses.py</span></code> — response-shape helpers.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">analyse/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">analyser.py</span></code> — the injectable vision <code class="docutils literal notranslate"><span class="pre">Analyser</span></code>; <code class="docutils literal notranslate"><span class="pre">prompts.py</span></code> — the analyse and Excalidraw prompts; <code class="docutils literal notranslate"><span class="pre">result.py</span></code> — the structured <code class="docutils literal notranslate"><span class="pre">Analysis</span></code> parse; <code class="docutils literal notranslate"><span class="pre">excalidraw.py</span></code> / <code class="docutils literal notranslate"><span class="pre">excalidraw_elements.py</span></code> — deterministic <code class="docutils literal notranslate"><span class="pre">.excalidraw.md</span></code> scene assembly.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ingest/</span></code></p></td>
+<td><p>One submodule per pass group: <code class="docutils literal notranslate"><span class="pre">raw_capture.py</span></code> (durable hold + raw capture), <code class="docutils literal notranslate"><span class="pre">analyse.py</span></code> (the binary-analysis pass), <code class="docutils literal notranslate"><span class="pre">classify.py</span></code>, <code class="docutils literal notranslate"><span class="pre">curate.py</span></code> (candidate fetch + file-plan), <code class="docutils literal notranslate"><span class="pre">finalise.py</span></code> (retain · commit · report), plus <code class="docutils literal notranslate"><span class="pre">assets.py</span></code> (the idempotent <code class="docutils literal notranslate"><span class="pre">raw/assets</span></code> store), <code class="docutils literal notranslate"><span class="pre">_shared.py</span></code> (pass types and vocabulary) and <code class="docutils literal notranslate"><span class="pre">pipeline.py</span></code> (the composed <code class="docutils literal notranslate"><span class="pre">Ingestor</span></code>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">query/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_retrieval.py</span></code> — the grep/wikilink/recall passes as pure functions; <code class="docutils literal notranslate"><span class="pre">_blend.py</span></code> — RRF fusion with the recall thread overlapped; <code class="docutils literal notranslate"><span class="pre">_compose.py</span></code> — citation minting and prose composition; <code class="docutils literal notranslate"><span class="pre">_engine.py</span></code> — the <code class="docutils literal notranslate"><span class="pre">QueryEngine</span></code> facade; <code class="docutils literal notranslate"><span class="pre">_shared.py</span></code> — types and constants.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">slack_app/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">daemon.py</span></code> — Bolt build/serve; <code class="docutils literal notranslate"><span class="pre">handlers.py</span></code> — allow-list and routing; <code class="docutils literal notranslate"><span class="pre">events.py</span></code> — pure readers over raw Slack events; <code class="docutils literal notranslate"><span class="pre">files.py</span></code> — upload staging; <code class="docutils literal notranslate"><span class="pre">dedupe.py</span></code> — redelivery dedupe; <code class="docutils literal notranslate"><span class="pre">rendering.py</span></code> — <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code> renderers; <code class="docutils literal notranslate"><span class="pre">responder.py</span></code> — the placeholder-then-edit reply seam.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mcp_server/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">server.py</span></code> — FastMCP construction and the <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">mcp</span></code> entry; <code class="docutils literal notranslate"><span class="pre">http.py</span></code> — the auth-gated HTTP transport; <code class="docutils literal notranslate"><span class="pre">context.py</span></code> — the <code class="docutils literal notranslate"><span class="pre">ToolContext</span></code> injection bundle; <code class="docutils literal notranslate"><span class="pre">tools_query.py</span></code> / <code class="docutils literal notranslate"><span class="pre">tools_pages.py</span></code> / <code class="docutils literal notranslate"><span class="pre">tools_ingest.py</span></code> — the tool bodies as plain testable functions; <code class="docutils literal notranslate"><span class="pre">render.py</span></code> — MCP Markdown rendering.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">summary/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">types.py</span></code> — the frozen digest item types; <code class="docutils literal notranslate"><span class="pre">engine.py</span></code> — frontmatter scans and digest composition; <code class="docutils literal notranslate"><span class="pre">render.py</span></code> — sorting and <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code> rendering.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">lint/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">model.py</span></code> — severities, findings, the report; <code class="docutils literal notranslate"><span class="pre">parse.py</span></code> — pure markdown extractors; <code class="docutils literal notranslate"><span class="pre">checks_links.py</span></code> / <code class="docutils literal notranslate"><span class="pre">checks_metadata.py</span></code> / <code class="docutils literal notranslate"><span class="pre">checks_freshness.py</span></code> — the checks by theme; <code class="docutils literal notranslate"><span class="pre">engine.py</span></code> — the vault walk and <code class="docutils literal notranslate"><span class="pre">LintEngine</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">reindex_from_vault/</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">_model.py</span></code> — reindex vocabulary and pure helpers; <code class="docutils literal notranslate"><span class="pre">reindexer.py</span></code> — the <code class="docutils literal notranslate"><span class="pre">Reindexer</span></code> walk/retain/prune engine.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="package-conventions">
+<h3>Package conventions<a class="headerlink" href="#package-conventions" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>The package <code class="docutils literal notranslate"><span class="pre">__init__</span></code> is the public surface.</strong> Each package re-exports its
+public names (listed in <code class="docutils literal notranslate"><span class="pre">__all__</span></code>) from its <code class="docutils literal notranslate"><span class="pre">__init__</span></code>, whose docstring is the
+authoritative map of the package. Callers import from the package
+(<code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">thoth.vault</span> <span class="pre">import</span> <span class="pre">Vault</span></code>), never from a submodule; underscore-prefixed
+submodules (<code class="docutils literal notranslate"><span class="pre">query/_engine.py</span></code>, <code class="docutils literal notranslate"><span class="pre">state/_db.py</span></code>, …) make the privacy explicit.</p></li>
+<li><p><strong>Heavy SDKs import lazily.</strong> <code class="docutils literal notranslate"><span class="pre">anthropic</span></code>, <code class="docutils literal notranslate"><span class="pre">slack_bolt</span></code> and <code class="docutils literal notranslate"><span class="pre">mcp</span></code> are imported
+only inside the functions that need them (<code class="docutils literal notranslate"><span class="pre">llm</span></code>’s client factory, <code class="docutils literal notranslate"><span class="pre">slack_app</span></code>’s
+daemon, <code class="docutils literal notranslate"><span class="pre">mcp_server</span></code>’s server/transport) — never at module top level. Importing
+any <code class="docutils literal notranslate"><span class="pre">thoth</span></code> package therefore needs only the base dependencies: pytest
+collection and CI run without the runtime extra installed. <code class="docutils literal notranslate"><span class="pre">wiring.py</span></code> follows
+the same rule for the whole collaborator graph, which also keeps test patches
+on a collaborator’s defining module effective.</p></li>
+<li><p><strong>One logger per package.</strong> A package that logs defines a single
+<code class="docutils literal notranslate"><span class="pre">logging.getLogger(&quot;thoth.&lt;package&gt;&quot;)</span></code> in its shared submodule and the other
+submodules import it, so log filtering follows responsibilities, not file
+boundaries.</p></li>
+</ul>
+</section>
 </section>
 <section id="models">
 <span id="id1"></span><h2>Models<a class="headerlink" href="#models" title="Link to this heading">#</a></h2>
@@ -1080,17 +1183,17 @@ re-tier without code changes.</p>
 <td><p><code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code> (unset = the default Haiku, not <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code>)</p></td>
 <td><p>A one-shot routing guess (capture / query) — fast and cheap is the whole point</p></td>
 </tr>
-<tr class="row-odd"><td><p><strong>Classify · curate</strong> (<code class="docutils literal notranslate"><span class="pre">ingest.py</span></code> → <code class="docutils literal notranslate"><span class="pre">llm.py</span></code>)</p></td>
+<tr class="row-odd"><td><p><strong>Classify · curate</strong> (<code class="docutils literal notranslate"><span class="pre">thoth.ingest</span></code> → <code class="docutils literal notranslate"><span class="pre">thoth.llm</span></code>)</p></td>
 <td><p>Claude Sonnet (<code class="docutils literal notranslate"><span class="pre">claude-sonnet-4-6</span></code>)</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code></p></td>
 <td><p>The pipeline workhorse: schema-validated classification and the curate file-plan</p></td>
 </tr>
-<tr class="row-even"><td><p><strong>Analyse / transcribe</strong> (<code class="docutils literal notranslate"><span class="pre">analyse.py</span></code>)</p></td>
+<tr class="row-even"><td><p><strong>Analyse / transcribe</strong> (<code class="docutils literal notranslate"><span class="pre">thoth.analyse</span></code>)</p></td>
 <td><p>Sonnet (the default — Sonnet is multimodal)</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">THOTH_ANALYSE_MODEL</span></code></p></td>
 <td><p>One vision call for OCR text, routing hint, kind, and document transcription; can drop to Haiku for cheaper A/B work</p></td>
 </tr>
-<tr class="row-odd"><td><p><strong>Excalidraw reconstruction</strong> (<code class="docutils literal notranslate"><span class="pre">analyse.py</span></code>)</p></td>
+<tr class="row-odd"><td><p><strong>Excalidraw reconstruction</strong> (<code class="docutils literal notranslate"><span class="pre">thoth.analyse</span></code>)</p></td>
 <td><p><strong>Opus</strong> (<code class="docutils literal notranslate"><span class="pre">claude-opus-4-8</span></code>)</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL</span></code></p></td>
 <td><p>Rebuilding a hand-drawn diagram into valid Excalidraw JSON needs spatial reasoning — worth a stronger model than the default</p></td>
@@ -1103,9 +1206,10 @@ re-tier without code changes.</p>
 back to <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code> when unset; <code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code> overrides the intent gate
 and, when unset, falls back to its own cheap Haiku default rather than <code class="docutils literal notranslate"><span class="pre">ANTHROPIC_MODEL</span></code>.
 The default deployment ships
-<code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL=claude-opus-4-8</span></code> and leaves the rest on Sonnet. Bare aliases
-that 404 fall back to a proven dated id (<code class="docutils literal notranslate"><span class="pre">llm.py</span></code>); a daily call-count budget
-(<code class="docutils literal notranslate"><span class="pre">budget.py</span></code>) guards every model chokepoint against redelivery storms.</p>
+<code class="docutils literal notranslate"><span class="pre">THOTH_DIAGRAM_MODEL=claude-opus-4-8</span></code> and leaves the rest on Sonnet. The configured
+model ids are used as-is — a wrong id surfaces as an API error rather than a silent
+substitution; a daily call-count budget (<code class="docutils literal notranslate"><span class="pre">thoth.budget</span></code>) guards every model
+chokepoint against redelivery storms.</p>
 </section>
 <section id="the-stack">
 <h2>The stack<a class="headerlink" href="#the-stack" title="Link to this heading">#</a></h2>
@@ -1207,6 +1311,11 @@ that 404 fall back to a proven dated id (<code class="docutils literal notransla
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mcp-query-pipeline">MCP query pipeline</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#code-layout">Code layout</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-each-package-s-submodules-own">What each package’s submodules own</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#package-conventions">Package conventions</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#models">Models</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-stack">The stack</a></li>
 </ul>
