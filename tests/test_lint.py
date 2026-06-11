@@ -697,6 +697,17 @@ def test_frontmatter_personal_must_be_real_boolean(
     assert any("'personal'" in m for m in absent)
 
 
+def test_frontmatter_empty_tags_list_is_legal(vault: Vault, config: Config) -> None:
+    """tags: [] passes check 4 (descriptive-only tags may be empty, ADR 0013)."""
+    _knowledge(vault, "entities", "untagged", page_type="entity", tags=[])
+    findings = [
+        f
+        for f in _engine(vault, config).check_frontmatter()
+        if f.path == "entities/untagged.md"
+    ]
+    assert findings == []
+
+
 def test_frontmatter_inbox_hold_needs_no_tags(vault: Vault, config: Config) -> None:
     """An inbox hold passes with sha256 and no tags; a missing sha256 is flagged."""
     _write(

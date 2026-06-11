@@ -117,7 +117,11 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
     for field in required:
         if field == "summary":
             continue
-        if meta.get(field) in (None, "", []):
+        value = meta.get(field)
+        # A present-but-empty tags list is legal (tags are descriptive only, ADR
+        # 0013, and the as-is import files pages with tags: []); for every other
+        # field an empty list is as missing as None/"".
+        if value in (None, "") or (value == [] and field != "tags"):
             flag(f"missing required common field {field!r}")
     if page_type is not None and page_type not in VALID_TYPES:
         flag(f"invalid type {page_type!r}")
