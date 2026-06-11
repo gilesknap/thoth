@@ -615,9 +615,10 @@ def _int_opt(value: str | None, *, default: int, name: str) -> int:
 def _strip_user_token(token: str) -> str:
     """Strip ``<@...>`` / leading ``@`` / a ``|label`` from one allow-list token.
 
-    Mirrors ``slack_app._strip_user_wrapper`` so :meth:`Config.alert_target` can pull a
-    DM id out of ``SLACK_ALLOWED_USERS`` without importing the (heavy, CI-absent)
-    Slack-daemon module. Kept tiny and pure.
+    The single normaliser for ``SLACK_ALLOWED_USERS`` tokens, shared with
+    :func:`thoth.slack_app.parse_allowed_users`; it lives here so
+    :meth:`Config.alert_target` can pull a DM id without importing the (heavy,
+    CI-absent) Slack-daemon module. Kept tiny and pure.
     """
     token = token.strip()
     if token.startswith("<@") and token.endswith(">"):

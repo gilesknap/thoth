@@ -67,6 +67,9 @@ from thoth.analyse import AnalyseError, Analyser, Analysis
 from thoth.budget import BudgetExceededError
 from thoth.config import Config
 from thoth.extract import ExtractError, Extractor, FetchedBinary
+from thoth.filetypes import AUDIO_EXTS as _AUDIO_EXTS
+from thoth.filetypes import IMAGE_EXTS as _IMAGE_EXTS
+from thoth.filetypes import TEXT_EXTS as _TEXT_EXTS
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.hindsight import Hindsight, HindsightError
 from thoth.images import downscale_if_oversized
@@ -124,16 +127,6 @@ _CANDIDATE_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
 HOLD_MODE_CURATE: str = "curate"
 HOLD_MODE_AS_IS: str = "as-is"
 HOLD_MODES: frozenset[str] = frozenset({HOLD_MODE_CURATE, HOLD_MODE_AS_IS})
-
-# File extensions (no dot) that select a binary/audio/text capture kind.
-_IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
-_AUDIO_EXTS: frozenset[str] = frozenset({"mp3", "wav", "m4a", "ogg", "flac"})
-# Plain-text uploads (markdown/notes/data dumps) whose bytes ARE the text body: read
-# the file rather than misclassifying it as an image binary and dropping its text
-# (issue #57). Checked before the image default in :func:`_ext_kind`.
-_TEXT_EXTS: frozenset[str] = frozenset(
-    {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
-)
 
 # The single content folder each page ``type`` is written to (the inverse of the
 # folder->types :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`). Each content type maps to
@@ -1666,23 +1659,18 @@ class Ingestor:
         hits: list[str] = []
         if not needle:
             return hits
-        for folder in _CANDIDATE_DIRS:
-            directory = self._vault.root / folder
-            if not directory.is_dir():
+        for rel, md_path in self._vault.iter_folder_pages(_CANDIDATE_DIRS):
+            if rel in hits:
                 continue
-            for md_path in sorted(directory.glob("*.md")):
-                rel = f"{folder}/{md_path.name}"
-                if rel in hits:
-                    continue
-                haystack = md_path.name.lower()
-                try:
-                    haystack += "\n" + md_path.read_text(encoding="utf-8").lower()
-                except OSError:
-                    pass
-                if needle in haystack:
-                    hits.append(rel)
-                    if len(hits) >= limit:
-                        return hits
+            haystack = md_path.name.lower()
+            try:
+                haystack += "\n" + md_path.read_text(encoding="utf-8").lower()
+            except OSError:
+                pass
+            if needle in haystack:
+                hits.append(rel)
+                if len(hits) >= limit:
+                    return hits
         return hits
 
     # ---- internals: durable pre-LLM holding --------------------------------------

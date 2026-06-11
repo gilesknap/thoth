@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -512,8 +513,8 @@ class QueryEngine:
             A ``(ordered_paths, methods)`` pair: the fused, capped path list in final
             rank order, and a path -> methods-tuple map covering those paths.
         """
-        method_sets: dict[str, set[str]] = {}
-        scores: dict[str, float] = {}
+        method_sets: defaultdict[str, set[str]] = defaultdict(set)
+        scores: defaultdict[str, float] = defaultdict(float)
         order_index: dict[str, int] = {}
 
         # Structural discovery order is the stable tie-break key; record it first so a
@@ -522,22 +523,22 @@ class QueryEngine:
         # grep vs wikilink from the caller's grep set.
         for rank, path in enumerate(structural):
             order_index[path] = rank
-            scores[path] = scores.get(path, 0.0) + 1.0 / (RRF_K + rank)
+            scores[path] += 1.0 / (RRF_K + rank)
             tag = METHOD_GREP if path in grep_hits else METHOD_WIKILINK
-            method_sets.setdefault(path, set()).add(tag)
+            method_sets[path].add(tag)
         next_index = len(structural)
         for rank, path in enumerate(recall):
             if path not in order_index:
                 order_index[path] = next_index
                 next_index += 1
-            scores[path] = scores.get(path, 0.0) + 1.0 / (RRF_K + rank)
-            method_sets.setdefault(path, set()).add(METHOD_RECALL)
+            scores[path] += 1.0 / (RRF_K + rank)
+            method_sets[path].add(METHOD_RECALL)
 
-        # Stable sort by descending fused score; Python's sort is stable, so feeding the
-        # paths in structural-then-recall discovery order makes that the tie-break.
-        candidates = sorted(order_index, key=lambda p: order_index[p])
-        candidates.sort(key=lambda p: scores[p], reverse=True)
-        ordered = candidates[:max_pages]
+        # Sort by descending fused score, with structural-then-recall discovery order
+        # as the tie-break key.
+        ordered = sorted(order_index, key=lambda p: (-scores[p], order_index[p]))[
+            :max_pages
+        ]
         methods = {
             path: tuple(m for m in _METHOD_ORDER if m in method_sets[path])
             for path in ordered
@@ -587,29 +588,24 @@ class QueryEngine:
         # order (folder order, then filename order). The sort below is stable, so pages
         # with an identical key keep this order -- preserving the pre-#96 tie-break.
         scored: list[tuple[int, int, str]] = []
-        for folder in SEARCHED_DIRS:
-            directory = self._vault.root / folder
-            if not directory.is_dir():
-                continue
-            for entry in sorted(directory.glob("*.md")):
-                rel = f"{folder}/{entry.name}"
-                # The filename and the page's frontmatter are the high-weight haystack;
-                # the body is the low-weight one. _safe_read returns the raw text with
-                # the leading "---" frontmatter block intact (#72), which we split off.
-                raw = self._safe_read(entry).lower()
-                front, body = _split_frontmatter(raw)
-                high_hay = f"{entry.name.lower()}\n{front}"
-                matched = 0
-                weight = 0
-                for pattern in patterns:
-                    if pattern.search(high_hay):
-                        matched += 1
-                        weight += _HIGH_WEIGHT
-                    elif pattern.search(body):
-                        matched += 1
-                        weight += _LOW_WEIGHT
-                if matched:
-                    scored.append((matched, weight, rel))
+        for rel, entry in self._vault.iter_folder_pages(SEARCHED_DIRS):
+            # The filename and the page's frontmatter are the high-weight haystack;
+            # the body is the low-weight one. _safe_read returns the raw text with
+            # the leading "---" frontmatter block intact (#72), which we split off.
+            raw = self._safe_read(entry).lower()
+            front, body = _split_frontmatter(raw)
+            high_hay = f"{entry.name.lower()}\n{front}"
+            matched = 0
+            weight = 0
+            for pattern in patterns:
+                if pattern.search(high_hay):
+                    matched += 1
+                    weight += _HIGH_WEIGHT
+                elif pattern.search(body):
+                    matched += 1
+                    weight += _LOW_WEIGHT
+            if matched:
+                scored.append((matched, weight, rel))
         # Rank by distinct-token count first, then placement weight; stable, so equal
         # keys keep their scan order. (matched, weight) descending = best page first.
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
@@ -698,9 +694,7 @@ class QueryEngine:
             path = hit.path
             if path in seen:
                 continue
-            if not self._vault.is_inside(path):
-                continue
-            if not self._vault.page_exists(path):
+            if not self._confined_page_exists(path):
                 continue
             seen.add(path)
             kept.append(path)
@@ -841,14 +835,18 @@ class QueryEngine:
             cleaned = cleaned[: -len(".md")]
         if "/" in cleaned:
             candidate = f"{cleaned}.md"
-            if self._vault.is_inside(candidate) and self._vault.page_exists(candidate):
+            if self._confined_page_exists(candidate):
                 return PurePosixPath(candidate).as_posix()
             return None
         for folder in SEARCHED_DIRS:
             candidate = f"{folder}/{cleaned}.md"
-            if self._vault.is_inside(candidate) and self._vault.page_exists(candidate):
+            if self._confined_page_exists(candidate):
                 return candidate
         return None
+
+    def _confined_page_exists(self, path: str) -> bool:
+        """Return ``True`` when ``path`` is vault-confined and exists as a page."""
+        return self._vault.is_inside(path) and self._vault.page_exists(path)
 
     def _safe_read(self, absolute_path: Path) -> str:
         """Read a small text file for grep, returning ``""`` on any read failure."""

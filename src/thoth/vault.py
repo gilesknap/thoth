@@ -35,6 +35,7 @@ import hashlib
 import os
 import re
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -503,6 +504,27 @@ class Vault:
         """Return ``True`` if a confined ``vault_relative_path`` exists as a file."""
         absolute = self.resolve(vault_relative_path)
         return absolute.is_file()
+
+    def iter_folder_pages(self, folders: tuple[str, ...]) -> Iterator[tuple[str, Path]]:
+        """Yield ``(rel, absolute)`` for every ``*.md`` page under ``folders``.
+
+        Folders are visited in the given order and pages within a folder in sorted
+        filename order -- the stable scan order the lexical search passes rank by.
+        Missing folders are skipped silently.
+
+        Args:
+            folders: Vault-relative folder names to scan, in priority order.
+
+        Yields:
+            ``(rel, absolute)`` pairs: the vault-relative ``folder/name.md`` path and
+            the absolute :class:`~pathlib.Path` to the file.
+        """
+        for folder in folders:
+            directory = self._root / folder
+            if not directory.is_dir():
+                continue
+            for entry in sorted(directory.glob("*.md")):
+                yield f"{folder}/{entry.name}", entry
 
     @staticmethod
     def body_sha256(body: str) -> str:

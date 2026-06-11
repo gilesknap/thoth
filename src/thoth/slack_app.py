@@ -65,12 +65,13 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from thoth.budget import BudgetExceededError
-from thoth.config import Config
+from thoth.config import Config, _strip_user_token
+from thoth.filetypes import IMAGE_EXTS as _IMAGE_EXTS
 from thoth.git_sync import GitSync, GitSyncError, VaultConflictError
 from thoth.ingest import Capture, IngestError, Ingestor, IngestReport
 from thoth.intent import IntentClassifier, IntentDecision
 from thoth.query import Citation, QueryEngine, QueryError, QueryResult
-from thoth.render import render_vault_ref
+from thoth.render import SlackPoster, render_vault_ref
 from thoth.state import EventStore
 
 logger = logging.getLogger(__name__)
@@ -81,12 +82,6 @@ DEDUPE_TTL_SECONDS: float = 3600.0
 # A free-text message whose body, once stripped, begins with one of these prefixes is
 # routed to ingest-as-text rather than query (an explicit "save this thought" signal).
 _CAPTURE_PREFIXES: tuple[str, ...] = ("capture:", "note:", "save:")
-
-# Image file extensions (no dot) that mark a Slack upload as an image, so a multi-file
-# message of only images is captured as ONE page (issue #84). Mirrors the ingest
-# pipeline's image kinds; a mimetype check is tried first in
-# :meth:`Handlers._is_image_file`.
-_IMAGE_EXTS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
 
 # The safe routing verdict used when the gate is bypassed (no classifier wired): route
 # to the vault-only query with no keywords, so the read path greps the raw text -- the
@@ -137,22 +132,10 @@ def parse_allowed_users(raw: str | None) -> frozenset[str]:
         return frozenset()
     tokens: list[str] = []
     for piece in raw.replace(",", " ").split():
-        token = _strip_user_wrapper(piece)
+        token = _strip_user_token(piece)
         if token:
             tokens.append(token)
     return frozenset(tokens)
-
-
-def _strip_user_wrapper(token: str) -> str:
-    """Strip ``<@...>`` and a leading ``@`` from one allow-list / mention token."""
-    token = token.strip()
-    if token.startswith("<@") and token.endswith(">"):
-        token = token[2:-1]
-    if token.startswith("@"):
-        token = token[1:]
-    # Slack mention markup may carry a display label after a pipe: <@U1|name>.
-    token = token.split("|", 1)[0]
-    return token.strip()
 
 
 def render_citation(citation: Citation) -> str:
@@ -351,14 +334,12 @@ class EventDedupe:
         }
 
 
-class SlackClientLike(Protocol):
-    """The slice of the Bolt web client used by the handlers."""
+class SlackClientLike(SlackPoster, Protocol):
+    """The slice of the Bolt web client used by the handlers.
 
-    def chat_postMessage(  # noqa: N802 - Slack SDK method name
-        self, *, channel: str, text: str, **kwargs: Any
-    ) -> Any:
-        """Post a message to a channel (Slack ``chat.postMessage``)."""
-        ...
+    Extends the shared :class:`thoth.render.SlackPoster` with the in-place edit used
+    by the placeholder flow.
+    """
 
     def chat_update(  # noqa: N802 - Slack SDK method name
         self, *, channel: str, ts: str, text: str, **kwargs: Any

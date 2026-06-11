@@ -56,14 +56,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import PurePosixPath
-from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
 import frontmatter
 import yaml
 
+from thoth._time import LONDON
 from thoth.config import Config
-from thoth.render import render_vault_ref
+from thoth.fmfields import _is_truthy, _page_tags, _parse_date, _str_field
+from thoth.render import SlackPoster, render_vault_ref
 from thoth.state import HEARTBEAT_MARKERS, MarkerStore
 from thoth.vault import CURATED_DIRS, Vault
 
@@ -87,14 +87,6 @@ _MARKER_LABELS: dict[str, str] = {
     "reindex": "reindex",
     "push": "push",
 }
-
-LONDON: ZoneInfo = ZoneInfo("Europe/London")
-"""The Europe/London timezone used for every calendar-date computation (SPEC section 9).
-
-Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is declared as a base
-dependency so this resolves identically across the 3.11-3.14 matrix even on a minimal
-container with no OS time-zone database.
-"""
 
 ACTION_OPEN_STATUSES: frozenset[str] = frozenset({"todo", "in_progress"})
 """Action ``status`` values treated as still open (SPEC frontmatter contract)."""
@@ -131,20 +123,6 @@ _REVIEW_STATUS: str = "review"
 
 class SummaryError(Exception):
     """Raised when a digest cannot be composed (for example a missing vault root)."""
-
-
-class SlackPoster(Protocol):
-    """The slice of the Slack web client used to deliver a digest.
-
-    Only ``chat.postMessage`` is needed; both the real Bolt ``WebClient`` and a test
-    fake satisfy this protocol, so :class:`SummaryEngine` never imports a Slack SDK.
-    """
-
-    def chat_postMessage(  # noqa: N802 - Slack SDK method name
-        self, *, channel: str, text: str, **kwargs: Any
-    ) -> Any:
-        """Post ``text`` to ``channel`` (the Slack ``chat.postMessage`` API)."""
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +438,21 @@ class SummaryEngine:
         ]
         return self._sort_actions(items)
 
+    def closed_actions(self) -> list[ActionItem]:
+        """Return closed actions (a non-blank ``status`` not in the open set).
+
+        A missing/blank status counts as open and is therefore excluded. Kept in scan
+        order (path-sorted) for determinism.
+
+        Returns:
+            The closed :class:`ActionItem` list.
+        """
+        return [
+            item
+            for item in self._scan_actions()
+            if item.status and item.status not in ACTION_OPEN_STATUSES
+        ]
+
     def overdue_actions(self) -> list[ActionItem]:
         """Return open actions whose ``due_date`` is strictly before :attr:`today`.
 
@@ -512,12 +505,7 @@ class SummaryEngine:
             for item, status in self._scan_media_with_status()
             if status == MEDIA_OPEN_STATUS
         ]
-
-        def key(item: MediaItem) -> tuple[int, date, str]:
-            added = item.added
-            return (1, date.max, item.path) if added is None else (0, added, item.path)
-
-        return sorted(items, key=key)
+        return sorted(items, key=lambda item: _date_key(item.added, item.path))
 
     def recent_pages(self, *, days: int = 1) -> list[PageRef]:
         """Return curated pages whose ``updated``/``created`` is within ``days``.
@@ -573,7 +561,7 @@ class SummaryEngine:
                     status=_str_field(meta.get("status")) or "",
                     priority=_str_field(meta.get("priority")),
                     due_date=_parse_date(meta.get("due_date")),
-                    wikilink=f"[[{rel.removesuffix('.md')}]]",
+                    wikilink=_wikilink(rel),
                     obsidian_uri=self._vault.obsidian_uri(rel),
                 )
             )
@@ -599,7 +587,7 @@ class SummaryEngine:
                 title=_title(meta, slug),
                 media_type=_str_field(meta.get("media_type")),
                 added=_parse_date(meta.get("created")),
-                wikilink=f"[[{rel.removesuffix('.md')}]]",
+                wikilink=_wikilink(rel),
                 obsidian_uri=self._vault.obsidian_uri(rel),
             )
             pairs.append((item, _str_field(meta.get("status")) or ""))
@@ -667,12 +655,7 @@ class SummaryEngine:
     @staticmethod
     def _sort_actions(items: list[ActionItem]) -> list[ActionItem]:
         """Sort actions by due date (no-date last), then path, stably."""
-
-        def key(item: ActionItem) -> tuple[int, date, str]:
-            due = item.due_date
-            return (1, date.max, item.path) if due is None else (0, due, item.path)
-
-        return sorted(items, key=key)
+        return sorted(items, key=lambda item: _date_key(item.due_date, item.path))
 
     @staticmethod
     def _counts_by_type(refs: Sequence[PageRef]) -> list[tuple[str, int]]:
@@ -768,6 +751,16 @@ class SummaryEngine:
 # ---- module-level frontmatter helpers (pure, total) -------------------------------
 
 
+def _date_key(d: date | None, path: str) -> tuple[int, date, str]:
+    """Sort key: dated items first (date ascending), undated last, then by path."""
+    return (1, date.max, path) if d is None else (0, d, path)
+
+
+def _wikilink(rel: str) -> str:
+    """Render the folder-qualified ``[[wikilink]]`` for a vault-relative md path."""
+    return f"[[{rel.removesuffix('.md')}]]"
+
+
 def _title(meta: dict[str, object], slug: str) -> str:
     """Return the frontmatter ``title`` as a string, falling back to ``slug``."""
     value = meta.get("title")
@@ -776,57 +769,9 @@ def _title(meta: dict[str, object], slug: str) -> str:
     return slug
 
 
-def _str_field(value: object) -> str | None:
-    """Return ``value`` as a stripped string, or ``None`` when absent/blank."""
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    if value is None:
-        return None
-    return str(value)
-
-
-def _page_tags(meta: dict[str, object]) -> list[str]:
-    """Return a page's ``tags`` frontmatter as a list of trimmed strings."""
-    raw = meta.get("tags")
-    if isinstance(raw, list):
-        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
-    if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
-    return []
-
-
 def _is_flagged(meta: dict[str, object]) -> bool:
     """Return ``True`` if frontmatter marks a page for review (``review`` / status)."""
-    review = meta.get("review")
-    if review is True:
-        return True
-    if isinstance(review, str) and review.strip().lower() in {"true", "yes", "1"}:
+    if _is_truthy(meta.get("review")):
         return True
     status = meta.get("status")
     return isinstance(status, str) and status.strip().lower() == _REVIEW_STATUS
-
-
-def _parse_date(value: object) -> date | None:
-    """Coerce a frontmatter date-ish value to a :class:`date`, else ``None``.
-
-    Accepts a real :class:`~datetime.date` or :class:`~datetime.datetime` (YAML often
-    parses bare ``YYYY-MM-DD`` to a ``date``), and a string in ``YYYY-MM-DD`` or
-    ``YYYY-MM-DD HH:MM`` form (the trailing time is dropped). Any other value, an empty
-    string, or an unparseable string yields ``None`` -- a malformed date is treated as
-    "no date" and never raises.
-    """
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        head = text.split()[0]
-        try:
-            return date.fromisoformat(head)
-        except ValueError:
-            return None
-    return None

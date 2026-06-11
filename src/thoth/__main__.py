@@ -401,7 +401,7 @@ def run_summary(
     ``WebClient`` from ``config.slack_bot_token``, and posts via
     :meth:`~thoth.summary.SummaryEngine.post`. ``poster_factory`` is injectable so a
     test can substitute a fake poster without the Slack SDK; in production it defaults
-    to :func:`_make_web_client`.
+    to :func:`thoth.alerts._make_web_client`.
 
     Args:
         namespace: The parsed args (``kind`` and ``--skip-when-empty``).
@@ -409,6 +409,7 @@ def run_summary(
         poster_factory: Builds a :class:`~thoth.summary.SlackPoster` from ``config``;
             defaults to a real Slack ``WebClient`` builder.
     """
+    from .alerts import _make_web_client
     from .state import MarkerStore
     from .summary import SummaryEngine
 
@@ -753,9 +754,10 @@ class _Graph:
 def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
     """Wire the full ingest/query collaborator graph from ``config``.
 
-    Mirrors the graph :func:`thoth.mcp_server.run` builds (vault, llm, extractor,
-    hindsight, git, ingestor, query engine) so the Slack daemon and the MCP server share
-    one construction shape. All heavy imports are local to this function.
+    Delegates the construction to :func:`thoth.wiring.build_collaborators` (the shape
+    shared with :func:`thoth.mcp_server.run`), adding the Slack/CLI-side pieces: the
+    alerting budget guard and the liveness markers. All heavy imports are local to
+    this function.
 
     ``guard`` lets a caller inject an already-built :class:`~thoth.budget.BudgetGuard`
     so the same cap reaches both the LLM (classify/analyse/curate) and Hindsight
@@ -765,16 +767,9 @@ def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
     """
     from .alerts import make_alerter
     from .budget import make_budget_guard
-    from .extract import Extractor
-    from .git_sync import GitSync
-    from .hindsight import Hindsight
-    from .ingest import Ingestor
-    from .llm import LLM
-    from .query import QueryEngine
     from .state import MarkerStore
-    from .vault import Vault
+    from .wiring import build_collaborators
 
-    vault = Vault(config)
     # The daily cost guard (issue #16): one shared cap over the Anthropic calls (via the
     # LLM) and the Gemini fact-extraction (via Hindsight retain), persisted in state.db
     # and keyed by the London day. It alerts once per day through the errors-to-Slack
@@ -782,28 +777,12 @@ def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
     # guard carrying a transient --budget override (thoth capture, issue #80).
     if guard is None:
         guard = make_budget_guard(config, alerter=make_alerter(config))
-    llm = LLM(config, guard=guard)
-    extractor = Extractor(config)
-    hindsight = Hindsight(config, guard=guard)
-    git = GitSync(config)
     # Liveness markers so a successful capture/push records its time for the daily
     # heartbeat (issue #15); the same disposable state.db backs the dedupe table.
-    markers = MarkerStore(config.state_db_path)
-    # Pass SCHEMA.md as the curate-call system_extra so curated pages are filed to the
-    # live per-type schema; without it the curate model files blind (this wiring used to
-    # drop schema_md, leaving the vault empty when paired with a schema-less prompt).
-    ingestor = Ingestor(
-        config,
-        vault,
-        llm,
-        extractor,
-        hindsight,
-        git,
-        schema_md=vault.schema_md(),
-        markers=markers,
+    built = build_collaborators(
+        config, guard=guard, markers=MarkerStore(config.state_db_path)
     )
-    query_engine = QueryEngine(config, vault, hindsight, llm)
-    return _Graph(ingestor=ingestor, query_engine=query_engine)
+    return _Graph(ingestor=built.ingestor, query_engine=built.query_engine)
 
 
 def _make_vault(config: Config) -> Any:
@@ -811,20 +790,6 @@ def _make_vault(config: Config) -> Any:
     from .vault import Vault
 
     return Vault(config)
-
-
-def _make_web_client(config: Config) -> Any:
-    """Build a Slack ``WebClient`` from ``config.slack_bot_token`` (lazy import).
-
-    ``slack_sdk`` ships with ``slack_bolt`` (a runtime-only optional dependency absent
-    in CI), so it is imported here, never at module top level. The bot token is required
-    for a summary post; :meth:`~thoth.config.Config.require_slack` raises a clear
-    :class:`~thoth.config.ConfigError` if it is unset.
-    """
-    bot_token, _ = config.require_slack()
-    from slack_sdk import WebClient
-
-    return WebClient(token=bot_token)
 
 
 if __name__ == "__main__":

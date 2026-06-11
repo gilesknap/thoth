@@ -44,9 +44,11 @@ vault writer does not enforce) are defined here from the SPEC frontmatter table.
 only injected non-determinism is ``today`` (a :class:`~datetime.date`) so the
 stale / overdue / media-cold windows are reproducible under a frozen clock.
 
-Only the standard library plus ``frontmatter`` / ``yaml`` and the frozen
-:class:`thoth.config.Config` / :class:`thoth.vault.Vault` are imported at module level,
-so importing this module at pytest collection is always CI-safe.
+Only the standard library plus ``frontmatter`` / ``yaml`` and import-light ``thoth``
+modules (the frozen :class:`thoth.config.Config` / :class:`thoth.vault.Vault`, the
+shared time/field helpers, and :mod:`thoth.summary` for the media-status vocabulary)
+are imported at module level, so importing this module at pytest collection is always
+CI-safe.
 """
 
 from __future__ import annotations
@@ -58,12 +60,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import IntEnum
 from pathlib import PurePosixPath
-from zoneinfo import ZoneInfo
 
 import frontmatter
 import yaml
 
+from thoth._time import LONDON
 from thoth.config import Config
+from thoth.fmfields import _is_truthy, _page_tags, _parse_date, _str_field
+from thoth.summary import MEDIA_OPEN_STATUS
 from thoth.vault import (
     ACTIONABLE_DIRS,
     ASSET_SLUG_RE,
@@ -99,13 +103,6 @@ __all__ = [
     "extract_wikilinks",
     "extract_embeds",
 ]
-
-LONDON: ZoneInfo = ZoneInfo("Europe/London")
-"""The Europe/London timezone used to derive a default ``today`` (SPEC section 9).
-
-Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is a base dependency so
-this resolves identically across the 3.11-3.14 matrix even on a minimal container.
-"""
 
 # CURATED_DIRS / ACTIONABLE_DIRS are the canonical folder vocabulary owned by
 # thoth.vault (ADR 0005); they are imported above and re-exported here so the __all__
@@ -143,9 +140,6 @@ _ASSETS_DIR: str = "raw/assets"
 
 # Action statuses that exempt an overdue action from the stale check (SPEC check 5).
 _ACTION_CLOSED_STATUSES: frozenset[str] = frozenset({"done", "completed", "cancelled"})
-
-# The media status whose backlog ages out (SPEC check 5 / frontmatter contract).
-_MEDIA_OPEN_STATUS: str = "to_consume"
 
 # The SCHEMA.md heading under which the tag taxonomy bullets live (SPEC Appendix).
 _TAXONOMY_HEADING: str = "## Tag Taxonomy"
@@ -596,7 +590,7 @@ class LintEngine:
                         message=f"action is past its due date {due.isoformat()}",
                     )
                 )
-        if status == _MEDIA_OPEN_STATUS and "media" in _page_tags(page.meta):
+        if status == MEDIA_OPEN_STATUS and "media" in _page_tags(page.meta):
             added = _parse_date(page.meta.get("created"))
             if added is not None and added < media_floor:
                 out.append(
@@ -1140,63 +1134,6 @@ def parse_taxonomy_tags(schema_text: str) -> set[str]:
     return tags
 
 
-def _page_tags(meta: dict[str, object]) -> list[str]:
-    """Return a page's ``tags`` frontmatter as a list of trimmed strings."""
-    raw = meta.get("tags")
-    if isinstance(raw, list):
-        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
-    if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
-    return []
-
-
 def _under_excluded_dir(rel: str) -> bool:
     """Return ``True`` if any path segment of ``rel`` is an excluded directory."""
     return any(segment in EXCLUDED_DIRS for segment in PurePosixPath(rel).parts)
-
-
-def _is_truthy(value: object) -> bool:
-    """Return ``True`` for boolean ``True`` or a truthy string (true / yes / 1)."""
-    if value is True:
-        return True
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "1"}
-    return False
-
-
-def _str_field(value: object) -> str | None:
-    """Return ``value`` as a stripped string, or ``None`` when absent/blank.
-
-    Mirrors ``summary._str_field``: a real string is stripped (blank -> ``None``),
-    ``None`` stays ``None``, and any other scalar is stringified.
-    """
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    if value is None:
-        return None
-    return str(value)
-
-
-def _parse_date(value: object) -> date | None:
-    """Coerce a frontmatter date-ish value to a :class:`date`, else ``None``.
-
-    Mirrors ``summary._parse_date``: accepts a real :class:`~datetime.date` or
-    :class:`~datetime.datetime`, and a ``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM`` string
-    (the trailing time is dropped). Any other value, an empty string, or an unparseable
-    string yields ``None`` and never raises.
-    """
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        head = text.split()[0]
-        try:
-            return date.fromisoformat(head)
-        except ValueError:
-            return None
-    return None
