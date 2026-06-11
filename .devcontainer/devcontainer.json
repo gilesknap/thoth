@@ -1,32 +1,38 @@
 // For format details, see https://containers.dev/implementors/json_reference/
+//
+// Scheme: the project venv is a plain uv-default `.venv` in the workspace, and the
+// workspace + shared cache are bind-mounted at IDENTICAL paths inside and outside
+// the container. One venv (with the absolute paths uv writes into it) is therefore
+// valid from both sides — host editors/language servers (e.g. Zed) and in-container
+// tooling use the same interpreter and site-packages.
 {
     "name": "Python 3 Developer Container",
     "build": {
         "dockerfile": "../Dockerfile",
         "target": "developer"
     },
+    // containerEnv is baked in at container creation, so it applies to EVERY exec
+    // path — including editors that bypass remoteEnv (Zed execs into the container
+    // directly). The cache lives under the host $HOME and is mounted at the same
+    // path in the container (see mounts), so uv-managed interpreters installed
+    // there resolve from both sides.
+    "containerEnv": {
+        "PRE_COMMIT_HOME": "${localEnv:HOME}/.cache/devcontainer-shared/pre-commit",
+        "UV_CACHE_DIR": "${localEnv:HOME}/.cache/devcontainer-shared/uv",
+        "UV_PYTHON_CACHE_DIR": "${localEnv:HOME}/.cache/devcontainer-shared/uv-python",
+        "UV_PYTHON_INSTALL_DIR": "${localEnv:HOME}/.cache/devcontainer-shared/uv-python-installs"
+    },
     "remoteEnv": {
-        // Allow X11 apps to run inside the container
-        "DISPLAY": "${localEnv:DISPLAY}",
-        // Put things that allow it in the persistent cache
-        "PRE_COMMIT_HOME": "/cache/pre-commit",
-        "UV_CACHE_DIR": "/cache/uv",
-        "UV_PYTHON_CACHE_DIR": "/cache/uv-python",
-        // Make a venv that is specific for this workspace path as the cache is shared
-        "UV_PROJECT_ENVIRONMENT": "/cache/venv-for${localWorkspaceFolder}",
-        // Do the equivalent of "activate" the venv so we don't have to "uv run" everything
-        "VIRTUAL_ENV": "/cache/venv-for${localWorkspaceFolder}",
-        "PATH": "/cache/venv-for${localWorkspaceFolder}/bin:${containerEnv:PATH}"
+        // Allow X11 apps to run inside the container (interactive VSCode only;
+        // absence elsewhere is harmless)
+        "DISPLAY": "${localEnv:DISPLAY}"
     },
     "customizations": {
         "vscode": {
             // Set *default* container specific settings.json values on container create.
             "settings": {
-                // Use the container's python by default
-                "python.defaultInterpreterPath": "/cache/venv-for${localWorkspaceFolder}/bin/python",
-                // Don't activate the venv as it is already in the PATH
-                "python.terminal.activateEnvInCurrentTerminal": false,
-                "python.terminal.activateEnvironment": false,
+                // The project venv is the uv default: .venv in the workspace
+                "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
                 // Workaround to prevent garbled python REPL in the terminal
                 // https://github.com/microsoft/vscode-python/issues/25505
                 "python.terminal.shellIntegration.enabled": false
@@ -43,8 +49,8 @@
             ]
         }
     },
-    // Create the config folder for the bash-config feature and uv cache
-    "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/terminal-config",
+    // Create the config folder for the bash-config feature and the shared cache
+    "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/terminal-config ${localEnv:HOME}/.cache/devcontainer-shared",
     "runArgs": [
         // Allow the container to access the host X11 display and EPICS CA
         "--net=host",
@@ -58,18 +64,28 @@
             "target": "/user-terminal-config",
             "type": "bind"
         },
-        // Keep a persistent cross container cache for uv, pre-commit, and the venvs
+        // Persistent cross-container cache for uv, pre-commit, and uv-managed
+        // pythons, mounted at the SAME path on both sides so the interpreter
+        // symlinks inside .venv resolve on the host too
         {
-            "source": "devcontainer-shared-cache",
-            "target": "/cache",
-            "type": "volume"
+            "source": "${localEnv:HOME}/.cache/devcontainer-shared",
+            "target": "${localEnv:HOME}/.cache/devcontainer-shared",
+            "type": "bind"
         }
     ],
-    // Mount the parent as /workspaces so we can pip install peers as editable
-    "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces,type=bind",
+    // Mount the parent directory at its own host path: container paths mirror host
+    // paths (so .venv works from both sides) and sibling checkouts remain available
+    // for editable peer installs
+    "workspaceMount": "source=${localWorkspaceFolder}/..,target=${localWorkspaceFolder}/..,type=bind",
+    "workspaceFolder": "${localWorkspaceFolder}",
     // After the container is created, recreate the venv then make pre-commit first run faster.
     // Clear core.hooksPath first: if it's set (even to git's default hooks dir) pre-commit
     // "cowardly refuses" to install. The bind-mounted .git/config can carry a stale value in
     // from a past tool, so unset it on every rebuild to keep this step self-healing.
-    "postCreateCommand": "uv venv --clear && uv sync && (git config --unset-all core.hooksPath 2>/dev/null || true) && pre-commit install --install-hooks"
+    // pre-commit lives in the workspace .venv and is not on the base image PATH,
+    // so invoke it through `uv run`.
+    // --extra runtime: the runtime libs (anthropic, slack-bolt, ...) are an optional
+    // extra, but src/ imports them directly — without the extra in the venv the
+    // language server cannot resolve those imports.
+    "postCreateCommand": "uv venv --clear && uv sync --extra runtime && (git config --unset-all core.hooksPath 2>/dev/null || true) && uv run pre-commit install --install-hooks"
 }
