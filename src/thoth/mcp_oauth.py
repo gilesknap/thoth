@@ -312,9 +312,9 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
     No second server is started: the routes are appended to the streamable-HTTP app's
     own router so discovery, registration, the authorize/callback redirect dance, and
     the token endpoint all live on the same origin as the MCP transport. Called from
-    :func:`thoth.mcp_server._run_http` *before* the bearer middleware is added; the gate
-    in :mod:`thoth.mcp_auth` allow-lists :data:`OAUTH_PUBLIC_PATHS` so these routes are
-    reachable without a token.
+    :func:`thoth.mcp_server.http._run_http` *before* the bearer middleware is added; the
+    gate in :mod:`thoth.mcp_auth` allow-lists :data:`OAUTH_PUBLIC_PATHS` so these routes
+    are reachable without a token.
 
     ``starlette`` and the four required OAuth vars are read here;
     ``config.require_oauth`` fails fast (already enforced at config load) if the
@@ -333,9 +333,13 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
     allowed_users = config.allowed_github_user_set()
     github_redirect_uri = f"{issuer}{_CALLBACK_PATH}"
 
+    def _oauth_err(error: str, detail: str, status: int = 400) -> Response:
+        """A local (non-redirect) OAuth error response."""
+        return JSONResponse({"error": error, "detail": detail}, status)
+
     def _client_err(detail: str, *, status: int = 400) -> Response:
         """A local (non-redirect) OAuth error -- used before redirect_uri is trusted."""
-        return JSONResponse({"error": "invalid_request", "detail": detail}, status)
+        return _oauth_err("invalid_request", detail, status)
 
     # -- RFC 8414: authorization-server metadata ------------------------------------
     async def authorization_server_metadata(_request: Request) -> Response:
@@ -373,11 +377,9 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
                 "OAuth DCR: registered-client cap (%d) reached; refusing registration",
                 MAX_REGISTERED_CLIENTS,
             )
-            return JSONResponse(
-                {
-                    "error": "temporarily_unavailable",
-                    "detail": "client registration limit reached; retry later",
-                },
+            return _oauth_err(
+                "temporarily_unavailable",
+                "client registration limit reached; retry later",
                 503,
             )
 
@@ -388,20 +390,14 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
 
         redirect_uris = body.get("redirect_uris")
         if not isinstance(redirect_uris, list) or not redirect_uris:
-            return JSONResponse(
-                {
-                    "error": "invalid_redirect_uri",
-                    "detail": "redirect_uris is required and must be a non-empty list",
-                },
-                400,
+            return _oauth_err(
+                "invalid_redirect_uri",
+                "redirect_uris is required and must be a non-empty list",
             )
         if not all(_redirect_uri_allowed(str(u)) for u in redirect_uris):
-            return JSONResponse(
-                {
-                    "error": "invalid_redirect_uri",
-                    "detail": "redirect_uris must not use a code-executing scheme",
-                },
-                400,
+            return _oauth_err(
+                "invalid_redirect_uri",
+                "redirect_uris must not use a code-executing scheme",
             )
 
         new_client_id = "thoth-" + secrets.token_urlsafe(24)
@@ -508,10 +504,7 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
                     "OAuth callback: GitHub token endpoint returned non-JSON (HTTP %s)",
                     token_resp.status_code,
                 )
-                return JSONResponse(
-                    {"error": "access_denied", "detail": "GitHub code exchange failed"},
-                    403,
-                )
+                return _oauth_err("access_denied", "GitHub code exchange failed", 403)
             github_token = token_payload.get("access_token")
             if not github_token:
                 # GitHub signals a bad/expired code via an error payload, not an HTTP
@@ -521,10 +514,7 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
                     token_payload.get("error", "no_token"),
                     token_payload.get("error_description", ""),
                 )
-                return JSONResponse(
-                    {"error": "access_denied", "detail": "GitHub code exchange failed"},
-                    403,
-                )
+                return _oauth_err("access_denied", "GitHub code exchange failed", 403)
             user_resp = await http.get(
                 _GITHUB_USER_URL,
                 headers={
@@ -542,14 +532,10 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
                 login = ""
 
         if not login:
-            return JSONResponse(
-                {"error": "access_denied", "detail": "no GitHub login"}, 403
-            )
+            return _oauth_err("access_denied", "no GitHub login", 403)
         if login not in allowed_users:
             logger.warning("OAuth callback: GitHub login %r not allow-listed", login)
-            return JSONResponse(
-                {"error": "access_denied", "detail": "user not allow-listed"}, 403
-            )
+            return _oauth_err("access_denied", "user not allow-listed", 403)
 
         thoth_code = secrets.token_urlsafe(32)
         _auth_codes[thoth_code] = _AuthCode(
@@ -585,15 +571,14 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
 
         # Codes are single-use: pop unconditionally so a replay always misses.
         auth = _auth_codes.pop(str(code), None)
-        invalid = (
+        if (
             auth is None
             or auth.client_id != req_client_id
             or auth.redirect_uri != redirect_uri
             or not _verify_pkce(
                 str(code_verifier), auth.code_challenge, auth.code_challenge_method
             )
-        )
-        if invalid or auth is None:
+        ):
             return JSONResponse({"error": "invalid_grant"}, 400, headers=no_store)
 
         access_token = mint_oauth_jwt(auth.github_login, config)

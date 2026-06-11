@@ -13,8 +13,9 @@ to the already-built Phase 0-4 entrypoint (:func:`thoth.slack_app.run`,
 :func:`thoth.mcp_server.run`, :meth:`thoth.reindex_from_vault.Reindexer.run`,
 :class:`thoth.summary.SummaryEngine`, :class:`thoth.lint.LintEngine`).
 
-Import safety: only the standard library plus :mod:`thoth.config` is imported at module
-top level. Every subcommand handler imports its heavy collaborators (and the lazily
+Import safety: only the standard library plus :mod:`thoth.config` and the import-light
+:mod:`thoth.cli_parser` is imported at module top level. Every subcommand handler
+imports its heavy collaborators (and the lazily
 imported optional clients behind them) **inside** the handler, so importing this module
 -- and parsing ``--version`` / ``--help`` -- never needs ``anthropic`` / ``slack_bolt``
 / ``mcp`` to be installed. The handlers are split out as small, individually testable
@@ -25,184 +26,18 @@ functions so a test can substitute a fake for the entrypoint that would otherwis
 from __future__ import annotations
 
 import logging
-from argparse import ArgumentParser, Namespace
+from argparse import Namespace
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .cli_parser import build_parser
 from .config import Config, load_config
 
 __all__ = ["main", "build_parser"]
 
 logger = logging.getLogger("thoth")
-
-
-def build_parser() -> ArgumentParser:
-    """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
-
-    Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
-    ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
-    MCP server -- ``--transport stdio`` by default, ``--transport http`` for the
-    bearer-authenticated network surface on ``--host``/``--port``, issue #103),
-    ``reindex`` (nightly incremental, ``--full-rebuild`` for
-    recovery, ``--budget`` for a transient cap override, issue #95), ``summary``
-    (``daily`` / ``weekly`` Slack digest), ``lint`` (the
-    13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
-    ``capture`` (backfill files/folders through the ingest pipeline -- ``--as-is`` for
-    a low-touch import, ``--budget`` for a transient cap override, plus
-    ``--dry-run``/``--limit``/``--batch-size``/``--include``/``--exclude``, issue #80).
-    ``-v/--version`` prints the version and exits.
-
-    Returns:
-        The configured :class:`argparse.ArgumentParser`.
-    """
-    parser = ArgumentParser(prog="thoth", description="thoth PKM appliance CLI")
-    parser.add_argument(
-        "-v",
-        "--version",
-        action="version",
-        version=__version__,
-    )
-    sub = parser.add_subparsers(
-        dest="command",
-        metavar="{init,vault-bootstrap,slack,mcp,reindex,summary,lint,capture}",
-    )
-
-    init = sub.add_parser("init", help="seed the vault spine + dashboards (idempotent)")
-    init.add_argument(
-        "--force",
-        action="store_true",
-        help="overwrite existing spine/dashboard files",
-    )
-
-    sub.add_parser(
-        "vault-bootstrap",
-        help="clone the vault repo into an empty $PKM_VAULT "
-        "(no-op if already a git repo)",
-    )
-
-    sub.add_parser("slack", help="run the Slack Socket-Mode capture/retrieve daemon")
-
-    mcp = sub.add_parser("mcp", help="serve the pkm_* tools over MCP (stdio or HTTP)")
-    mcp.add_argument(
-        "--transport",
-        choices=("stdio", "http"),
-        default="stdio",
-        help="stdio (default, spawn-as-child for Claude Code) or http (network "
-        "streamable-HTTP, bearer-authenticated; THOTH_MCP_API_KEYS required) (#103)",
-    )
-    # Defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST/PORT; kept as literals here so
-    # parsing --help never imports the (heavy, mcp-dependent) server module. Loopback by
-    # default by design: network exposure is delegated to cloudflared + Cloudflare
-    # Access (ADR 0011), never a raw 0.0.0.0 socket.
-    mcp.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="HTTP bind address (http transport only); loopback by default -- expose "
-        "via cloudflared + Cloudflare Access, never bind 0.0.0.0 directly (#103)",
-    )
-    mcp.add_argument(
-        "--port",
-        type=int,
-        default=8765,
-        help="HTTP listen port (http transport only)",
-    )
-
-    reindex = sub.add_parser("reindex", help="reindex Hindsight from the vault")
-    reindex.add_argument(
-        "--full-rebuild",
-        action="store_true",
-        help="wipe the bank and re-retain every live page (recovery)",
-    )
-    reindex.add_argument(
-        "--budget",
-        type=int,
-        default=None,
-        help="override THOTH_DAILY_LLM_BUDGET for THIS run only (transient); "
-        "0 = unlimited for this reindex (issue #95)",
-    )
-
-    summary = sub.add_parser("summary", help="compose + post a Slack digest")
-    summary.add_argument(
-        "kind",
-        choices=("daily", "weekly"),
-        help="which digest to compose and post",
-    )
-    summary.add_argument(
-        "--skip-when-empty",
-        action="store_true",
-        help="do not post when there is nothing to report",
-    )
-
-    lint = sub.add_parser("lint", help="scan the vault for the 13 maintenance issues")
-    lint.add_argument(
-        "--no-log",
-        action="store_true",
-        help="print the report but do not append a log.md entry",
-    )
-
-    capture = sub.add_parser(
-        "capture",
-        help="backfill files/folders into the vault through the ingest pipeline",
-    )
-    capture.add_argument(
-        "paths",
-        nargs="*",
-        type=Path,
-        default=[],
-        help="one or more files or directories to capture; with NO path, drain the "
-        "inbox holds (re-curate each inbox/hold-* from its stored body)",
-    )
-    capture.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="list what would be filed; write nothing, commit nothing, no LLM call",
-    )
-    capture.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="process at most N walked items (a trial run)",
-    )
-    capture.add_argument(
-        "--as-is",
-        action="store_true",
-        help="low-touch import: classify-for-routing but SKIP the curate pass; file "
-        "the original body verbatim and index it (ADR 0010)",
-    )
-    capture.add_argument(
-        "--budget",
-        type=int,
-        default=None,
-        help="override THOTH_DAILY_LLM_BUDGET for THIS run only (transient); "
-        "0 = unlimited for this import",
-    )
-    capture.add_argument(
-        "--batch-size",
-        type=int,
-        default=25,
-        help="commit+push every N ingested files plus a final flush (default 25)",
-    )
-    capture.add_argument(
-        "--include",
-        action="append",
-        default=[],
-        metavar="GLOB",
-        help="only capture files whose vault-relative path matches (repeatable)",
-    )
-    capture.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        metavar="GLOB",
-        help="skip files whose path matches, in addition to the always-skipped "
-        ".obsidian/.git/_bases/spine (repeatable)",
-    )
-
-    return parser
 
 
 def main(args: Sequence[str] | None = None) -> None:
@@ -357,7 +192,7 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
     errors-to-Slack target before being re-raised so the cron log still shows the
     failure (issue #15). The resulting counts are printed for the cron log.
     """
-    from .alerts import make_alerter
+    from .alerts import _cron_alerting, make_alerter
     from .budget import make_budget_guard
     from .hindsight import Hindsight
     from .reindex_from_vault import Reindexer
@@ -409,12 +244,13 @@ def run_summary(
         poster_factory: Builds a :class:`~thoth.summary.SlackPoster` from ``config``;
             defaults to a real Slack ``WebClient`` builder.
     """
-    from .alerts import _make_web_client
+    from .alerts import _cron_alerting, _make_web_client
     from .state import MarkerStore
     from .summary import SummaryEngine
+    from .vault import Vault
 
     with _cron_alerting("cron: summary", config):
-        vault = _make_vault(config)
+        vault = Vault(config)
         # The daily digest reads the liveness markers for its heartbeat (issue #15).
         engine = SummaryEngine(config, vault, markers=MarkerStore(config.state_db_path))
         digest = (
@@ -508,9 +344,10 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     from .alerts import make_alerter
     from .budget import make_budget_guard
     from .capture_walk import walk_captures
-    from .git_sync import GitSync, VaultConflictError
+    from .cli_capture import _CaptureCounts, _commit_capture_batch, _ingest_one
+    from .git_sync import GitSync
     from .inbox_drain import drain_captures
-    from .ingest import Capture, IngestError
+    from .ingest import Capture
     from .vault import Vault
 
     # With NO path argument, drain the inbox holds (issue #105): re-file each
@@ -518,22 +355,35 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     # the hold's stamped intent (curate vs --as-is, issue #95 task E) -- then remove the
     # superseded hold once it is filed. With paths, walk the file/folder tree (#80).
     drain_mode = not namespace.paths
+    limit = namespace.limit
+    vault = Vault(config)
 
-    if namespace.dry_run:
-        planned = 0
+    # Build the (target, capture, hold_rel, as_is) stream shared by the dry-run and
+    # real paths: a drain hold carries its own path so a filed hold can be removed AND
+    # its stamped intent (issue #95, task E) so the sweep re-files curate-vs-as-is as
+    # originally requested; a walked file has no hold and uses the run-wide --as-is
+    # flag. The explicit --as-is flag forces low-touch for every item even on a drain.
+    def capture_stream() -> Iterator[tuple[str, Capture, str | None, bool]]:
         if drain_mode:
-            for hold in drain_captures(Vault(config)):
-                planned += 1
-                mode = "as-is" if (namespace.as_is or hold.as_is) else "curate"
-                print(f"capture (dry-run): would re-file {hold.rel} ({mode})")
+            for hold in drain_captures(vault):
+                yield hold.rel, hold.capture, hold.rel, namespace.as_is or hold.as_is
         else:
             for capture in walk_captures(
                 namespace.paths,
                 include=namespace.include,
                 exclude=namespace.exclude,
-                limit=namespace.limit,
+                limit=limit,
             ):
-                planned += 1
+                yield capture.filename or "(capture)", capture, None, namespace.as_is
+
+    if namespace.dry_run:
+        planned = 0
+        for target, capture, hold_rel, as_is in capture_stream():
+            planned += 1
+            if hold_rel is not None:
+                mode = "as-is" if as_is else "curate"
+                print(f"capture (dry-run): would re-file {target} ({mode})")
+            else:
                 kind = "text" if capture.text is not None else "file"
                 print(f"capture (dry-run): would file {kind} {capture.filename}")
         print(f"capture: dry-run, {planned} item(s) would be filed (no writes)")
@@ -552,31 +402,8 @@ def run_capture(namespace: Namespace, config: Config) -> None:
     counts = _CaptureCounts()
     since_commit = 0
     total = 0
-    limit = namespace.limit
 
-    # Build the (target, capture, hold_rel, as_is) stream shared by both branches: a
-    # drain hold carries its own path so a filed hold can be removed AND its stamped
-    # intent (issue #95, task E) so the sweep re-files curate-vs-as-is as originally
-    # requested; a walked file has no hold and uses the run-wide --as-is flag. The
-    # explicit --as-is flag forces low-touch for every item even on a drain.
-    vault = Vault(config)
-    if drain_mode:
-        stream: Iterator[tuple[str, Capture, str | None, bool]] = (
-            (hold.rel, hold.capture, hold.rel, namespace.as_is or hold.as_is)
-            for hold in drain_captures(vault)
-        )
-    else:
-        stream = (
-            (capture.filename or "(capture)", capture, None, namespace.as_is)
-            for capture in walk_captures(
-                namespace.paths,
-                include=namespace.include,
-                exclude=namespace.exclude,
-                limit=limit,
-            )
-        )
-
-    for target, capture, hold_rel, as_is in stream:
+    for target, capture, hold_rel, as_is in capture_stream():
         if limit is not None and total >= limit:
             break
         total += 1
@@ -589,14 +416,13 @@ def run_capture(namespace: Namespace, config: Config) -> None:
             as_is=as_is,
             index=total,
             counts=counts,
-            ingest_error=IngestError,
         )
         since_commit += 1
         if since_commit >= batch_size:
-            _commit_capture_batch(git, since_commit, VaultConflictError)
+            _commit_capture_batch(git, since_commit)
             since_commit = 0
     if since_commit:
-        _commit_capture_batch(git, since_commit, VaultConflictError)
+        _commit_capture_batch(git, since_commit)
     print(
         f"capture: {total} item(s) processed -- filed={counts.filed} "
         f"unchanged={counts.unchanged} skipped={counts.skipped} "
@@ -609,146 +435,15 @@ def run_capture(namespace: Namespace, config: Config) -> None:
         )
 
 
-@dataclass
-class _CaptureCounts:
-    """Per-run capture dispositions, shared by the file-walk and inbox-drain paths."""
-
-    filed: int = 0
-    skipped: int = 0
-    unchanged: int = 0
-    deferred: int = 0
-    failed: int = 0
-
-
-def _ingest_one(
-    graph: Any,
-    vault: Any,
-    capture: Any,
-    *,
-    target: str,
-    hold_rel: str | None,
-    as_is: bool,
-    index: int,
-    counts: _CaptureCounts,
-    ingest_error: type[Exception],
-) -> str:
-    """Ingest one capture (commit deferred), tally its disposition, print a line.
-
-    Shared by the file-walk (#80) and inbox-drain (#105) branches. Per-item failures are
-    isolated: an :class:`~thoth.ingest.IngestError` is logged, counted, and skipped
-    (the item stays durable in ``inbox/``). A drain hold is retired (with the deletion
-    staged into the next batch) once its content is durably curated -- on a genuine file
-    (``page_paths`` non-empty) AND on an ``unchanged`` skip, since ``unchanged`` is only
-    reported when the curated page provably already exists (#113); such a hold is a
-    duplicate of already-filed content. A deferred/skipped hold stays (recoverable,
-    idempotent) so a budget re-trip never silently deletes un-filed content. Returns the
-    disposition string.
-    """
-    try:
-        report = graph.ingestor.ingest(capture, commit=False, as_is=as_is)
-    except ingest_error as exc:
-        counts.failed += 1
-        logger.warning("capture [%d]: %s -> FAILED (%s)", index, target, exc)
-        return "failed"
-    if report.deferred:
-        counts.deferred += 1
-        disposition = "deferred"
-    elif report.unchanged:
-        # Skip-on-unchanged (#95 task D): already curated, nothing re-spent/re-stamped.
-        counts.unchanged += 1
-        disposition = "unchanged"
-    elif report.page_paths:
-        counts.filed += 1
-        disposition = "filed"
-    else:
-        counts.skipped += 1
-        disposition = "skipped"
-    # Retire a drained hold once its content is durably curated -- both on a genuine
-    # file AND on an `unchanged` skip (#113). `unchanged` is only reported when the
-    # classify-routed curated page provably already exists on disk (see
-    # Ingestor._unchanged_curated), so the hold is a duplicate of already-filed content
-    # and would otherwise linger in inbox/ forever, re-spending a classify call each
-    # run. Never drop a `deferred`/`skipped`/`failed` hold (data-loss guard).
-    # remove_page is idempotent + path-confined; the removal stages into the same batch
-    # as the new page.
-    if disposition in ("filed", "unchanged") and hold_rel is not None:
-        vault.remove_page(hold_rel)
-    print(
-        f"capture [{index}]: {target} -> "
-        f"{', '.join(report.page_paths) or report.message or 'no new page'}"
-    )
-    return disposition
-
-
-def _commit_capture_batch(
-    git: Any, count: int, conflict_error: type[Exception]
-) -> None:
-    """Commit + push one batch of imported files; surface a conflict loudly and stop.
-
-    :meth:`thoth.git_sync.GitSync.commit` does add -A + commit + rebase + push in one
-    call and returns ``committed=False`` on "nothing to commit", so a flush with no
-    pending changes is a safe no-op. A :class:`~thoth.git_sync.VaultConflictError`
-    aborts the import (the content is filed locally; the operator re-runs once the
-    remote is reconciled -- the run is idempotent) rather than ever forcing the push.
-    """
-    try:
-        result = git.commit(f"import: batch ({count} file(s))")
-    except conflict_error as exc:
-        raise SystemExit(
-            "capture: VAULT CONFLICT on a batch commit -- content is filed locally "
-            f"but the push was refused. Resolve in Obsidian and re-run. ({exc})"
-        ) from exc
-    if result.committed:
-        print(f"capture: committed batch of {count} file(s)")
-
-
-# ---- unattended observability (issue #15) ------------------------------------------
-
-
-@contextmanager
-def _cron_alerting(where: str, config: Config) -> Iterator[None]:
-    """Report a cron-entrypoint crash to the errors-to-Slack target, then re-raise.
-
-    A one-shot cron job that dies only writes to its ``/var/log`` file, which nobody
-    watches on an isolated VPS (issue #15). This wraps the job body so an unhandled
-    exception is posted to the alert target (:class:`thoth.alerts.Alerter`, best-effort)
-    before being re-raised -- so the cron log still records the non-zero exit, and a
-    human gets a Slack message. Building the alerter is itself guarded: a failure to
-    even construct it must not mask the original error.
-
-    Args:
-        where: A short label for the failing entrypoint (e.g. ``"cron: reindex"``).
-        config: The frozen runtime config (resolves the alert target + bot token).
-
-    Yields:
-        ``None``; the caller runs its job body inside the ``with`` block.
-    """
-    try:
-        yield
-    except BaseException as exc:  # noqa: BLE001 - report ANY crash, then re-raise
-        try:
-            from .alerts import make_alerter
-
-            make_alerter(config).alert_exception(where, exc)
-        except Exception:  # noqa: BLE001 - alerting must never mask the real error
-            pass
-        raise
-
-
 # ---- collaborator construction (heavy imports kept inside) -------------------------
 
 
+@dataclass
 class _Graph:
     """The constructed ingest/query collaborator graph for the Slack daemon."""
 
-    def __init__(
-        self,
-        ingestor: Any,
-        query_engine: Any,
-    ) -> None:
-        """Store the constructed collaborators."""
-        self.ingestor = ingestor
-        self.query_engine = query_engine
+    ingestor: Any
+    query_engine: Any
 
 
 def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
@@ -783,13 +478,6 @@ def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
         config, guard=guard, markers=MarkerStore(config.state_db_path)
     )
     return _Graph(ingestor=built.ingestor, query_engine=built.query_engine)
-
-
-def _make_vault(config: Config) -> Any:
-    """Build a real :class:`~thoth.vault.Vault` (import kept local)."""
-    from .vault import Vault
-
-    return Vault(config)
 
 
 if __name__ == "__main__":

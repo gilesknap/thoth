@@ -217,8 +217,9 @@ def build_auth_middleware(config: Config) -> Any:
     oauth_enabled = config.oauth_enabled()
     oauth_public_paths: frozenset[str] = frozenset()
     challenge = "Bearer"
+    verify_oauth_jwt = None
     if oauth_enabled:
-        from thoth.mcp_oauth import OAUTH_PUBLIC_PATHS
+        from thoth.mcp_oauth import OAUTH_PUBLIC_PATHS, verify_oauth_jwt
 
         oauth_public_paths = OAUTH_PUBLIC_PATHS
         # The hint points the client at the protected-resource metadata so it can find
@@ -252,9 +253,7 @@ def build_auth_middleware(config: Config) -> Any:
             allowed = bearer_key_accepted(token, accepted_keys)
             # Tier 1b: else a valid thoth-issued OAuth JWT (additive, opt-in). The
             # decoded ``sub`` is attached to request.state for downstream logging.
-            if not allowed and oauth_enabled:
-                from thoth.mcp_oauth import verify_oauth_jwt
-
+            if not allowed and verify_oauth_jwt is not None:
                 try:
                     claims = verify_oauth_jwt(token, config)
                 except AuthError:

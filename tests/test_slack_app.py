@@ -1351,21 +1351,17 @@ def test_download_bytes_uses_token_get_when_no_download_helper(
     captured: dict[str, Any] = {}
 
     class _Resp:
-        def __enter__(self) -> _Resp:
+        content = b"REALBYTES"
+
+        def raise_for_status(self) -> _Resp:
             return self
 
-        def __exit__(self, *exc: object) -> None:
-            return None
-
-        def read(self) -> bytes:
-            return b"REALBYTES"
-
-    def fake_urlopen(request: Any, timeout: float = 0.0) -> _Resp:
-        captured["url"] = request.full_url
-        captured["auth"] = request.headers.get("Authorization")
+    def fake_get(url: str, *, headers: dict[str, str], **kwargs: Any) -> _Resp:
+        captured["url"] = url
+        captured["auth"] = headers.get("Authorization")
         return _Resp()
 
-    monkeypatch.setattr("thoth.slack_app.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("thoth.slack_app.files.httpx.get", fake_get)
     handlers, ing, _ = _handlers(config)
     say = Recorder()
     handlers.handle_message(

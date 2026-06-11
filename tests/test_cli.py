@@ -1625,9 +1625,9 @@ def _wire_real_graph_with_fakes(
     import thoth.alerts as alerts_mod
     import thoth.git_sync as git_mod
     import thoth.hindsight as hindsight_mod
-    import thoth.llm as llm_mod
+    import thoth.llm.client as llm_client
 
-    monkeypatch.setattr(llm_mod, "make_client", lambda cfg: client)
+    monkeypatch.setattr(llm_client, "make_client", lambda cfg: client)
     monkeypatch.setattr(hindsight_mod, "Hindsight", hindsight_cls)
     monkeypatch.setattr(git_mod, "GitSync", lambda *a, **k: git)
     monkeypatch.setattr(alerts_mod, "make_alerter", lambda cfg: object())

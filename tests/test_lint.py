@@ -12,6 +12,7 @@ is touched anywhere (a test asserts the module pulls in no client SDK).
 from __future__ import annotations
 
 import datetime as _dt
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -213,11 +214,18 @@ def _knowledge(
 
 
 def test_module_imports_no_client_sdk() -> None:
-    """Importing thoth.lint pulls in no Slack/anthropic/mcp/firecrawl SDK."""
-    import thoth.lint  # noqa: F401
+    """Importing thoth.lint pulls in no Slack/anthropic/mcp/firecrawl SDK.
 
-    banned = {"slack_bolt", "slack_sdk", "anthropic", "mcp", "firecrawl"}
-    assert banned.isdisjoint(sys.modules)
+    Runs in a fresh interpreter: in-process the SDKs may already sit in
+    ``sys.modules`` from earlier tests when the runtime extras are installed.
+    """
+    code = (
+        "import sys, thoth.lint; "
+        "banned = {'slack_bolt', 'slack_sdk', 'anthropic', 'mcp', 'firecrawl'}; "
+        "loaded = banned & sys.modules.keys(); "
+        "assert not loaded, sorted(loaded)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_lint_error_is_exception() -> None:
