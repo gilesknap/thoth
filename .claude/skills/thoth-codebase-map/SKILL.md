@@ -66,24 +66,31 @@ submodule table. Only the non-obvious ones, where the name doesn't reveal the ro
   `pipeline.py`.
 - `intent.py` — the cheap Haiku **intent gate** (see behavior note below).
 
-## Vault page-type model (ADR 0005)
+## Vault page-type model (ADR 0005 + ADR 0013)
 
-Four flat content folders plus machinery:
+Four flat content folders plus machinery. Every content page carries the
+universal set `title,type,created,updated,source,tags,summary,personal`
+(`personal` is a real boolean defaulted to false at write time; tags are
+descriptive topics only — view-critical facets are properties):
 
 - **Reference pages** — `entities/`, `notes/`, `memories/` (lifecycle-free).
-  These carry a one-line `summary:` in frontmatter, authored by the curate LLM.
-- **Action pages** — `actions/` (todos + the to-consume media queue). Carry
-  `status`/`due`; surfaced by the `_bases` dashboards, **not** glossed with a
-  summary.
-- `inbox/` — durable pre-curate holding pages. `raw/` — immutable sources.
-- `index.md` is a **static** Home dashboard (title + `.base` embeds); agents never
-  write to it. `log.md` is the activity log.
+  Memories add `memory_date` (falls back to `created`).
+- **Action pages** — `actions/` (todos, errands AND the media queue). Carry
+  `kind: task|media|errand` + `status: todo|in_progress|done|cancelled`
+  (one lifecycle; a media item is `kind: media` with `media_type`/`url`),
+  optionally `due_date`/`priority`. Glossed with a `summary` like every
+  other content page; surfaced by the `_bases` dashboards.
+- `inbox/` — durable pre-curate holding pages (machinery set: `sha256`, no
+  tags). `raw/` — immutable sources.
+- `index.md` is a **static** 5-section Home dashboard (callouts embedding
+  `actions.base`/`triage.base` views; `reference.base` is a link line); agents
+  never write to it. `log.md` is the activity log.
 
 **Intent-gate behavior (useful when testing):** a plain declarative fact / concept
-/ person / memory classifies as a reference page (and gets a `summary`); phrasing
-like "read / watch / buy / book / meet / remember to X" classifies as an `action`
-(no summary). To exercise the reference/summary path, the test capture must be
-declarative, not a task.
+/ person / memory classifies as a reference page; phrasing like "read / watch /
+buy / book / meet / remember to X" classifies as an `action` (`kind` task/media/
+errand). Every content page gets a `summary`; to exercise the reference path,
+the test capture must be declarative, not a task.
 
 ## Hindsight reality (foot-gun)
 

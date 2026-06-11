@@ -197,7 +197,7 @@ pkm-vault/
 ├── entities/ concepts/ comparisons/ queries/            # LAYER 2, curated knowledge pages
 ├── actions/ media/ memories/ people/        # life-admin pages (frontmatter `type` is the contract)
 ├── _bases/ _meta/ _archive/ inbox/          # dashboards / nav aids / superseded / unfiled
-└── .obsidian/                               # plugin config (Obsidian Git, Metadata Menu, Bases/Dataview)
+└── .obsidian/                               # plugin config (Obsidian Git, Bases)
 ```
 
 **Frontmatter contract (common, required everywhere):**
@@ -205,18 +205,22 @@ pkm-vault/
 ```yaml
 ---
 title: Human Readable Title
-type: entity            # entity|concept|comparison|query|summary|action|media|memory|inbox
+type: entity            # entity|note|memory|action (inbox = machinery; ADR 0005/0013)
 created: 2026-05-30
 updated: 2026-05-30
 source: slack           # slack | mcp | web | manual | cron | import
-tags: [kebab-case, from-taxonomy]
+tags: [kebab-case, from-taxonomy]   # descriptive topics only — never type/kind/personal
+summary: one crisp line saying what the page is about
+personal: false         # real boolean; true = owner's private life (ADR 0013)
 ---
 ```
 
-Knowledge add-ons: `sources` (list, required if any raw exists), `confidence`, `contested`, `contradictions`,
-`aliases`. Life-admin add-ons: `status`, `priority`, `due_date`, `recurrence`, `project` (action);
-`media_type`, `creator`, `url` (media); `people`, `location`, `memory_date` (memory). `raw/` block:
-`source_url`, `ingested`, `sha256` (digest of body). Full field semantics, naming rules, SCHEMA.md text,
+Knowledge add-ons: `sources` (list, required if any raw exists), `confidence`, `contested`,
+`contradictions`. Action add-ons (ADR 0013): `kind` (`task|media|errand`), `status`
+(`todo|in_progress|done|cancelled`), `due_date`, `priority`; when `kind: media` also `media_type` and
+`url`. Memory add-on: `memory_date` (falls back to `created`). Inbox holds are machinery: `title`,
+`type`, `created`, `updated`, `source`, `sha256` only (no tags). `raw/` block: `source_url`,
+`ingested`, `sha256` (digest of body). Full field semantics, naming rules, SCHEMA.md text,
 and worked examples: **Appendix → Vault schema & SCHEMA.md** (the schema is framework-independent).
 
 **Images:** embed-and-describe on the owning page (`![[slug-hash.ext]]`), binary in `raw/assets/`, no
@@ -363,9 +367,10 @@ the implemented path.
 
 ## 9. Life-admin & proactive summaries — carried forward (Appendix → Vault schema; Dashboards)
 
-**Life-admin** (`actions/`, `media/`, `memories/`, `people/`) is unchanged — ordinary vault pages keyed by
-frontmatter `type`, surfaced by Bases/Dataview. Recurrence reopen, media `to_consume` aging, people links:
-all agent behaviour driven by frontmatter, now implemented in `vault.py` helpers + the ingest curate pass.
+**Life-admin** (`actions/`, `memories/`; ADR 0005 folded `media/` into `actions/` as `kind: media`) is
+ordinary vault pages keyed by frontmatter `type`, surfaced by Bases. Overdue actions, media backlog
+aging: all agent behaviour driven by frontmatter, implemented in the vault helpers + the ingest curate
+pass.
 
 **Summaries** become `summary.py` invoked by **system cron** (not a Hermes scheduler): daily 07:00 and weekly
 Mon 07:00 Europe/London, composed *from the vault* (actions due/overdue, deadlines, recent ingests from
@@ -586,7 +591,7 @@ pkm-vault/
 ├── _meta/                # navigation aids for large vaults (topic-map.md when index > 200)
 ├── _archive/             # superseded pages (mirrors original path; removed from index)
 ├── inbox/                # ambiguous captures awaiting classification (type: inbox)
-└── .obsidian/            # plugin config: metadata-menu presets, obsidian-git, Bases
+└── .obsidian/            # plugin config: obsidian-git, Bases
 ```
 
 `actions/`/`media/`/`memories/`/`people/` stay real folders (different lifecycle from knowledge pages —
@@ -625,35 +630,30 @@ Knowledge pages add (all optional except where noted):
 | `confidence` | `high\|medium\|low` | how well-supported; default unset = treat as medium. Lint flags `low` and single-source-without-confidence |
 | `contested` | `true` | page has unresolved contradictions; surfaced by lint |
 | `contradictions` | list | page slugs this one conflicts with |
-| `aliases` | list | alternate names (Obsidian alias resolution for wikilinks) |
 
-Life-admin pages add:
+(`aliases` was dropped from the contract — nothing populated it. Obsidian-native alias *resolution*
+still works in lint's wikilink checks if a human adds one by hand.)
+
+Type-specific fields (ADR 0013 — every listed field is actively populated by curate and
+lint-enforced; the old sparse optionals `aliases`/`people`/`location`/`project`/`recurrence`/`creator`
+are dropped):
 
 | Field | Applies to | Type / values | Meaning |
 |---|---|---|---|
-| `status` | action, media | `todo\|in_progress\|done\|completed\|cancelled` (action); `to_consume\|consuming\|consumed` (media) | Metadata Menu preset-backed |
-| `priority` | action, media | `1 - Urgent\|2 - High\|3 - Medium\|4 - Low` | Metadata Menu preset-backed |
-| `due_date` | action | `YYYY-MM-DD` or `YYYY-MM-DD HH:MM` or empty | for sort/filter and daily briefing |
-| `recurrence` | action | `none\|daily\|weekly\|monthly\|yearly` (or RRULE-lite string) | repeating tasks; agent re-opens on completion |
-| `project` | action | wikilink `"[[project-slug]]"` or empty | links task to its concept/entity page |
-| `media_type` | media | `book\|film\|tv\|podcast\|article\|video\|music` | Metadata Menu preset-backed |
-| `creator` | media | string | author/director/artist |
-| `url` | media | URL or empty | link to the item |
-| `people` | memory, action | list of names (each a `[[people/...]]` link where known) | who was involved |
-| `location` | memory | string | where it happened |
-| `memory_date` | memory | `YYYY-MM-DD` or empty | when it happened, if different from `created` |
+| `kind` | action | `task\|media\|errand` | the view-critical action facet (a media item is `kind: media`) |
+| `status` | action | `todo\|in_progress\|done\|cancelled` | one lifecycle for every kind |
+| `priority` | action | `1 - Urgent\|2 - High\|3 - Medium\|4 - Low` | optional |
+| `due_date` | action | `YYYY-MM-DD` or empty | for sort/filter and daily briefing |
+| `media_type` | action (`kind: media`) | `book\|film\|tv\|podcast\|article\|video\|music` | what sort of media |
+| `url` | action (`kind: media`) | URL or empty | link to the item |
+| `memory_date` | memory | `YYYY-MM-DD` or empty | when it happened (falls back to `created`) |
 
 Notes:
-- `category` from the old 2ndBrain schema is **dropped** — `type` plus folder replace it. Legacy mapping:
-  **`Reference` → `concepts/`**; **`Projects` → project *pages* in `entities/`** (a project is a named thing;
-  use `concepts/` only if it is better modelled as a body of work). An action's `project:` is a wikilink to
-  that page (e.g. `project: "[[home-maintenance]]"` → `entities/home-maintenance.md`). There is no separate
-  `projects/` folder.
+- `category` from the old 2ndBrain schema is **dropped** — `type` plus folder replace it.
 - `tokens_used` (old Gemini accounting field) is **dropped** from the page contract; cost telemetry lives in
   `log.md`/the transient state DB, not in knowledge.
-- The Metadata Menu preset config (`status`, `priority`, `media_type` dropdowns) is preserved verbatim so
-  in-Obsidian editing offers the same controlled vocabularies. Ship it at
-  `.obsidian/plugins/metadata-menu/data.json`.
+- **No Metadata-Menu config ships.** The controlled vocabularies live in `thoth.vault` (the single
+  source) and are enforced by the file-plan validator and lint; in-Obsidian editing is freehand.
 
 #### File-naming conventions
 
@@ -811,13 +811,13 @@ type: action
 created: 2026-05-30
 updated: 2026-05-30
 source: slack
-tags: [task, home, errand]
+tags: [home]
+summary: refit the two storm-loosened fence panels before the next wind
+personal: true
+kind: errand
 status: todo
 priority: 2 - High
 due_date: 2026-06-07
-recurrence: none
-project: "[[home-maintenance]]"
-people: ["[[people/jane-doe]]"]
 ---
 
 # Fix garden fence
@@ -831,28 +831,31 @@ boards + galvanised nails; refit before the next forecast wind.
 - [ ] Refit and treat
 
 ### Notes
-Linked to [[home-maintenance]]; coordinate with [[people/jane-doe]] for the weekend.
+Linked to [[home-maintenance]].
 ```
 
-This page never needs an `index.md` entry — `_bases/actions.base` surfaces it under **Open Actions** / **Due
-Soon**, and the daily 07:00 Slack briefing reads it via the same frontmatter.
+This page never needs an `index.md` entry — `_bases/actions.base` surfaces it under
+**Open · Personal** (and **Imminent · Personal** once the due date is near), and the daily 07:00
+Slack briefing reads it via the same frontmatter.
 
 #### Worked example — Media item
 
-`media/ddia.md`:
+`actions/ddia.md` (a media item is an `action` with `kind: media`, ADR 0005/0013):
 
 ```markdown
 ---
 title: Designing Data-Intensive Applications
-type: media
+type: action
 created: 2026-05-18
 updated: 2026-05-30
 source: slack
-tags: [media, software, reference]
+tags: [software]
+summary: Kleppmann's reference book on data-system architecture, queued to read
+personal: false
+kind: media
+status: todo
 media_type: book
-creator: Martin Kleppmann
 url: https://dataintensive.net/
-status: to_consume
 priority: 3 - Medium
 ---
 
@@ -875,23 +878,32 @@ trade-offs filed at [[cap-theorem]].
 title: Home
 type: summary
 cssclasses: dashboard-full-width
-updated: 2026-05-30
+updated: 2026-06-11
 ---
 
 # 🏠 PKM Vault — Home
 
-## 📥 Inbox (needs filing)
-![[_bases/inbox.base]]
+> [!danger]+ Imminent
+> ![[_bases/actions.base#Imminent]]
 
-## ✅ Actions
-![[_bases/actions.base]]
+> [!warning]- Inbox
+> ![[_bases/triage.base#Inbox — needs filing]]
 
-## 🎬 Media — to consume
-![[_bases/media.base]]
+> [!todo]- Actions
+> ![[_bases/actions.base#Open]]
 
-## 🧠 Memories
-![[_bases/memories.base]]
+> [!example]- Media
+> ![[_bases/actions.base#Media]]
+
+> [!info]- Recent
+> ![[_bases/triage.base#Recent (7d)]]
+
+Browse the reference layer: [[_bases/reference.base|Notes · Entities · Memories]]
 ```
+
+The 5-section **attention dashboard** (ADR 0013): each action-backed section embeds its Work (or All)
+default view, and the embed's view dropdown flips between the Work / Personal / All variants in place.
+The reference layer is a link line, not an embedded section.
 
 `index.md` is **static** (ADR-0008): just the title and the live `.base` dashboard embeds. No agent reads or
 writes it. A reference page's one-line gloss is its own `summary:` frontmatter field — canonical, rebuildable,
@@ -914,33 +926,20 @@ sync, and no `Total pages` count to police.
   queries/, actions/, media/, memories/, people/, _bases/, _archive/, inbox/
 ```
 
-### Dashboards (Bases `.base` examples, Dataview fallback)
+### Dashboards (Bases `.base` files)
 
-> **⚠️ Feasibility caveat — confirm Bases before treating it as load-bearing.** Obsidian **Bases** is a very
-> new first-party feature with an evolving `.base` syntax. The dashboards, Home page, and *all* life-admin
-> surfacing rest on Bases, so before shipping it as the navigation layer: (1) confirm the installed Obsidian
-> version actually ships Bases, and (2) confirm the exact `.base` filter/date syntax below parses (especially
-> the date arithmetic — see §15 open items).
->
-> **Concrete fallback / v1 decision.** The **v1 target is Bases** *if it validates on the installed build*;
-> otherwise fall back to **Dataview** — a `dataview` code block per view on the relevant index/Home page,
-> e.g. open actions:
-> ````
-> ```dataview
-> TABLE status, due_date, priority, project
-> FROM "actions"
-> WHERE status != "done" AND status != "completed" AND status != "cancelled"
-> SORT priority ASC, due_date ASC
-> ```
-> ````
-> A second fallback is **status-only Bases filters** (no date arithmetic) with the cron daily-briefing doing
-> all date math (due/overdue/next-3-days), which it does anyway from frontmatter. Pick one and record it.
+Bases is confirmed working on the live vault's Obsidian build (the date arithmetic below validates), so
+the Dataview fallback recorded in earlier revisions is retired. Three `.base` files ship (ADR 0013),
+mirroring the vault lifecycle — actionable / curated reference / machinery — and live in `_bases/`,
+embedded by `index.md`. **Critical filter syntax: every `filters:` block MUST be an object keyed by
+exactly one of `and:` / `or:` / `not:`. A bare YAML list is a parse error; even a single condition is
+wrapped.** Nest `and`/`or`/`not` objects for compound logic. Bases cannot relabel enum values, so
+friendly media labels come from view names / `displayName` only; work-default views filter
+`personal != true` so a page with no `personal` value counts as work.
 
-Bases definition files live in `_bases/` and are embedded by `index.md`. **Critical filter syntax: every
-`filters:` block MUST be an object keyed by exactly one of `and:` / `or:` / `not:`. A bare YAML list is a
-parse error; even a single condition is wrapped.** Nest `and`/`or`/`not` objects for compound logic.
-
-`_bases/actions.base` — open tasks, then everything:
+`_bases/actions.base` — 10 views: Imminent / · Personal / · All, Open / · Personal / · All,
+Media / · Work / · Personal, All Actions. Open excludes `kind: media`; Imminent is kind-agnostic so a
+due media item still surfaces. Representative views (variants differ only in the `personal` clause):
 
 ```yaml
 filters:
@@ -948,122 +947,123 @@ filters:
     - file.inFolder("actions")
     - file.ext == "md"
 properties:
-  status:    { displayName: Status }
-  due_date:  { displayName: Due }
-  priority:  { displayName: Priority }
-  project:   { displayName: Project }
-  recurrence: { displayName: Repeat }
+  status:     { displayName: Status }
+  due_date:   { displayName: Due }
+  priority:   { displayName: Priority }
+  kind:       { displayName: Kind }
+  personal:   { displayName: Personal }
+  media_type: { displayName: Media Type }
+  url:        { displayName: URL }
+  summary:    { displayName: Summary }
 views:
   - type: table
-    name: Open Actions
+    name: Imminent                # Work default; kind-agnostic
     filters:
       and:
         - status != "done"
-        - status != "completed"
         - status != "cancelled"
-    order: [file.name, due_date, priority, status, project, recurrence]
+        - due_date != ""
+        - due_date <= now() + "2 days"
+        - personal != true
+    order: [file.name, due_date, priority, status, kind]
+    sort:
+      - { property: due_date, direction: ASC }
+      - { property: priority, direction: ASC }
+  - type: table
+    name: Open                    # Work default; excludes media
+    filters:
+      and:
+        - status != "done"
+        - status != "cancelled"
+        - kind != "media"
+        - personal != true
+    order: [file.name, due_date, priority, status, kind, summary]
     sort:
       - { property: priority, direction: ASC }
       - { property: due_date, direction: ASC }
   - type: table
-    name: Due Soon
+    name: Media                   # All default
     filters:
       and:
-        - status != "completed"
-        - due_date != ""
-        - due_date < now() + "7 days"
-    order: [file.name, due_date, priority]
-  - type: table
-    name: All Actions
-    order: [file.name, due_date, priority, status, project]
-```
-
-`_bases/media.base` — backlog plus an OR view across the active states:
-
-```yaml
-filters:
-  and:
-    - file.inFolder("media")
-    - file.ext == "md"
-properties:
-  media_type: { displayName: Type }
-  creator:    { displayName: Creator }
-  priority:   { displayName: Priority }
-  status:     { displayName: Status }
-  url:        { displayName: URL }
-views:
-  - type: table
-    name: To Consume
-    filters:
-      and:
-        - status == "to_consume"
-    order: [file.name, media_type, creator, priority]
+        - kind == "media"
+        - status != "done"
+        - status != "cancelled"
+    order: [file.name, media_type, status, priority, url, summary]
     sort: [{ property: priority, direction: ASC }]
   - type: table
-    name: In Progress or Done
-    filters:
-      or:
-        - status == "consuming"
-        - status == "consumed"
-    order: [file.name, media_type, status, creator]
+    name: All Actions
+    order: [file.name, status, kind, due_date, priority, personal, summary]
 ```
 
-`_bases/memories.base`:
+`_bases/reference.base` — the curated layer with uniform name·summary·tags·updated columns
+(Memories adds `memory_date` and sorts by it):
 
 ```yaml
 filters:
   and:
-    - file.inFolder("memories")
     - file.ext == "md"
+    - or:
+        - file.inFolder("entities")
+        - file.inFolder("notes")
+        - file.inFolder("memories")
 properties:
-  people:      { displayName: People }
-  location:    { displayName: Location }
-  memory_date: { displayName: When }
+  type:        { displayName: Type }
+  summary:     { displayName: Summary }
   tags:        { displayName: Tags }
+  updated:     { displayName: Updated }
+  memory_date: { displayName: When }
 views:
   - type: table
-    name: All Memories
-    order: [file.name, people, location, memory_date, created, tags]
+    name: Notes
+    filters:
+      and:
+        - file.inFolder("notes")
+    order: [file.name, summary, tags, updated]
+    sort: [{ property: updated, direction: DESC }]
+  - type: table
+    name: Entities
+    filters:
+      and:
+        - file.inFolder("entities")
+    order: [file.name, summary, tags, updated]
+    sort: [{ property: file.name, direction: ASC }]
+  - type: table
+    name: Memories
+    filters:
+      and:
+        - file.inFolder("memories")
+    order: [file.name, summary, memory_date, tags, updated]
     sort: [{ property: memory_date, direction: DESC }]
 ```
 
-`_bases/inbox.base` — surfaces unfiled captures using a `not:` filter to exclude noise:
+`_bases/triage.base` — machinery: the inbox holding queue plus vault-wide recent activity
+(excludes `_archive/` via a nested `not:`):
 
 ```yaml
 filters:
   and:
-    - file.inFolder("inbox")
     - file.ext == "md"
+    - not:
+        - file.inFolder("_archive")
 properties:
   title:   { displayName: Title }
   created: { displayName: Captured }
-  tags:    { displayName: Tags }
   source:  { displayName: Via }
 views:
   - type: table
-    name: Needs Filing
+    name: Inbox — needs filing
     filters:
-      not:
-        - file.name == "README"
-    order: [file.name, created, source, tags]
+      and:
+        - file.inFolder("inbox")
+        - "!(file.name == \"README\")"
+    order: [file.name, title, created, source]
     sort: [{ property: created, direction: DESC }]
-```
-
-`_bases/home.base` (optional union view embedded near the top of `index.md`) — recent activity:
-
-```yaml
-filters:
-  and:
-    - file.ext == "md"
-views:
   - type: table
-    name: Recent Captures (7d)
+    name: Recent (7d)
     filters:
       and:
         - file.mtime > now() - "7 days"
-        - not:
-            - file.inFolder("_archive")
-    order: [file.name, type, created, file.mtime, tags]
+    order: [file.name, type, created, file.mtime]
     sort: [{ property: file.mtime, direction: DESC }]
 ```
 
@@ -1126,7 +1126,7 @@ the real note in their own Obsidian.
    (images to `raw/assets/`). Write the curated, cross-linked page in the right
    layer (entities / concepts / comparisons / queries) per SCHEMA.md.
 4. Life-admin items (Actions/TODOs, media backlog, memories) are wiki pages with a
-   frontmatter `type:` — never a rival folder tree. Set due/recurrence/priority on
+   frontmatter `type:` — never a rival folder tree. Set kind/status/due/priority on
    Actions from natural language.
 5. Embed images inline with Obsidian wiki-embeds; the curated page describes AND
    embeds the asset. Never store base64. Never write a separate descriptive sidecar.
@@ -1165,7 +1165,7 @@ the real note in their own Obsidian.
 
 **Daily:** (1) Due/overdue Actions (overdue flagged 🔴); (2) Upcoming deadlines next 3 days (next 72h
 Europe/London); (3) Yesterday's ingests (new/changed `raw/` + curated pages from `log.md`/git, grouped by
-kind); (4) Media-backlog nudge (one or two `to_consume` items); (5) Items flagged for review
+kind); (4) Media-backlog nudge (one or two still-`todo` `kind: media` items); (5) Items flagged for review
 (`review: true`/`status: review`).
 
 **Weekly:** (1) Week-in-review of ingests with counts by kind; (2) Emerging themes (may use Hindsight
@@ -1557,7 +1557,7 @@ The vault PAT is scoped to **only** `pkm-vault` (Contents: Read & write + Metada
 backup PAT is a separate token scoped to **only** `thoth`. A fine-grained PAT scoped to two *pre-existing*
 repos **cannot create new repos**, so create `pkm-vault` once in the GitHub web UI (or use a broader token for
 the one-time create). Fine-grained PATs expire — issue with a 90-day expiry and schedule a rotation reminder
-(an `actions/` page with `recurrence: monthly`) ~1 week before the mark, since an expired PAT silently breaks
+(a due-dated `actions/` page) ~1 week before the mark, since an expired PAT silently breaks
 the unattended push and config backup.
 
 ### Backup/recovery
@@ -1671,9 +1671,9 @@ job.
 |---|---|---|
 | 1 | **Orphan pages** | Knowledge pages with zero inbound `[[wikilinks]]` (life-admin pages exempt — Bases surface them). Suggest a link or archive. |
 | 2 | **Broken wikilinks** | `[[link]]` targets that resolve to no file (respect `aliases`). Highest severity. |
-| 3 | **Summary gloss** | Every reference page (`entity`/`note`/`memory`) carries a non-empty one-line `summary:` frontmatter gloss (the canonical, rebuildable per-page gloss; ADR-0008). Flag any missing it. |
-| 4 | **Frontmatter validation** | Required common fields present; `type` valid; type-specific required fields present (e.g. `action` has `status`); values match Metadata Menu vocab. |
-| 5 | **Stale content** | Knowledge `updated` > 90 days older than the newest source touching the same entities; **life-admin**: `action` past `due_date` and not done/cancelled; `media` `to_consume` > 180 days. |
+| 3 | **Summary gloss** | Every content page (all four types, including `action`; ADR-0013) carries a non-empty one-line `summary:` frontmatter gloss (the canonical, rebuildable per-page gloss; ADR-0008). Flag any missing it. |
+| 4 | **Frontmatter validation** | Required fields present (content pages incl. `personal`, inbox holds their machinery set); `type` valid; type-specific required fields present (`action` has `status` + `kind`); `personal` a real boolean; values match the vault vocabularies. |
+| 5 | **Stale content** | Knowledge `updated` > 90 days older than the newest source touching the same entities; **life-admin**: `action` past `due_date` and not done/cancelled; `kind: media` still `todo` > 180 days. |
 | 6 | **Contradictions** | Surface every page with `contested: true` or non-empty `contradictions:`; flag same-topic pages stating different facts. |
 | 7 | **Source drift** | For each `raw/` file with `sha256:`, recompute over body; mismatch ⇒ raw edited (shouldn't happen) or source URL changed. Report, don't hard-fail. |
 | 8 | **Quality signals** | List `confidence: low` and single-source pages with no `confidence` — corroborate or demote. |
