@@ -1,0 +1,35 @@
+filters:
+  and:
+    - file.ext == "md"
+    - or:
+        - file.inFolder("entities")
+        - file.inFolder("notes")
+        - file.inFolder("memories")
+properties:
+  type:        { displayName: Type }
+  summary:     { displayName: Summary }
+  tags:        { displayName: Tags }
+  updated:     { displayName: Updated }
+  memory_date: { displayName: When }
+views:
+  - type: table
+    name: Notes
+    filters:
+      and:
+        - file.inFolder("notes")
+    order: [file.name, summary, tags, updated]
+    sort: [{ property: updated, direction: DESC }]
+  - type: table
+    name: Entities
+    filters:
+      and:
+        - file.inFolder("entities")
+    order: [file.name, summary, tags, updated]
+    sort: [{ property: file.name, direction: ASC }]
+  - type: table
+    name: Memories
+    filters:
+      and:
+        - file.inFolder("memories")
+    order: [file.name, summary, memory_date, tags, updated]
+    sort: [{ property: memory_date, direction: DESC }]

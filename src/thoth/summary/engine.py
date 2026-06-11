@@ -17,7 +17,7 @@ import yaml
 
 from thoth._time import LONDON
 from thoth.config import Config
-from thoth.fmfields import _is_truthy, _page_tags, _parse_date, _str_field
+from thoth.fmfields import _is_truthy, _parse_date, _str_field
 from thoth.render import render_vault_ref
 from thoth.state import HEARTBEAT_MARKERS, MarkerStore
 from thoth.vault import Vault
@@ -36,13 +36,13 @@ from .types import (
     _ACTIONS_DIR,
     _CURATED_DIRS,
     _MARKER_LABELS,
+    _MEDIA_KIND,
     _MEDIA_NUDGE_LIMIT,
-    _MEDIA_TAG,
     _REVIEW_STATUS,
     _WEEK_DAYS,
     ACTION_OPEN_STATUSES,
     DUE_SOON_DAYS,
-    MEDIA_OPEN_STATUS,
+    MEDIA_BACKLOG_STATUS,
     ActionItem,
     Digest,
     MediaItem,
@@ -348,9 +348,10 @@ class SummaryEngine:
     def media_backlog(self) -> list[MediaItem]:
         """Return the unconsumed media backlog, oldest first.
 
-        Keeps items whose ``status`` equals :data:`~thoth.summary.MEDIA_OPEN_STATUS`,
-        sorted by their ``added`` (``created``) date ascending so the longest-waiting
-        backlog item is first; items with no date sort last.
+        Keeps items whose ``status`` equals
+        :data:`~thoth.summary.MEDIA_BACKLOG_STATUS`, sorted by their ``added``
+        (``created``) date ascending so the longest-waiting backlog item is first;
+        items with no date sort last.
 
         Returns:
             The media-backlog :class:`~thoth.summary.MediaItem` list, oldest first.
@@ -358,7 +359,7 @@ class SummaryEngine:
         items = [
             item
             for item, status in self._scan_media_with_status()
-            if status == MEDIA_OPEN_STATUS
+            if status == MEDIA_BACKLOG_STATUS
         ]
         return sorted(items, key=lambda item: _date_key(item.added, item.path))
 
@@ -406,9 +407,17 @@ class SummaryEngine:
     # ---- internal scans -------------------------------------------------------------
 
     def _scan_actions(self) -> list[ActionItem]:
-        """Parse every ``actions/*.md`` page into an action item."""
+        """Parse every non-media ``actions/*.md`` page into an action item.
+
+        Media items share the action lifecycle (ADR 0013: ``kind: media``, ``status:
+        todo``...), so without this exclusion every unwatched film would surface as an
+        open action in the daily digest and the ``pkm_actions`` MCP tool; the media
+        queue has its own scan (:meth:`_scan_media_with_status`) and digest section.
+        """
         items: list[ActionItem] = []
         for rel, meta in self._iter_pages(_ACTIONS_DIR):
+            if _str_field(meta.get("kind")) == _MEDIA_KIND:
+                continue
             slug = PurePosixPath(rel).stem
             items.append(
                 ActionItem(
@@ -424,18 +433,18 @@ class SummaryEngine:
         return items
 
     def _scan_media_with_status(self) -> list[tuple[MediaItem, str]]:
-        """Parse every media-tagged ``actions/*.md`` page into a (item, status) pair.
+        """Parse every ``kind: media`` ``actions/*.md`` page into a (item, status) pair.
 
-        ADR 0005: the media queue lives in ``actions/`` as an ``action`` tagged
-        ``media``, so this walks ``actions/`` and keeps only pages whose ``tags``
-        contain ``media``. The status is returned alongside the item (rather than stored
-        on the frozen :class:`~thoth.summary.MediaItem`, whose contract has no status
-        field) so :meth:`media_backlog` can filter on ``to_consume`` without the item
+        The media queue lives in ``actions/`` as an ``action`` with ``kind: media``
+        (ADR 0013), so this walks ``actions/`` and keeps only pages whose ``kind`` is
+        media. The status is returned alongside the item (rather than stored on the
+        frozen :class:`~thoth.summary.MediaItem`, whose contract has no status field)
+        so :meth:`media_backlog` can filter on the backlog status without the item
         carrying a field it does not declare.
         """
         pairs: list[tuple[MediaItem, str]] = []
         for rel, meta in self._iter_pages(_ACTIONS_DIR):
-            if _MEDIA_TAG not in _page_tags(meta):
+            if _str_field(meta.get("kind")) != _MEDIA_KIND:
                 continue
             slug = PurePosixPath(rel).stem
             item = MediaItem(

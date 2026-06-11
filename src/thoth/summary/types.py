@@ -18,8 +18,12 @@ _MARKER_LABELS: dict[str, str] = {
 ACTION_OPEN_STATUSES: frozenset[str] = frozenset({"todo", "in_progress"})
 """Action ``status`` values treated as still open (SPEC frontmatter contract)."""
 
-MEDIA_OPEN_STATUS: str = "to_consume"
-"""The media ``status`` value treated as an unconsumed backlog item."""
+MEDIA_BACKLOG_STATUS: str = "todo"
+"""The media ``status`` value treated as an unconsumed backlog item (ADR 0013).
+
+Media items share the single action lifecycle (``todo``/``in_progress``/``done``/
+``cancelled``); an untouched backlog item is simply still ``todo``.
+"""
 
 DUE_SOON_DAYS: int = 3
 """The inclusive look-ahead window (in days) for the daily "next N days" bucket."""
@@ -32,11 +36,11 @@ DUE_SOON_DAYS: int = 3
 _CURATED_DIRS: tuple[str, ...] = CURATED_DIRS
 
 # Folder holding actionable pages (todos + the media consume queue). ADR 0005 folded the
-# old media/ folder in here: a media item is an action tagged 'media'.
+# old media/ folder in here: a media item is an action with kind: media (ADR 0013).
 _ACTIONS_DIR: str = "actions"
 
-# The tag that marks an action as a media-queue item (ADR 0005).
-_MEDIA_TAG: str = "media"
+# The action ``kind`` that marks a media-queue item (ADR 0013).
+_MEDIA_KIND: str = "media"
 
 # Weekly window length in days.
 _WEEK_DAYS: int = 7

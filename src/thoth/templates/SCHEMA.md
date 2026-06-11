@@ -13,8 +13,8 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
 - notes/     Reference. Everything written, differentiated by a `tags:` value
              (concept / comparison / query). `type: note`.
 - memories/  Reference. Personal memories/milestones. `type: memory`.
-- actions/   Actionable (`status`/`due`). Todos AND the to-consume queue; a media item
-             is an `action` tagged `media`. `type: action`.
+- actions/   Actionable (`status`/`due`). Todos, errands AND the to-consume queue;
+             `kind` separates them (a media item is `kind: media`). `type: action`.
 - inbox/     Machinery: durable pre-curate holding pages. `type: inbox`.
 - index.md (Home) / SCHEMA.md / log.md   Navigational + structural backbone.
 
@@ -28,13 +28,28 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
 - Provenance: on pages synthesising 3+ sources, append ^[raw/articles/source.md] to
   paragraphs whose claims trace to one source.
 
-## Frontmatter
-Common (every page): title, type, created, updated, source, tags.
+## Frontmatter (ADR 0013)
+Universal (every content page): title, type, created, updated, source, tags,
+summary, personal.
 type is one of: entity, note, memory, action (plus the inbox machinery type).
-Reference pages (`type: entity`/`note`/`memory`) also carry `summary`: one line saying
-what the page is about — its canonical, rebuildable gloss (no separate index catalog).
-Actionable pages (`type: action`) additionally carry `status` (and usually `due_date`);
-a media-queue item is an `action` tagged `media` with status to_consume/consuming/consumed.
+`summary` is one crisp line saying what the page is about — its canonical,
+rebuildable gloss (no separate index catalog). `personal` is a real boolean:
+true when the item concerns the owner's private life (people, errands,
+books/films to watch), false for work / technical / general knowledge — the
+property the Work·Personal dashboard views filter on.
+
+Action pages (`type: action`) additionally carry:
+- kind: task | media | errand   (a media item is `kind: media`)
+- status: todo | in_progress | done | cancelled   (one lifecycle for every kind)
+- due_date: YYYY-MM-DD (optional), priority: "1 - Urgent".."4 - Low" (optional)
+- when kind is media: media_type (book/film/tv/podcast/article/video/music) and
+  url when known.
+
+Memory pages (`type: memory`) carry memory_date: YYYY-MM-DD — when the memory
+happened (falls back to `created` when omitted).
+
+Inbox holding pages (`type: inbox`) are machinery, not content: title, type,
+created, updated, source, sha256 only — no tags, no summary, no personal.
 
 ## raw/ Frontmatter
 ---
@@ -46,19 +61,13 @@ Compute sha256 over the body only. On re-ingest of the same URL: recompute, comp
 skip if identical, flag drift + update if changed.
 
 ## Tag Taxonomy
+Tags are descriptive topic labels ONLY — never duplicate `type`, `kind`, or
+`personal` as a tag (those are frontmatter properties the views filter on).
 Add a tag HERE before using it (prevents sprawl). Seed set:
-- Type: entity, note, memory, action
 - Note kind: concept, comparison, query, reference, how-to
 - Domain (user-specific): embedded-systems, controls, accelerator, software, ai-ml, home
 - People/Orgs: person, org, product, model
-- Actionable: task, media, recurring, errand
 - Quality: contested, prediction, controversy
-- Sensitivity: personal
-
-Apply `personal` when the item is about the owner's private life, personal interests,
-or specific individuals (books/films to-consume, personal errands, people) — NOT work,
-technical reference, or general knowledge (a whiteboard photo is not personal).
-Cross-cutting: any page may also carry it.
 
 ## Page Thresholds
 - CREATE a page when an entity/concept appears in 2+ sources OR is central to one.

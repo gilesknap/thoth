@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from thoth.vault import (
+    ACTION_KIND_VOCAB,
+    ACTION_STATUS_VOCAB,
     FOLDER_TYPE_CONTRACT,
+    MEDIA_TYPE_VOCAB,
+    PRIORITY_VOCAB,
     REQUIRED_COMMON_FIELDS,
-    SUMMARY_TYPES,
     VALID_SOURCES,
 )
 
@@ -28,11 +31,12 @@ def file_plan_contract_text() -> str:
 
     It is rendered from the **same canonical constants the validator enforces**
     (:data:`~thoth.vault.FOLDER_TYPE_CONTRACT`, :data:`~thoth.vault.VALID_SOURCES`,
-    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, :data:`~thoth.vault.SUMMARY_TYPES`,
-    :data:`_VALID_LOG_ACTIONS`, :data:`_MIN_WIKILINKS`), so the instructions and
-    :func:`validate_file_plan` cannot drift -- a new folder/type/source/log-action flows
-    into the prompt automatically. The internal ``inbox`` holding folder is excluded: it
-    is the durable pre-LLM hold, never a curate target.
+    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, the action ``kind``/``status`` and
+    ``priority``/``media_type`` vocabularies, :data:`_VALID_LOG_ACTIONS`,
+    :data:`_MIN_WIKILINKS`), so the instructions and :func:`validate_file_plan` cannot
+    drift -- a new folder/type/source/vocab-value/log-action flows into the prompt
+    automatically. The internal ``inbox`` holding folder is excluded: it is the durable
+    pre-LLM hold, never a curate target.
 
     Returns:
         A multi-line contract string to embed in the curate prompt.
@@ -44,9 +48,12 @@ def file_plan_contract_text() -> str:
         if folder != "inbox"
     )
     sources = ", ".join(sorted(VALID_SOURCES))
-    required = ", ".join(REQUIRED_COMMON_FIELDS)
+    required = ", ".join((*REQUIRED_COMMON_FIELDS, "personal"))
     log_actions = ", ".join(sorted(_VALID_LOG_ACTIONS))
-    summary_types = ", ".join(sorted(SUMMARY_TYPES))
+    kinds = ", ".join(ACTION_KIND_VOCAB)
+    statuses = ", ".join(ACTION_STATUS_VOCAB)
+    priorities = ", ".join(PRIORITY_VOCAB)
+    media_types = ", ".join(MEDIA_TYPE_VOCAB)
     return (
         "The file plan you submit MUST be a single object of this exact shape:\n"
         "{\n"
@@ -58,7 +65,8 @@ def file_plan_contract_text() -> str:
         f"{required}\n"
         '      "title": "...", "type": "<type matching the folder>",\n'
         '      "created": "YYYY-MM-DD", "updated": "YYYY-MM-DD",\n'
-        f'      "source": one of [{sources}], "tags": ["..."]\n'
+        f'      "source": one of [{sources}], "tags": ["..."], '
+        '"personal": true|false\n'
         "    },\n"
         f'    "body": "markdown containing at least {_MIN_WIKILINKS} [[wikilinks]]",\n'
         '    "summary": "one crisp line: what this page is about",   // see below\n'
@@ -69,11 +77,21 @@ def file_plan_contract_text() -> str:
         '"files": ["folder/slug.md"]}   // optional\n'
         "}\n"
         f"Folder -> required type: {folder_types}.\n"
-        "A note carries a tag for its kind (concept/comparison/query); a media item is "
-        "an action tagged 'media' filed under actions.\n"
-        f'Author a crisp one-line "summary" for every reference page (type one of: '
-        f"{summary_types}); it becomes the page's canonical one-line gloss in "
-        "frontmatter. Omit it for action pages (they are surfaced by the dashboards).\n"
+        "A note carries a tag for its kind (concept/comparison/query).\n"
+        '"personal" is true when the item concerns the owner\'s private life (people, '
+        "errands, books/films to watch), false for work / technical / general "
+        "knowledge.\n"
+        'Author a crisp one-line "summary" for EVERY page, including actions; it '
+        "becomes the page's canonical one-line gloss in frontmatter.\n"
+        f'Action pages additionally require: "kind": one of [{kinds}] and "status": '
+        f"one of [{statuses}] (use todo for new items); optionally "
+        f'"due_date": "YYYY-MM-DD" and "priority": one of [{priorities}].\n'
+        f'When kind is media also set "media_type": one of [{media_types}] and "url" '
+        "when known.\n"
+        'Memory pages set "memory_date": "YYYY-MM-DD" when the memory happened '
+        "(else omit; it falls back to created).\n"
+        "Tags are descriptive topic labels only -- never duplicate type, kind, or "
+        "personal as a tag.\n"
         '"source" is the capture CHANNEL (one of the list above) -- NEVER a file path '
         "or the raw page path.\n"
         "Use today's date for created/updated. Do not invent folders, types, sources, "

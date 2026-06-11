@@ -264,7 +264,6 @@ class _RawCapturePass(_AssetStore):
             "title": "Held capture",
             "type": "inbox",
             "source": source,
-            "tags": ["inbox"],
             # Stamp the body digest so re-persist is idempotent (mirrors write_raw).
             "sha256": Vault.stored_body_sha256(body),
             # Stamp the intended curation mode (issue #95, task E) so the inbox sweep

@@ -5,7 +5,7 @@ No external boundary: the module is a pure read of package data via
 files for real and asserts on their parsed structure and on the accessor's
 name-confinement. The data directory ``src/thoth/templates/`` is not a Python
 package, so it is reached as a resource under the importable ``thoth`` package;
-these tests verify the accessor surfaces exactly the nine shipped templates and
+these tests verify the accessor surfaces exactly the shipped templates and
 rejects names that escape the resource root. The lint round-trip
 (``parse_taxonomy_tags`` over the seed ``SCHEMA.md``) skips cleanly if
 :mod:`thoth.lint` is not yet importable, keeping this module's tests independent
@@ -56,12 +56,46 @@ def test_each_base_parses_with_one_filter_key_and_views(name: str) -> None:
         assert view.get("name"), f"{name}: every view has a name"
 
 
-def test_actions_due_soon_uses_date_arithmetic_string() -> None:
-    """``actions.base`` 'Due Soon' carries the literal date-arithmetic condition."""
+def test_actions_views_have_work_personal_all_variants() -> None:
+    """Imminent/Open/Media each ship the 3 view variants (ADR 0013 dashboard).
+
+    The Work·Personal·All pattern: each action-backed dashboard section gets three
+    view variants differing only in the ``personal`` clause, switched in place via
+    the embed's view dropdown. The base view (the section's default) plus its two
+    variants must all exist for the dropdown to offer them.
+    """
     data: Any = yaml.safe_load(base_text("actions"))
-    due_soon = next(v for v in data["views"] if v["name"] == "Due Soon")
-    conditions = due_soon["filters"]["and"]
-    assert 'due_date < now() + "7 days"' in conditions
+    names = {v["name"] for v in data["views"]}
+    assert {
+        "Imminent",
+        "Imminent · Personal",
+        "Imminent · All",
+        "Open",
+        "Open · Personal",
+        "Open · All",
+        "Media",
+        "Media · Work",
+        "Media · Personal",
+        "All Actions",
+    } == names
+
+
+def test_actions_open_excludes_media_imminent_does_not() -> None:
+    """Open filters out kind: media; Imminent is kind-agnostic (a due film shows)."""
+    data: Any = yaml.safe_load(base_text("actions"))
+    open_view = next(v for v in data["views"] if v["name"] == "Open")
+    assert 'kind != "media"' in open_view["filters"]["and"]
+    imminent = next(v for v in data["views"] if v["name"] == "Imminent")
+    assert not any("kind" in str(c) for c in imminent["filters"]["and"])
+
+
+def test_actions_work_views_treat_missing_personal_as_work() -> None:
+    """Work-default views filter ``personal != true`` so an unset value counts as
+    work (Bases has no coalesce; ``== false`` would drop legacy pages)."""
+    data: Any = yaml.safe_load(base_text("actions"))
+    for name in ("Imminent", "Open", "Media · Work"):
+        view = next(v for v in data["views"] if v["name"] == name)
+        assert "personal != true" in view["filters"]["and"], name
 
 
 def test_actions_base_has_imminent_view_first() -> None:
@@ -88,49 +122,43 @@ def test_actions_base_imminent_filters_overdue_and_due_soon() -> None:
     assert 'due_date <= now() + "2 days"' in conditions
 
 
-def test_home_base_has_nested_not_inside_and() -> None:
-    """``home.base`` nests a ``not:`` object inside its view's ``and:`` list."""
-    data: Any = yaml.safe_load(base_text("home"))
-    recent = data["views"][0]
-    and_list = recent["filters"]["and"]
+def test_triage_base_excludes_archive_via_nested_not() -> None:
+    """``triage.base`` nests a ``not: file.inFolder("_archive")`` in its and: list."""
+    data: Any = yaml.safe_load(base_text("triage"))
+    and_list = data["filters"]["and"]
     assert any(isinstance(c, dict) and "not" in c for c in and_list), (
-        "home.base recent view must nest a not: inside the and: list"
+        "triage.base must nest a not: inside the top-level and: list"
     )
 
 
-def test_actions_base_has_a_media_consume_view() -> None:
-    """``actions.base`` carries the media-consume queue (ADR 0005: media is action)."""
-    data: Any = yaml.safe_load(base_text("actions"))
-    media_view = next(v for v in data["views"] if "Media" in v["name"])
-    and_list = media_view["filters"]["and"]
-    assert 'tags.contains("media")' in and_list
-    assert 'status == "to_consume"' in and_list
+def test_actions_base_media_views_filter_by_kind() -> None:
+    """The media queue keys off ``kind == "media"`` and the open lifecycle.
 
-
-def test_actions_base_media_views_split_by_consume_status() -> None:
-    """The media views split the queue by status: to_consume / consuming / consumed.
-
-    ADR 0005 folded the old ``media/`` folder into ``actions/`` (a media item is an
-    ``action`` tagged ``media``); the dashboard must still surface consuming vs consumed
-    so the backlog stays visible. Each media view is tag-scoped to ``media`` and pinned
-    to exactly one of the three ``status`` values summary.py's media scan reads.
+    ADR 0013: a media item is an ``action`` with ``kind: media`` sharing the single
+    status lifecycle, so every media view is kind-scoped and excludes the closed
+    statuses (no more to_consume/consuming/consumed split).
     """
     data: Any = yaml.safe_load(base_text("actions"))
     media_views = [v for v in data["views"] if "Media" in v["name"]]
-    statuses: set[str] = set()
+    assert media_views, "actions.base must ship media views"
     for view in media_views:
         and_list = view["filters"]["and"]
-        assert 'tags.contains("media")' in and_list, view["name"]
-        status_conds = [
-            c for c in and_list if isinstance(c, str) and c.startswith("status == ")
-        ]
-        assert len(status_conds) == 1, f"{view['name']}: one status condition"
-        statuses.add(status_conds[0])
-    assert statuses == {
-        'status == "to_consume"',
-        'status == "consuming"',
-        'status == "consumed"',
-    }
+        assert 'kind == "media"' in and_list, view["name"]
+        assert 'status != "done"' in and_list, view["name"]
+        assert 'status != "cancelled"' in and_list, view["name"]
+        assert not any("to_consume" in str(c) for c in and_list), view["name"]
+
+
+def test_bases_never_filter_on_tags() -> None:
+    """No view filters on tags: the view-critical facets are properties (ADR 0013).
+
+    The original dashboard bug: filters used flat tags (``tags.contains("media")``)
+    while the LLM applied faceted tags, so views were silently near-empty. Facets are
+    now frontmatter properties, and tags are purely descriptive -- no base may filter
+    on them.
+    """
+    for name in BASE_NAMES:
+        assert "tags.contains" not in base_text(name), name
 
 
 # --------------------------------------------------------------------------- #
@@ -139,24 +167,24 @@ def test_actions_base_media_views_split_by_consume_status() -> None:
 
 
 def test_index_is_a_callout_dashboard() -> None:
-    """``index.md`` leads with an expanded red Imminent callout (issue #62)."""
+    """``index.md`` is the 5-section attention dashboard (issue #62 / ADR 0013)."""
     text = template_text("index.md")
     # Imminent actions lead in an expanded ('+') danger (red) callout.
     assert "> [!danger]+" in text
-    # Every other section is a collapsed ('-') colour-coded callout.
+    # The other four sections are collapsed ('-') colour-coded callouts.
     for marker in (
+        "> [!warning]-",
         "> [!todo]-",
         "> [!example]-",
-        "> [!tip]-",
-        "> [!quote]-",
-        "> [!warning]-",
         "> [!info]-",
     ):
         assert marker in text, marker
     # The danger callout is the first callout on the page.
-    assert text.index("[!danger]+") < text.index("[!todo]-")
+    assert text.index("[!danger]+") < text.index("[!warning]-")
     # It embeds the actions Imminent view.
     assert "![[_bases/actions.base#Imminent]]" in text
+    # The reference layer is a link line, not an embedded section (ADR 0013).
+    assert "[[_bases/reference.base|" in text
 
 
 def test_index_dashboard_embeds_resolve_to_real_base_views() -> None:
@@ -230,7 +258,7 @@ def test_names_match_shipped_files() -> None:
 
 def test_base_text_equivalent_to_template_text() -> None:
     """``base_text(name)`` is ``template_text('_bases/<name>.base')``."""
-    assert template_text("_bases/home.base") == base_text("home")
+    assert template_text("_bases/actions.base") == base_text("actions")
     for name in BASE_NAMES:
         assert base_text(name) == template_text(f"_bases/{name}.base")
 
@@ -269,13 +297,9 @@ def test_iter_templates_returns_all_templates_non_empty() -> None:
         "index.md",
         "SCHEMA.md",
         "log.md",
-        "_bases/home.base",
         "_bases/actions.base",
-        "_bases/memories.base",
-        "_bases/inbox.base",
-        "_bases/entities.base",
-        "_bases/notes.base",
-        "_bases/personal.base",
+        "_bases/reference.base",
+        "_bases/triage.base",
         *OBSIDIAN_NAMES,
         *ROOT_NAMES,
     ]
@@ -311,22 +335,22 @@ def test_schema_round_trips_through_lint_taxonomy_parser() -> None:
     tags = lint.parse_taxonomy_tags(template_text("SCHEMA.md"))
     assert isinstance(tags, set)
     # One representative tag from each seed category in SCHEMA.md.
-    expected = {"entity", "concept", "task", "media", "memory", "contested"}
+    expected = {"concept", "controls", "person", "contested"}
     assert expected <= tags, sorted(tags)
 
 
-def test_schema_taxonomy_agrees_with_code_content_types() -> None:
-    """SCHEMA.md's human-readable taxonomy lists every code content type (ADR 0005).
+def test_schema_taxonomy_excludes_promoted_facets() -> None:
+    """The taxonomy carries no type/kind/personal tags (ADR 0013).
 
-    vault.py is the single source of the page-type vocabulary; SCHEMA.md carries a
-    human-readable copy for the lint tag audit. This guards the copy against drift:
-    every content type in :data:`thoth.vault.TYPE_ENUMERATION` must appear in the
-    shipped ``## Tag Taxonomy`` so a page type cannot be dropped from the schema while
-    kept in the code (which would silently flag every page using it as an unknown tag).
+    Tags are purely descriptive now: the view-critical facets (the page ``type``,
+    the action ``kind`` values, and ``personal``) are frontmatter properties, so
+    listing them as taxonomy tags would invite the LLM to duplicate them -- the
+    exact drift that broke the original dashboards.
     """
     lint = pytest.importorskip("thoth.lint")
-    from thoth.vault import TYPE_ENUMERATION
+    from thoth.vault import ACTION_KIND_VOCAB, TYPE_ENUMERATION
 
     tags = lint.parse_taxonomy_tags(template_text("SCHEMA.md"))
-    missing = set(TYPE_ENUMERATION) - tags
-    assert not missing, f"page types absent from SCHEMA.md taxonomy: {sorted(missing)}"
+    promoted = set(TYPE_ENUMERATION) | set(ACTION_KIND_VOCAB) | {"personal"}
+    leaked = promoted & tags
+    assert not leaked, f"promoted facets leaked into the taxonomy: {sorted(leaked)}"

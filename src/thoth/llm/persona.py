@@ -25,7 +25,7 @@ the real note in their own Obsidian.
    flat folder (`notes/`, `actions/`, `memories/`, or `raw/`) per SCHEMA.md;
    curated knowledge — including saved answers — lands in `notes/`.
 4. Life-admin items (Actions/TODOs, media backlog, memories) are wiki pages with a
-   frontmatter `type:` — never a rival folder tree. Set due/recurrence/priority on
+   frontmatter `type:` — never a rival folder tree. Set kind/status/due/priority on
    Actions from natural language.
 5. Embed images inline with Obsidian wiki-embeds; the curated page describes AND
    embeds the asset. Never store base64. Never write a separate descriptive sidecar.

@@ -7,8 +7,10 @@ the network for composition -- and renders a Slack ``mrkdwn`` digest:
 * **Daily** -- due/overdue actions (overdue flagged), deadlines in the next
   :data:`DUE_SOON_DAYS` days, yesterday's ingests (curated pages whose ``created`` /
   ``updated`` date is yesterday, grouped/counted by ``type``), a media-backlog nudge
-  (``status: to_consume`` items, oldest first), and review-flagged pages
-  (``review: true`` or ``status: review``).
+  (``kind: media`` items still :data:`MEDIA_BACKLOG_STATUS`, oldest first), and
+  review-flagged pages (``review: true`` or ``status: review``). Media items are
+  excluded from the action buckets (ADR 0013: they share the action lifecycle but
+  have their own queue).
 * **Weekly** -- a week-in-review of ingest counts by ``type`` over the last seven days,
   an actions-status summary (open / overdue), the next week's deadlines (``due_date``
   within seven days), and a suggested review / stale section.
@@ -57,7 +59,7 @@ from .engine import SummaryEngine
 from .types import (
     ACTION_OPEN_STATUSES,
     DUE_SOON_DAYS,
-    MEDIA_OPEN_STATUS,
+    MEDIA_BACKLOG_STATUS,
     ActionItem,
     Digest,
     MediaItem,
@@ -69,7 +71,7 @@ from .types import (
 __all__ = [
     "LONDON",
     "ACTION_OPEN_STATUSES",
-    "MEDIA_OPEN_STATUS",
+    "MEDIA_BACKLOG_STATUS",
     "DUE_SOON_DAYS",
     "ActionItem",
     "MediaItem",

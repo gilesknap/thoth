@@ -28,7 +28,7 @@ from thoth.summary import (
     ACTION_OPEN_STATUSES,
     DUE_SOON_DAYS,
     LONDON,
-    MEDIA_OPEN_STATUS,
+    MEDIA_BACKLOG_STATUS,
     ActionItem,
     Digest,
     MediaItem,
@@ -114,7 +114,8 @@ def _action(
         "created": "2026-05-20",
         "updated": "2026-05-20",
         "source": "slack",
-        "tags": ["task"],
+        "tags": ["chores"],
+        "kind": "task",
         "status": status,
     }
     if due_date is not None:
@@ -129,17 +130,18 @@ def _media(
     slug: str,
     *,
     title: str,
-    status: str = MEDIA_OPEN_STATUS,
+    status: str = MEDIA_BACKLOG_STATUS,
     created: str | None = "2026-05-20",
     media_type: str | None = "book",
 ) -> None:
-    """Author a media item as an actions/<slug>.md action tagged 'media' (ADR 0005)."""
+    """Author a media item: an actions/<slug>.md action with kind: media (ADR 0013)."""
     meta: dict[str, Any] = {
         "title": title,
         "type": "action",
         "updated": "2026-05-20",
         "source": "slack",
-        "tags": ["media"],
+        "tags": ["reading"],
+        "kind": "media",
         "status": status,
     }
     if created is not None:
@@ -269,11 +271,8 @@ def test_due_soon_window_boundaries_are_inclusive(vault: Vault, config: Config) 
 
 
 def test_closed_actions_never_surface(vault: Vault, config: Config) -> None:
-    """done/completed/cancelled actions are excluded from every open scan."""
+    """done/cancelled actions are excluded from every open scan."""
     _action(vault, "done", title="Done", status="done", due_date="2026-05-01")
-    _action(
-        vault, "completed", title="Completed", status="completed", due_date="2026-05-01"
-    )
     _action(
         vault, "cancelled", title="Cancelled", status="cancelled", due_date="2026-06-02"
     )
@@ -292,6 +291,21 @@ def test_in_progress_counts_as_open(vault: Vault, config: Config) -> None:
     _action(vault, "wip", title="WIP", status="in_progress", due_date="2026-06-02")
     engine = _engine(vault, config)
     assert [a.path for a in engine.open_actions()] == ["actions/wip.md"]
+
+
+def test_media_items_excluded_from_open_actions(vault: Vault, config: Config) -> None:
+    """A kind: media action never surfaces as an open action (ADR 0013).
+
+    Media items share the action lifecycle (status: todo), so without the kind
+    exclusion every unwatched film would flood the daily ACTIONS section and the
+    pkm_actions MCP tool; they belong to the media backlog instead.
+    """
+    _media(vault, "film", title="Watch Dune", created="2026-05-20")
+    _action(vault, "real", title="Real task", status="todo")
+
+    engine = _engine(vault, config)
+    assert [a.path for a in engine.open_actions()] == ["actions/real.md"]
+    assert [m.path for m in engine.media_backlog()] == ["actions/film.md"]
 
 
 def test_action_with_no_due_date_lists_but_never_overdue_or_soon(
@@ -422,13 +436,13 @@ def test_page_with_no_date_excluded_from_recent(vault: Vault, config: Config) ->
 # --------------------------------------------------------------------------------------
 
 
-def test_media_backlog_only_to_consume_oldest_first(
+def test_media_backlog_only_unconsumed_oldest_first(
     vault: Vault, config: Config
 ) -> None:
-    """media_backlog returns only to_consume items, oldest-added first."""
+    """media_backlog returns only still-todo items, oldest-added first."""
     _media(vault, "newest", title="Newest", created="2026-05-30")
     _media(vault, "oldest", title="Oldest", created="2026-05-01")
-    _media(vault, "consumed", title="Consumed", status="consumed", created="2026-04-01")
+    _media(vault, "consumed", title="Consumed", status="done", created="2026-04-01")
 
     engine = _engine(vault, config)
     backlog = engine.media_backlog()

@@ -17,16 +17,21 @@ import pytest
 
 from thoth.config import Config, load_config
 from thoth.vault import (
+    ACTION_KIND_VOCAB,
+    ACTION_STATUS_VOCAB,
     ACTIONABLE_DIRS,
     ASSET_SLUG_RE,
+    CONTENT_COMMON_FIELDS,
     CURATED_DIRS,
     FOLDER_TYPE_CONTRACT,
+    INBOX_REQUIRED_FIELDS,
     INBOX_TYPE,
     RAW_SUBDIRS,
     REFERENCE_TYPES,
     REQUIRED_COMMON_FIELDS,
     SEED_DIRS,
     SLUG_RE,
+    SUMMARY_TYPES,
     TYPE_ENUMERATION,
     VALID_SOURCES,
     VALID_TYPES,
@@ -166,6 +171,29 @@ def test_type_enumeration_is_the_four_content_types() -> None:
     assert TYPE_ENUMERATION == ("entity", "note", "memory", "action")
     assert set(TYPE_ENUMERATION) == VALID_TYPES - {INBOX_TYPE}
     assert len(TYPE_ENUMERATION) == len(set(TYPE_ENUMERATION))  # no duplicates
+
+
+def test_content_and_inbox_field_sets() -> None:
+    """The universal content set and the inbox machinery set (ADR 0013)."""
+    assert CONTENT_COMMON_FIELDS == (*REQUIRED_COMMON_FIELDS, "summary", "personal")
+    assert INBOX_REQUIRED_FIELDS == (
+        "title",
+        "type",
+        "created",
+        "updated",
+        "source",
+        "sha256",
+    )
+    # Inbox is machinery: no tags, no content universals.
+    assert "tags" not in INBOX_REQUIRED_FIELDS
+    # Every content type (all four) now carries the one-line summary gloss.
+    assert SUMMARY_TYPES == set(TYPE_ENUMERATION)
+
+
+def test_action_vocabularies_single_sourced() -> None:
+    """The action status/kind vocabularies are the ADR 0013 single vocabularies."""
+    assert ACTION_STATUS_VOCAB == ("todo", "in_progress", "done", "cancelled")
+    assert ACTION_KIND_VOCAB == ("task", "media", "errand")
 
 
 def test_folder_dir_tuples_partition_the_folder_contract() -> None:
@@ -515,6 +543,49 @@ def test_write_page_non_string_type(vault: Vault) -> None:
         vault.write_page("entities", "foo", _valid_frontmatter(type=123), "body")
 
 
+def test_write_page_defaults_personal_false_on_content(vault: Vault) -> None:
+    """A content page gets personal: false stamped when the caller omits it."""
+    rel = vault.write_page("entities", "foo", _valid_frontmatter(), "body")
+    assert vault.read_page(rel).frontmatter["personal"] is False
+
+
+def test_write_page_preserves_explicit_personal(vault: Vault) -> None:
+    """An explicit personal: true survives the default stamping."""
+    rel = vault.write_page("entities", "foo", _valid_frontmatter(personal=True), "body")
+    assert vault.read_page(rel).frontmatter["personal"] is True
+
+
+def _valid_inbox_frontmatter(body: str = "held body") -> dict[str, object]:
+    """A complete inbox-hold frontmatter mapping (machinery: sha256, no tags)."""
+    return {
+        "title": "Held capture",
+        "type": "inbox",
+        "source": "slack",
+        "sha256": Vault.stored_body_sha256(body),
+    }
+
+
+def test_write_page_inbox_requires_sha256_not_tags(vault: Vault) -> None:
+    """An inbox hold needs sha256 (not tags); a missing sha256 is rejected."""
+    rel = vault.write_page(
+        "inbox", "hold-cafe", _valid_inbox_frontmatter(), "held body"
+    )
+    page = vault.read_page(rel)
+    assert "tags" not in page.frontmatter
+    meta = _valid_inbox_frontmatter()
+    del meta["sha256"]
+    with pytest.raises(SchemaError, match="sha256"):
+        vault.write_page("inbox", "hold-beef", meta, "held body")
+
+
+def test_write_page_inbox_gets_no_personal_default(vault: Vault) -> None:
+    """Inbox machinery does not get the content-page personal default."""
+    rel = vault.write_page(
+        "inbox", "hold-feed", _valid_inbox_frontmatter(), "held body"
+    )
+    assert "personal" not in vault.read_page(rel).frontmatter
+
+
 # --- write_raw ---------------------------------------------------------------------
 
 
@@ -608,7 +679,12 @@ def test_remove_page_deletes_existing_and_is_idempotent(vault: Vault) -> None:
     rel = vault.write_page(
         "inbox",
         "hold-abc123",
-        {"title": "Held", "type": "inbox", "source": "slack", "tags": ["inbox"]},
+        {
+            "title": "Held",
+            "type": "inbox",
+            "source": "slack",
+            "sha256": Vault.stored_body_sha256("held body"),
+        },
         "held body",
     )
     assert vault.page_exists(rel)
@@ -858,7 +934,7 @@ def test_seed_writes_spine_and_creates_folders(bare_vault: Vault) -> None:
     root = bare_vault.root
     for name in ("index.md", "SCHEMA.md", "log.md"):
         assert (root / name).is_file()
-    for base in ("home", "actions", "memories", "inbox", "entities", "notes"):
+    for base in ("actions", "reference", "triage"):
         assert (root / "_bases" / f"{base}.base").is_file()
     for folder in SEED_DIRS:
         assert (root / folder).is_dir()

@@ -16,11 +16,14 @@ Two kinds of template ship:
   embeds the Bases dashboards; ``SCHEMA.md`` carries the frontmatter contract and
   the ``## Tag Taxonomy`` section that :func:`thoth.lint.parse_taxonomy_tags`
   reads as its single source of truth; ``log.md`` is the append-only action log.
-* **Bases dashboards** -- :data:`BASE_NAMES` (``home``, ``actions``, ``memories``,
-  ``inbox``, ``entities``, ``notes``, ``personal``): YAML ``.base`` files under
-  ``_bases/`` used by
-  ``index.md``. Every ``filters:`` block is an object keyed by exactly one of
-  ``and:`` / ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
+* **Bases dashboards** -- :data:`BASE_NAMES` (``actions``, ``reference``,
+  ``triage``): YAML ``.base`` files under ``_bases/`` used by ``index.md``. The
+  three mirror the vault lifecycle (ADR 0013): ``actions`` (the actionable layer,
+  with Work / Personal / All view variants switched via the embed's view
+  dropdown), ``reference`` (the curated Notes / Entities / Memories layer) and
+  ``triage`` (machinery: the inbox holding queue + vault-wide recent activity).
+  Every ``filters:`` block is an object keyed by exactly one of ``and:`` /
+  ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
 
 **Bases vs Dataview is a VPS / Obsidian-time decision (SPEC section 15, open item
 2), so this module ships and documents BOTH.** The *v1 target is Bases* if the
@@ -31,9 +34,9 @@ relevant index / Home page. The canonical open-actions fallback, recorded here s
 neither option is lost, is::
 
     ```dataview
-    TABLE status, due_date, priority, project
+    TABLE status, due_date, priority, kind
     FROM "actions"
-    WHERE status != "done" AND status != "completed" AND status != "cancelled"
+    WHERE status != "done" AND status != "cancelled"
     SORT priority ASC, due_date ASC
     ```
 
@@ -68,13 +71,9 @@ __all__ = [
 #: The Bases dashboard names (without the ``.base`` suffix), in the order
 #: ``index.md`` embeds them.
 BASE_NAMES: tuple[str, ...] = (
-    "home",
     "actions",
-    "memories",
-    "inbox",
-    "entities",
-    "notes",
-    "personal",
+    "reference",
+    "triage",
 )
 
 #: The three vault-spine file names shipped as package data.

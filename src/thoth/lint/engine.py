@@ -171,30 +171,32 @@ class LintEngine:
         return _check_broken_wikilinks(self._all_scanned_pages())
 
     def check_summaries(self) -> list[Finding]:
-        """Flag reference pages missing a one-line ``summary:`` gloss (check 3).
+        """Flag content pages missing a one-line ``summary:`` gloss (check 3).
 
-        Every reference page (:data:`~thoth.vault.SUMMARY_TYPES`:
-        ``entity``/``note``/``memory``) must carry a non-empty one-line ``summary:``
-        frontmatter field -- the canonical, rebuildable per-page gloss that replaced the
-        old agent-maintained ``index.md`` catalog (issue #72 / ADR 0008). A page whose
+        Every content page (:data:`~thoth.vault.SUMMARY_TYPES`: all four content
+        types, including ``action`` since ADR 0013) must carry a non-empty one-line
+        ``summary:`` frontmatter field -- the canonical, rebuildable per-page gloss
+        that replaced the old agent-maintained ``index.md`` catalog (issue #72 /
+        ADR 0008) and feeds the Summary column on the Bases dashboards. A page whose
         ``summary`` is absent or blank is flagged ``Severity.STYLE`` (the tier the old
-        catalog-completeness check used), preserving the "every reference page is
-        glossed" guarantee on the page instead of the index. ``index.md`` is now a
-        static set of Bases dashboards and is not scanned.
+        catalog-completeness check used). ``index.md`` is now a static set of Bases
+        dashboards and is not scanned.
 
         Returns:
             The summary-gloss findings.
         """
-        return _check_summaries(self._curated_pages())
+        return _check_summaries([*self._curated_pages(), *self._actionable_pages()])
 
     def check_frontmatter(self) -> list[Finding]:
         """Validate frontmatter on every curated and life-admin page (check 4).
 
-        Checks the required common fields, that ``type`` and ``source`` are in the vault
-        vocabularies, that type-specific required fields
-        (:data:`~thoth.lint.TYPE_REQUIRED_FIELDS`) are present, and that ``status`` /
-        ``priority`` / ``media_type`` values are in the Metadata-Menu vocabularies. All
-        findings are ``Severity.STYLE``.
+        Checks the required fields (content pages against
+        :data:`~thoth.vault.CONTENT_COMMON_FIELDS`, inbox holds against
+        :data:`~thoth.vault.INBOX_REQUIRED_FIELDS`), that ``type`` and ``source`` are
+        in the vault vocabularies, that type-specific required fields
+        (:data:`~thoth.lint.TYPE_REQUIRED_FIELDS`) are present, that ``personal`` is a
+        real boolean, and that ``status`` / ``kind`` / ``priority`` / ``media_type``
+        values are in the vault vocabularies. All findings are ``Severity.STYLE``.
 
         Returns:
             The frontmatter findings.
@@ -206,8 +208,8 @@ class LintEngine:
 
         A curated reference page whose ``updated`` is more than
         :data:`~thoth.lint.STALE_DAYS` before :attr:`today` is flagged; an open
-        ``action`` past its ``due_date`` is flagged (done/completed/cancelled exempt);
-        an ``action`` tagged ``media`` whose ``status`` is ``to_consume`` and whose
+        ``action`` past its ``due_date`` is flagged (done/cancelled exempt); an
+        ``action`` with ``kind: media`` still in the ``todo`` backlog whose
         ``created`` is more than :data:`~thoth.lint.MEDIA_STALE_DAYS` ago is flagged.
         All findings are ``Severity.STALE``.
 
@@ -340,7 +342,7 @@ class LintEngine:
         """Return parsed pages in :data:`ACTIONABLE_DIRS` (spine files skipped).
 
         The lifecycle-bearing folder(s) (actions/, which also holds the media queue as
-        actions tagged 'media'): the overdue / cold-media checks scope to these.
+        actions with kind: media): the overdue / cold-media checks scope to these.
         """
         return self._pages_in(ACTIONABLE_DIRS)
 
