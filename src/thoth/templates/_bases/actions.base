@@ -6,75 +6,114 @@ properties:
   status:     { displayName: Status }
   due_date:   { displayName: Due }
   priority:   { displayName: Priority }
-  project:    { displayName: Project }
-  recurrence: { displayName: Repeat }
+  kind:       { displayName: Kind }
+  personal:   { displayName: Personal }
   media_type: { displayName: Media Type }
-  creator:    { displayName: Creator }
   url:        { displayName: URL }
+  summary:    { displayName: Summary }
 views:
   - type: table
     name: Imminent
     filters:
       and:
         - status != "done"
-        - status != "completed"
         - status != "cancelled"
         - due_date != ""
         - due_date <= now() + "2 days"
-        - "!tags.contains(\"personal\")"
-    order: [file.name, due_date, priority, status, project]
+        - personal != true
+    order: [file.name, due_date, priority, status, kind]
     sort:
       - { property: due_date, direction: ASC }
       - { property: priority, direction: ASC }
   - type: table
-    name: Open Actions
+    name: Imminent · Personal
     filters:
       and:
         - status != "done"
-        - status != "completed"
         - status != "cancelled"
-        - "!tags.contains(\"media\")"
-        - "!tags.contains(\"personal\")"
-    order: [file.name, due_date, priority, status, project, recurrence]
+        - due_date != ""
+        - due_date <= now() + "2 days"
+        - personal == true
+    order: [file.name, due_date, priority, status, kind]
+    sort:
+      - { property: due_date, direction: ASC }
+      - { property: priority, direction: ASC }
+  - type: table
+    name: Imminent · All
+    filters:
+      and:
+        - status != "done"
+        - status != "cancelled"
+        - due_date != ""
+        - due_date <= now() + "2 days"
+    order: [file.name, due_date, priority, status, kind, personal]
+    sort:
+      - { property: due_date, direction: ASC }
+      - { property: priority, direction: ASC }
+  - type: table
+    name: Open
+    filters:
+      and:
+        - status != "done"
+        - status != "cancelled"
+        - kind != "media"
+        - personal != true
+    order: [file.name, due_date, priority, status, kind, summary]
     sort:
       - { property: priority, direction: ASC }
       - { property: due_date, direction: ASC }
   - type: table
-    name: Due Soon
+    name: Open · Personal
     filters:
       and:
-        - status != "completed"
-        - due_date != ""
-        - due_date < now() + "7 days"
-        - "!tags.contains(\"personal\")"
-    order: [file.name, due_date, priority]
+        - status != "done"
+        - status != "cancelled"
+        - kind != "media"
+        - personal == true
+    order: [file.name, due_date, priority, status, kind, summary]
+    sort:
+      - { property: priority, direction: ASC }
+      - { property: due_date, direction: ASC }
   - type: table
-    name: Media — To Consume
+    name: Open · All
     filters:
       and:
-        - tags.contains("media")
-        - status == "to_consume"
-        - "!tags.contains(\"personal\")"
-    order: [file.name, media_type, creator, priority]
+        - status != "done"
+        - status != "cancelled"
+        - kind != "media"
+    order: [file.name, due_date, priority, status, kind, personal, summary]
+    sort:
+      - { property: priority, direction: ASC }
+      - { property: due_date, direction: ASC }
+  - type: table
+    name: Media
+    filters:
+      and:
+        - kind == "media"
+        - status != "done"
+        - status != "cancelled"
+    order: [file.name, media_type, status, priority, url, summary]
     sort: [{ property: priority, direction: ASC }]
   - type: table
-    name: Media — Consuming
+    name: Media · Work
     filters:
       and:
-        - tags.contains("media")
-        - status == "consuming"
-        - "!tags.contains(\"personal\")"
-    order: [file.name, media_type, creator, priority]
+        - kind == "media"
+        - status != "done"
+        - status != "cancelled"
+        - personal != true
+    order: [file.name, media_type, status, priority, url, summary]
     sort: [{ property: priority, direction: ASC }]
   - type: table
-    name: Media — Consumed
+    name: Media · Personal
     filters:
       and:
-        - tags.contains("media")
-        - status == "consumed"
-        - "!tags.contains(\"personal\")"
-    order: [file.name, media_type, creator, created]
-    sort: [{ property: created, direction: DESC }]
+        - kind == "media"
+        - status != "done"
+        - status != "cancelled"
+        - personal == true
+    order: [file.name, media_type, status, priority, url, summary]
+    sort: [{ property: priority, direction: ASC }]
   - type: table
     name: All Actions
-    order: [file.name, due_date, priority, status, project]
+    order: [file.name, status, kind, due_date, priority, personal, summary]

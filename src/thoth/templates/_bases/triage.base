@@ -1,0 +1,25 @@
+filters:
+  and:
+    - file.ext == "md"
+    - not:
+        - file.inFolder("_archive")
+properties:
+  title:   { displayName: Title }
+  created: { displayName: Captured }
+  source:  { displayName: Via }
+views:
+  - type: table
+    name: Inbox — needs filing
+    filters:
+      and:
+        - file.inFolder("inbox")
+        - "!(file.name == \"README\")"
+    order: [file.name, title, created, source]
+    sort: [{ property: created, direction: DESC }]
+  - type: table
+    name: Recent (7d)
+    filters:
+      and:
+        - file.mtime > now() - "7 days"
+    order: [file.name, type, created, file.mtime]
+    sort: [{ property: file.mtime, direction: DESC }]

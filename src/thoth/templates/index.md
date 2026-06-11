@@ -2,51 +2,37 @@
 title: Home
 type: summary
 cssclasses: dashboard-full-width
-updated: 2026-05-30
+updated: 2026-06-11
 ---
 
 # 🏠 PKM Vault — Home
 
-> [!danger]+ Imminent actions
-> Overdue or due within the next two days — clear these first.
+> [!danger]+ Imminent
+> Overdue or due within the next two days (any kind) — clear these first.
+> Use the view dropdown to flip Imminent → Imminent · Personal → Imminent · All.
 >
 > ![[_bases/actions.base#Imminent]]
-
-> [!todo]- Actions
-> Open todos in **actions/** (media items excluded).
->
-> ![[_bases/actions.base#Open Actions]]
 
 > [!warning]- Inbox
 > Unfiled captures in **inbox/** waiting to be curated.
 >
-> ![[_bases/inbox.base#Needs Filing]]
+> ![[_bases/triage.base#Inbox — needs filing]]
 
-> [!tip]- Knowledge
-> Reference notes in **notes/** and the people/places/things in **entities/**.
+> [!todo]- Actions
+> Open work todos and errands (media excluded). Flip the view dropdown for
+> Open · Personal / Open · All.
 >
-> ![[_bases/notes.base#All Notes]]
->
-> ![[_bases/entities.base#All Entities]]
-
-> [!abstract]- Personal
-> Personal actions and to-consume items, kept out of the work dashboards above.
->
-> ![[_bases/personal.base#Open Personal]]
->
-> ![[_bases/personal.base#Personal Media — To Consume]]
+> ![[_bases/actions.base#Open]]
 
 > [!example]- Media
-> The to-consume queue — media items (an `action` tagged `media`) in **actions/**.
+> The to-consume queue — actions with `kind: media`. Flip the view dropdown for
+> Media · Work / Media · Personal.
 >
-> ![[_bases/actions.base#Media — To Consume]]
-
-> [!quote]- Memories
-> Personal reference and journal entries in **memories/**.
->
-> ![[_bases/memories.base#All Memories]]
+> ![[_bases/actions.base#Media]]
 
 > [!info]- Recent
 > The latest activity across the whole vault.
 >
-> ![[_bases/home.base#Recent Captures (7d)]]
+> ![[_bases/triage.base#Recent (7d)]]
+
+Browse the reference layer: [[_bases/reference.base|Notes · Entities · Memories]]
