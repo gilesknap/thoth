@@ -200,6 +200,8 @@ def _knowledge(
         "updated": updated,
         "source": "slack",
         "tags": tags if tags is not None else ["entity"],
+        # Every content page carries the universal personal boolean (ADR 0013).
+        "personal": False,
     }
     if summary is not None:
         meta["summary"] = summary
@@ -434,17 +436,35 @@ def test_summary_gloss_flags_blank_summary(vault: Vault, config: Config) -> None
     assert {f.path for f in findings} == {"notes/blank.md"}
 
 
-def test_summary_gloss_exempts_action_pages(vault: Vault, config: Config) -> None:
-    """An action page needs no ``summary:`` (it is surfaced by the dashboards)."""
+def test_summary_gloss_flags_action_pages_too(vault: Vault, config: Config) -> None:
+    """An action page without a ``summary:`` is flagged (ADR 0013: all 4 types)."""
     _knowledge(
         vault,
         "actions",
         "todo",
         page_type="action",
         body="do it\n",
-        tags=["task"],
+        tags=["chores"],
         summary=None,
-        extra={"status": "todo"},
+        extra={"status": "todo", "kind": "task"},
+    )
+    findings = _engine(vault, config).check_summaries()
+    assert {f.path for f in findings} == {"actions/todo.md"}
+
+
+def test_summary_gloss_exempts_inbox_holds(vault: Vault, config: Config) -> None:
+    """An inbox holding page (machinery) needs no ``summary:``."""
+    _write(
+        vault,
+        "inbox/hold-abc.md",
+        {
+            "title": "Held capture",
+            "type": "inbox",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+            "sha256": "0" * 64,
+        },
     )
     findings = _engine(vault, config).check_summaries()
     assert findings == []
@@ -583,7 +603,9 @@ def test_frontmatter_valid_page_passes(vault: Vault, config: Config) -> None:
             "created": "2026-05-30",
             "updated": "2026-05-30",
             "source": "slack",
-            "tags": ["task"],
+            "tags": ["chores"],
+            "personal": False,
+            "kind": "task",
             "status": "todo",
             "priority": "2 - High",
         },
@@ -594,6 +616,116 @@ def test_frontmatter_valid_page_passes(vault: Vault, config: Config) -> None:
         if f.path == "actions/good.md"
     ]
     assert findings == []
+
+
+def test_frontmatter_action_missing_kind_flagged(vault: Vault, config: Config) -> None:
+    """An action missing its required ``kind`` field is flagged (ADR 0013)."""
+    _write(
+        vault,
+        "actions/no-kind.md",
+        {
+            "title": "No kind",
+            "type": "action",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+            "tags": ["chores"],
+            "personal": False,
+            "status": "todo",
+        },
+    )
+    msgs = [
+        f.message
+        for f in _engine(vault, config).check_frontmatter()
+        if f.path == "actions/no-kind.md"
+    ]
+    assert any("'kind'" in m for m in msgs)
+
+
+def test_frontmatter_kind_outside_vocab_flagged(vault: Vault, config: Config) -> None:
+    """A ``kind`` value outside the action vocabulary is flagged."""
+    _write(
+        vault,
+        "actions/bad-kind.md",
+        {
+            "title": "Bad kind",
+            "type": "action",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+            "tags": ["chores"],
+            "personal": False,
+            "kind": "movie",  # not in the action kind vocab
+            "status": "todo",
+        },
+    )
+    msgs = [
+        f.message
+        for f in _engine(vault, config).check_frontmatter()
+        if f.path == "actions/bad-kind.md"
+    ]
+    assert any("kind 'movie'" in m for m in msgs)
+
+
+def test_frontmatter_personal_must_be_real_boolean(
+    vault: Vault, config: Config
+) -> None:
+    """A string ``personal`` is flagged; missing ``personal`` is flagged too."""
+    _knowledge(
+        vault,
+        "entities",
+        "stringy",
+        page_type="entity",
+        extra={"personal": '"false"'},  # quoted -> survives _write as a YAML string
+    )
+    _write(
+        vault,
+        "entities/absent.md",
+        {
+            "title": "Absent",
+            "type": "entity",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+            "tags": ["entity"],
+        },
+    )
+    findings = _engine(vault, config).check_frontmatter()
+    stringy = [f.message for f in findings if f.path == "entities/stringy.md"]
+    assert any("must be a boolean" in m for m in stringy)
+    absent = [f.message for f in findings if f.path == "entities/absent.md"]
+    assert any("'personal'" in m for m in absent)
+
+
+def test_frontmatter_inbox_hold_needs_no_tags(vault: Vault, config: Config) -> None:
+    """An inbox hold passes with sha256 and no tags; a missing sha256 is flagged."""
+    _write(
+        vault,
+        "inbox/hold-ok.md",
+        {
+            "title": "Held capture",
+            "type": "inbox",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+            "sha256": "0" * 64,
+        },
+    )
+    _write(
+        vault,
+        "inbox/hold-bad.md",
+        {
+            "title": "Held capture",
+            "type": "inbox",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+        },
+    )
+    findings = _engine(vault, config).check_frontmatter()
+    assert [f for f in findings if f.path == "inbox/hold-ok.md"] == []
+    bad = [f.message for f in findings if f.path == "inbox/hold-bad.md"]
+    assert any("'sha256'" in m for m in bad)
 
 
 # --------------------------------------------------------------------------------------
@@ -650,10 +782,11 @@ def test_overdue_open_action_flagged_closed_exempt(
     assert overdue == {"actions/late.md"}
 
 
-def test_media_to_consume_cold_flagged(vault: Vault, config: Config) -> None:
-    """A to_consume media action older than MEDIA_STALE_DAYS is flagged; recent is not.
+def test_media_backlog_cold_flagged(vault: Vault, config: Config) -> None:
+    """A still-todo media action older than MEDIA_STALE_DAYS is flagged; recent is not.
 
-    ADR 0005: a media item is an ``action`` tagged ``media`` under ``actions/``.
+    ADR 0013: a media item is an ``action`` with ``kind: media`` under ``actions/``;
+    an unconsumed backlog item is simply still ``todo``.
     """
     cold = (TODAY - _dt.timedelta(days=MEDIA_STALE_DAYS + 1)).isoformat()
     warm = (TODAY - _dt.timedelta(days=MEDIA_STALE_DAYS - 1)).isoformat()
@@ -667,8 +800,9 @@ def test_media_to_consume_cold_flagged(vault: Vault, config: Config) -> None:
                 "created": created,
                 "updated": created,
                 "source": "slack",
-                "tags": ["media"],
-                "status": "to_consume",
+                "tags": ["reading"],
+                "kind": "media",
+                "status": "todo",
             },
         )
     cold_paths = {

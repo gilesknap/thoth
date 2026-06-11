@@ -14,16 +14,18 @@ The 13 checks (SPEC Appendix table):
     (life-admin pages are exempt; Bases surface them).
 2.  **Broken wikilinks** -- ``[[target]]`` references that resolve to no page, honouring
     ``aliases`` frontmatter. Highest severity.
-3.  **Summary gloss** -- every reference page (``entity``/``note``/``memory``) carries a
-    non-empty one-line ``summary:`` frontmatter gloss (issue #72 / ADR 0008): the
-    canonical, rebuildable home of the per-page gloss that replaced the old
-    agent-maintained ``index.md`` catalog.
-4.  **Frontmatter validation** -- required common fields present, ``type`` valid,
-    type-specific required fields present, and ``status`` / ``priority`` /
-    ``media_type`` values within the Metadata-Menu vocabularies.
+3.  **Summary gloss** -- every content page (all four types, including ``action``
+    since ADR 0013) carries a non-empty one-line ``summary:`` frontmatter gloss
+    (issue #72 / ADR 0008): the canonical, rebuildable home of the per-page gloss
+    that replaced the old agent-maintained ``index.md`` catalog.
+4.  **Frontmatter validation** -- required fields present (content pages against
+    :data:`~thoth.vault.CONTENT_COMMON_FIELDS`, inbox holds against
+    :data:`~thoth.vault.INBOX_REQUIRED_FIELDS`), ``type`` valid, type-specific
+    required fields present, ``personal`` a real boolean, and ``status`` / ``kind`` /
+    ``priority`` / ``media_type`` values within the vault vocabularies.
 5.  **Stale content** -- a knowledge page whose ``updated`` is older than
     :data:`STALE_DAYS`; an ``action`` past its ``due_date`` and not done/cancelled; a
-    ``media`` ``to_consume`` older than :data:`MEDIA_STALE_DAYS`.
+    ``kind: media`` action still ``todo`` older than :data:`MEDIA_STALE_DAYS`.
 6.  **Contradictions** -- every page with ``contested: true`` or a non-empty
     ``contradictions:`` list.
 7.  **Source drift** -- a ``raw/`` page whose recomputed body sha256 differs from its
@@ -38,11 +40,11 @@ The 13 checks (SPEC Appendix table):
 12. **Log rotation** -- a ``log.md`` with more than :data:`LOG_ROTATE_LIMIT` entries.
 13. **Report + log** -- group by severity and append one ``log.md`` line.
 
-All folder / type / slug contract constants are imported from :mod:`thoth.vault` so the
-closed-surface contract stays single-sourced; the Metadata-Menu vocabularies (which the
-vault writer does not enforce) are defined here from the SPEC frontmatter table. The
-only injected non-determinism is ``today`` (a :class:`~datetime.date`) so the
-stale / overdue / media-cold windows are reproducible under a frozen clock.
+All folder / type / slug contract constants AND the status / kind / priority /
+media_type vocabularies are imported from :mod:`thoth.vault` so the closed-surface
+contract stays single-sourced (ADR 0013). The only injected non-determinism is
+``today`` (a :class:`~datetime.date`) so the stale / overdue / media-cold windows are
+reproducible under a frozen clock.
 
 Only the standard library plus ``frontmatter`` / ``yaml`` and import-light ``thoth``
 modules (the frozen :class:`thoth.config.Config` / :class:`thoth.vault.Vault`, the
@@ -61,6 +63,7 @@ from .checks_freshness import (
     STALE_DAYS,
 )
 from .checks_metadata import (
+    KIND_VOCAB,
     MEDIA_TYPE_VOCAB,
     PRIORITY_VOCAB,
     STATUS_VOCAB,
@@ -82,6 +85,7 @@ __all__ = [
     "MEDIA_STALE_DAYS",
     "TYPE_REQUIRED_FIELDS",
     "STATUS_VOCAB",
+    "KIND_VOCAB",
     "PRIORITY_VOCAB",
     "MEDIA_TYPE_VOCAB",
     "Severity",
@@ -100,6 +104,6 @@ __all__ = [
 # "Curated page" means a lifecycle-free reference page in one of the CURATED_DIRS
 # folders (entities/notes/memories): the orphan, index-completeness, page-size and
 # quality-signal checks scope to these. The ACTIONABLE_DIRS pages (actions/, which also
-# holds the media queue as actions tagged 'media') are exempt from the orphan /
+# holds the media queue as actions with kind: media) are exempt from the orphan /
 # index-completeness checks (Bases dashboards surface them) but still carry the common
-# frontmatter contract and get the overdue / cold-media checks instead.
+# frontmatter contract + summary gloss and get the overdue / cold-media checks instead.

@@ -12,8 +12,9 @@ import datetime as _dt
 import re
 from datetime import date
 
-from thoth.fmfields import _page_tags, _parse_date, _str_field
-from thoth.summary import MEDIA_OPEN_STATUS
+from thoth.fmfields import _parse_date, _str_field
+from thoth.summary import MEDIA_BACKLOG_STATUS
+from thoth.summary.types import _MEDIA_KIND
 from thoth.vault import Vault
 
 from .model import Finding, Severity, _finding, _Page
@@ -35,10 +36,10 @@ STALE_DAYS: int = 90
 """A knowledge page is stale when ``updated`` is older than this many days (check 5)."""
 
 MEDIA_STALE_DAYS: int = 180
-"""A ``to_consume`` media item is cold this many days after ``created`` (check 5)."""
+"""An unconsumed media item is cold this many days after ``created`` (check 5)."""
 
 # Action statuses that exempt an overdue action from the stale check (SPEC check 5).
-_ACTION_CLOSED_STATUSES: frozenset[str] = frozenset({"done", "completed", "cancelled"})
+_ACTION_CLOSED_STATUSES: frozenset[str] = frozenset({"done", "cancelled"})
 
 # A log entry header line "## [YYYY-MM-DD] ...".
 _LOG_ENTRY_RE: re.Pattern[str] = re.compile(r"^## \[", re.MULTILINE)
@@ -72,9 +73,9 @@ def _check_stale(
 def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Finding]:
     """Return overdue-action / cold-media findings for one actionable page.
 
-    ADR 0005: the media queue lives in ``actions/`` as an ``action`` tagged
-    ``media``, so the cold-media check keys off the ``media`` tag plus the
-    ``to_consume`` status rather than a separate ``media`` type / folder.
+    The media queue lives in ``actions/`` as an ``action`` with ``kind: media``
+    (ADR 0013), so the cold-media check keys off the ``kind`` property plus the
+    still-``todo`` backlog status rather than a separate ``media`` type / folder.
     """
     out: list[Finding] = []
     page_type = _str_field(page.meta.get("type"))
@@ -93,7 +94,10 @@ def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Findi
                     f"action is past its due date {due.isoformat()}",
                 )
             )
-    if status == MEDIA_OPEN_STATUS and "media" in _page_tags(page.meta):
+    if (
+        status == MEDIA_BACKLOG_STATUS
+        and _str_field(page.meta.get("kind")) == _MEDIA_KIND
+    ):
         added = _parse_date(page.meta.get("created"))
         if added is not None and added < media_floor:
             out.append(
@@ -102,7 +106,7 @@ def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Findi
                     "media-cold",
                     Severity.STALE,
                     page.path,
-                    f"media to_consume since {added.isoformat()} is older "
+                    f"media unconsumed since {added.isoformat()} is older "
                     f"than {MEDIA_STALE_DAYS} days",
                 )
             )

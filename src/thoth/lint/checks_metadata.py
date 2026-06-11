@@ -1,12 +1,12 @@
 """Frontmatter / metadata checks: 3 (summary gloss), 4 (frontmatter), 6
-(contradictions), 8 (quality signals) and 10 (tag audit), plus the Metadata-Menu
+(contradictions), 8 (quality signals) and 10 (tag audit), plus the frontmatter
 vocabularies they validate against.
 
 Each check is a pure function over the parsed pages handed to it by
-:class:`thoth.lint.LintEngine`. The folder / type / slug contract constants are
-imported from :mod:`thoth.vault` so the closed-surface contract stays
-single-sourced; the Metadata-Menu vocabularies (which the vault writer does not
-enforce) are defined here from the SPEC frontmatter table.
+:class:`thoth.lint.LintEngine`. The folder / type / slug contract constants AND the
+status / kind / priority / media_type vocabularies are imported from
+:mod:`thoth.vault` (the single source, ADR 0013); the per-type mappings below only
+shape them for the check loop.
 """
 
 from __future__ import annotations
@@ -15,12 +15,18 @@ from pathlib import PurePosixPath
 
 from thoth.fmfields import _is_truthy, _page_tags, _str_field
 from thoth.vault import (
+    ACTION_KIND_VOCAB,
+    ACTION_STATUS_VOCAB,
+    CONTENT_COMMON_FIELDS,
     FOLDER_TYPE_CONTRACT,
-    REQUIRED_COMMON_FIELDS,
+    INBOX_REQUIRED_FIELDS,
+    INBOX_TYPE,
     SUMMARY_TYPES,
     VALID_SOURCES,
     VALID_TYPES,
 )
+from thoth.vault import MEDIA_TYPE_VOCAB as _MEDIA_TYPE_VOCAB
+from thoth.vault import PRIORITY_VOCAB as _PRIORITY_VOCAB
 
 from .model import Finding, Severity, _finding, _Page
 from .parse import parse_taxonomy_tags
@@ -28,53 +34,45 @@ from .parse import parse_taxonomy_tags
 __all__ = [
     "TYPE_REQUIRED_FIELDS",
     "STATUS_VOCAB",
+    "KIND_VOCAB",
     "PRIORITY_VOCAB",
     "MEDIA_TYPE_VOCAB",
 ]
 
 TYPE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "action": ("status",),
+    "action": ("status", "kind"),
 }
 """Type-specific required frontmatter fields beyond the common set (SPEC check 4).
 
-ADR 0005 folded the media queue into ``actions/`` (a media item is an ``action`` tagged
-``media``), so the single ``action`` type carries the ``status`` requirement.
+ADR 0013: every action carries the single ``status`` lifecycle plus a ``kind``
+(``task``/``media``/``errand``) -- the view-critical facet the Bases dashboards
+filter on (a media item is an ``action`` with ``kind: media``).
 """
 
 STATUS_VOCAB: dict[str, frozenset[str]] = {
-    "action": frozenset(
-        {
-            "todo",
-            "in_progress",
-            "done",
-            "completed",
-            "cancelled",
-            "to_consume",
-            "consuming",
-            "consumed",
-        }
-    ),
+    "action": frozenset(ACTION_STATUS_VOCAB),
 }
-"""Allowed ``status`` values per ``type`` (Metadata-Menu vocab, SPEC table).
+"""Allowed ``status`` values per ``type``
+(from :data:`thoth.vault.ACTION_STATUS_VOCAB`).
 
-ADR 0005: ``action`` covers both the todo lifecycle (``todo``..``cancelled``) and the
-media consume queue (``to_consume``/``consuming``/``consumed``), since a media item is
-now an ``action`` tagged ``media``.
+ADR 0013: one lifecycle for every action regardless of kind -- media-ness is carried
+by the ``kind`` property, not by parallel status values.
 """
 
-PRIORITY_VOCAB: frozenset[str] = frozenset(
-    {"1 - Urgent", "2 - High", "3 - Medium", "4 - Low"}
-)
-"""Allowed ``priority`` values (Metadata-Menu vocab, SPEC frontmatter table)."""
+KIND_VOCAB: dict[str, frozenset[str]] = {
+    "action": frozenset(ACTION_KIND_VOCAB),
+}
+"""Allowed ``kind`` values per ``type`` (from :data:`thoth.vault.ACTION_KIND_VOCAB`)."""
 
-MEDIA_TYPE_VOCAB: frozenset[str] = frozenset(
-    {"book", "film", "tv", "podcast", "article", "video", "music"}
-)
-"""Allowed ``media_type`` values (Metadata-Menu vocab, SPEC frontmatter table)."""
+PRIORITY_VOCAB: frozenset[str] = frozenset(_PRIORITY_VOCAB)
+"""Allowed ``priority`` values (from :data:`thoth.vault.PRIORITY_VOCAB`)."""
+
+MEDIA_TYPE_VOCAB: frozenset[str] = frozenset(_MEDIA_TYPE_VOCAB)
+"""Allowed ``media_type`` values (from :data:`thoth.vault.MEDIA_TYPE_VOCAB`)."""
 
 
 def _check_summaries(pages: list[_Page]) -> list[Finding]:
-    """Flag reference pages missing a one-line ``summary:`` gloss (check 3)."""
+    """Flag content pages missing a one-line ``summary:`` gloss (check 3)."""
     findings: list[Finding] = []
     for page in pages:
         page_type = _str_field(page.meta.get("type"))
@@ -87,7 +85,7 @@ def _check_summaries(pages: list[_Page]) -> list[Finding]:
                     "summary-gloss",
                     Severity.STYLE,
                     page.path,
-                    "reference page has no one-line summary: frontmatter",
+                    "content page has no one-line summary: frontmatter",
                 )
             )
     return findings
@@ -109,10 +107,18 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
     def flag(message: str) -> None:
         out.append(_finding(4, "frontmatter", Severity.STYLE, page.path, message))
 
-    for field in REQUIRED_COMMON_FIELDS:
+    page_type = _str_field(meta.get("type"))
+    # Inbox holds are machinery with their own set (no tags, ADR 0013); content pages
+    # carry the universal set. ``summary`` is skipped here: check 3 owns the gloss
+    # finding, so a missing summary is not double-flagged.
+    required = (
+        INBOX_REQUIRED_FIELDS if page_type == INBOX_TYPE else CONTENT_COMMON_FIELDS
+    )
+    for field in required:
+        if field == "summary":
+            continue
         if meta.get(field) in (None, "", []):
             flag(f"missing required common field {field!r}")
-    page_type = _str_field(meta.get("type"))
     if page_type is not None and page_type not in VALID_TYPES:
         flag(f"invalid type {page_type!r}")
     top_folder = PurePosixPath(page.path).parts[0]
@@ -129,6 +135,11 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
     for field in TYPE_REQUIRED_FIELDS.get(page_type or "", ()):
         if meta.get(field) in (None, "", []):
             flag(f"{page_type} page is missing required field {field!r}")
+    personal = meta.get("personal")
+    # A real boolean is required (isinstance, not truthy): the Bases view filters
+    # compare ``personal != true``, so a string "false" would silently read as set.
+    if personal is not None and not isinstance(personal, bool):
+        flag(f"personal {personal!r} must be a boolean (true/false)")
     status = _str_field(meta.get("status"))
     allowed_status = STATUS_VOCAB.get(page_type or "")
     if (
@@ -137,12 +148,16 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
         and (status not in allowed_status)
     ):
         flag(f"status {status!r} is not in the {page_type} vocabulary")
+    kind = _str_field(meta.get("kind"))
+    allowed_kind = KIND_VOCAB.get(page_type or "")
+    if kind is not None and allowed_kind is not None and (kind not in allowed_kind):
+        flag(f"kind {kind!r} is not in the {page_type} vocabulary")
     priority = _str_field(meta.get("priority"))
     if priority is not None and priority not in PRIORITY_VOCAB:
-        flag(f"priority {priority!r} is not in the Metadata-Menu vocabulary")
+        flag(f"priority {priority!r} is not in the vault vocabulary")
     media_type = _str_field(meta.get("media_type"))
     if media_type is not None and media_type not in MEDIA_TYPE_VOCAB:
-        flag(f"media_type {media_type!r} is not in the Metadata-Menu vocabulary")
+        flag(f"media_type {media_type!r} is not in the vault vocabulary")
     return out
 
 
