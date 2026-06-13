@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>3. Slack free-text intent gate (route prose to the right engine) &#8212; thoth 0.9.1.dev13+g7072a6a13 documentation</title>
+    <title>14. Split action dashboards by personal, surface undated actions, resolve relative due dates &#8212; thoth 0.9.1.dev13+g7072a6a13 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=30646c52"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0003-slack-free-text-intent-gate';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0014-split-action-dashboards-and-resolve-relative-due-dates';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="4. Index all content in the embedding store, scope recall by tag" href="0004-index-all-content-with-tag-scoped-recall.html" />
-    <link rel="prev" title="2. Adopt python-copier-template for project structure" href="0002-switched-to-python-copier-template.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="13. Lean universal schema: view-critical facets are properties, not tags" href="0013-lean-universal-schema-properties-not-tags.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -426,7 +426,7 @@
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../decisions.html">Architectural Decision Records</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="0001-record-architecture-decisions.html">1. Record architecture decisions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">3. Slack free-text intent gate (route prose to the right engine)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
@@ -437,7 +437,7 @@
 <li class="toctree-l2"><a class="reference internal" href="0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0013-lean-universal-schema-properties-not-tags.html">13. Lean universal schema: view-critical facets are properties, not tags</a></li>
-<li class="toctree-l2"><a class="reference internal" href="0014-split-action-dashboards-and-resolve-relative-due-dates.html">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</a></li>
 </ul>
 </details></li>
 </ul>
@@ -486,7 +486,7 @@
     
     <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">3. Slack free-text intent gate (route prose to the right engine)</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</span></li>
   </ul>
 </nav>
 </div>
@@ -503,69 +503,102 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="slack-free-text-intent-gate-route-prose-to-the-right-engine">
-<h1>3. Slack free-text intent gate (route prose to the right engine)<a class="headerlink" href="#slack-free-text-intent-gate-route-prose-to-the-right-engine" title="Link to this heading">#</a></h1>
-<p>Date: 2026-05-31</p>
+  <section id="split-action-dashboards-by-personal-surface-undated-actions-resolve-relative-due-dates">
+<h1>14. Split action dashboards by personal, surface undated actions, resolve relative due dates<a class="headerlink" href="#split-action-dashboards-by-personal-surface-undated-actions-resolve-relative-due-dates" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-13</p>
 <section id="status">
 <h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
 <p>Accepted</p>
+<p>Refines the dashboard half of
+<a class="reference internal" href="0013-lean-universal-schema-properties-not-tags.html"><span class="std std-doc">ADR 0013</span></a>: the <strong>Work · Personal ·
+All view variants</strong> and the 5-section index it introduced are replaced by the two-base
+split and 6-section dashboard described here. The lean universal schema (properties not
+tags, bare priority labels, <code class="docutils literal notranslate"><span class="pre">prio_rank</span></code>) is unchanged.</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
-<p>The Slack surface (<code class="docutils literal notranslate"><span class="pre">thoth.slack_app.Handlers.handle_message</span></code>) routes a message with a
-deterministic <code class="docutils literal notranslate"><span class="pre">if/elif</span></code> ladder: a pending “save?” affirmative, a
-<code class="docutils literal notranslate"><span class="pre">capture:</span></code>/<code class="docutils literal notranslate"><span class="pre">note:</span></code>/<code class="docutils literal notranslate"><span class="pre">save:</span></code> prefix, a bare URL, a shared file — and historically
-<em>everything else</em> (bare free text) defaulted to a vault query.</p>
-<p>The consequence was a sharp UX edge: any free text that was not a URL/file/prefixed
-note was treated as a <em>query</em>. Typing “remind me to call the dentist tomorrow” as
-plain prose got <em>searched</em>, not <em>filed</em>; to capture a free thought you had to prefix it.</p>
-<p>Two options were considered:</p>
-<ul class="simple">
-<li><p><strong>Option A — fold a <code class="docutils literal notranslate"><span class="pre">capture</span></code> tool into the query path.</strong> Rejected: it would break the
-deliberate engine separation. Ingest does git commit/rebase/push, LLM classification,
-and validated vault writes; the query path is <strong>read-only</strong>. Giving the query model
-write access (or blending the two engines) widens the surface and breaks
-least-privilege (SPEC §3, §12).</p></li>
-<li><p><strong>Option B — an intent gate at the routing site.</strong> A cheap classifier that only
-<em>chooses</em> an engine, never blends them.</p></li>
-</ul>
-<p>This decision is <strong>Slack-only</strong>. MCP already exposes explicit tools (<code class="docutils literal notranslate"><span class="pre">pkm_ingest</span></code>,
-<code class="docutils literal notranslate"><span class="pre">pkm_search</span></code>, <code class="docutils literal notranslate"><span class="pre">pkm_todos</span></code>, …), so the calling agent does its own dispatch and needs no
-gate.</p>
+<p>Three problems surfaced in live use of the ADR 0013 dashboard:</p>
+<ol class="arabic simple">
+<li><p><strong>Too many overlapping views.</strong> <code class="docutils literal notranslate"><span class="pre">actions.base</span></code> carried ten views — Imminent / Open /
+Media each triplicated across Work · Personal · All via the embed’s view dropdown.
+The triplication overlapped confusingly and buried the one view a glance needed.</p></li>
+<li><p><strong>Personal todos were not surfaced.</strong> They were a dropdown variant of a
+work-centric base, never a destination of their own.</p></li>
+<li><p><strong>Undated actions vanished — the load-bearing bug.</strong> A Slack capture, <em>“urgent todo
+monday: investigate the HIGH field autosave failure…”</em>, was filed <code class="docutils literal notranslate"><span class="pre">priority:</span> <span class="pre">Urgent</span></code>
+with <strong>no <code class="docutils literal notranslate"><span class="pre">due_date</span></code></strong>. It fell out of every dated view and sat invisible in a
+collapsed Open list. Root cause was twofold: the curate model is <strong>never told what
+day it is</strong> (only <code class="docutils literal notranslate"><span class="pre">created</span></code>/<code class="docutils literal notranslate"><span class="pre">updated</span></code> are stamped in code, by <code class="docutils literal notranslate"><span class="pre">write_page</span></code>; <code class="docutils literal notranslate"><span class="pre">due_date</span></code>
+is the one date the model must supply), so it could not turn “monday” into a concrete
+date and safely omitted it; and no view explicitly surfaced open-but-undated work.</p></li>
+</ol>
+<p>The timezone driving every date computation was also hard-coded as <code class="docutils literal notranslate"><span class="pre">Europe/London</span></code> in a
+leaf module rather than being configurable.</p>
 </section>
 <section id="decision">
 <h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
-<p>Add a <code class="docutils literal notranslate"><span class="pre">thoth.intent.IntentClassifier</span></code> collaborator, injected onto <code class="docutils literal notranslate"><span class="pre">Handlers</span></code> alongside
-<code class="docutils literal notranslate"><span class="pre">ingestor</span></code> / <code class="docutils literal notranslate"><span class="pre">query_engine</span></code>. It is consulted <strong>only</strong> for bare free text
-that hits none of the deterministic short-circuits — those run first and unchanged, and
-the prefixes remain the explicit escape hatch when the model guesses wrong.</p>
+<ul>
+<li><p><strong>One base per item class; views differ only by date window.</strong> Six bases replace the
+old three:</p>
 <ul class="simple">
-<li><p>One cheap model call (a Haiku, <code class="docutils literal notranslate"><span class="pre">DEFAULT_INTENT_MODEL</span></code>, overridable without a redeploy
-via <code class="docutils literal notranslate"><span class="pre">THOTH_INTENT_MODEL</span></code>) returns <code class="docutils literal notranslate"><span class="pre">{intent:</span> <span class="pre">capture</span> <span class="pre">|</span> <span class="pre">query,</span> <span class="pre">confidence}</span></code>.</p></li>
-<li><p>The classifier is <strong>total</strong>: any model/network/parse failure returns the safe default
-(route to query) rather than raising.</p></li>
-<li><p><strong>Low confidence falls back to query.</strong> Searching a misfiled note is harmless; silently
-filing a real question as a note is the annoying failure, so the gate defaults to query
-whenever it is unsure (<code class="docutils literal notranslate"><span class="pre">IntentDecision.route</span></code> collapses a <code class="docutils literal notranslate"><span class="pre">low</span></code> verdict to <code class="docutils literal notranslate"><span class="pre">query</span></code>).</p></li>
-<li><p>A gate-routed <em>capture</em> confirmation carries a one-line recoverable hint
-(“filed as a note — send it again as a question if you meant to ask”).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">actions</span></code> — open <strong>work</strong> todos (<code class="docutils literal notranslate"><span class="pre">kind</span> <span class="pre">!=</span> <span class="pre">&quot;media&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">personal</span> <span class="pre">!=</span> <span class="pre">true</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">personal</span></code> — open <strong>personal</strong> todos (<code class="docutils literal notranslate"><span class="pre">personal</span> <span class="pre">==</span> <span class="pre">true</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">media</span></code> — the consume queue (<code class="docutils literal notranslate"><span class="pre">kind</span> <span class="pre">==</span> <span class="pre">&quot;media&quot;</span></code>, work <strong>and</strong> personal, with a
+<code class="docutils literal notranslate"><span class="pre">personal</span></code> column since the distinction is minor for leisure media).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">inbox</span></code> — unfiled captures (a single view).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">recent</span></code> — vault-wide activity by <code class="docutils literal notranslate"><span class="pre">file.mtime</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">reference</span></code> — the curated Notes / Entities / Memories layer (a link line).</p></li>
 </ul>
-<p>The gate only routes; the ingest and query engines are untouched, and the read-only query
-path never gains write access.</p>
+<p>The class filters (<code class="docutils literal notranslate"><span class="pre">kind</span></code>, <code class="docutils literal notranslate"><span class="pre">personal</span></code>, and open-only <code class="docutils literal notranslate"><span class="pre">status</span></code>) live in each base’s
+<strong>top-level filter</strong>, so the views genuinely differ by nothing but the date window:
+<code class="docutils literal notranslate"><span class="pre">actions</span></code> / <code class="docutils literal notranslate"><span class="pre">personal</span></code> / <code class="docutils literal notranslate"><span class="pre">media</span></code> each ship <code class="docutils literal notranslate"><span class="pre">7</span> <span class="pre">Days</span></code> / <code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">Days</span></code> / <code class="docutils literal notranslate"><span class="pre">All</span></code>, and <code class="docutils literal notranslate"><span class="pre">recent</span></code>
+ships <code class="docutils literal notranslate"><span class="pre">7</span> <span class="pre">Days</span></code> / <code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">Days</span></code> / <code class="docutils literal notranslate"><span class="pre">60</span> <span class="pre">Days</span></code>. The ten-view Work·Personal·All triplication
+and the cross-base filter overlap are gone.</p>
+</li>
+<li><p><strong>Bounded windows always include undated items, expired first.</strong> A <code class="docutils literal notranslate"><span class="pre">7</span> <span class="pre">Days</span></code> / <code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">Days</span></code> window matches <code class="docutils literal notranslate"><span class="pre">due_date</span> <span class="pre">&lt;=</span> <span class="pre">now()</span> <span class="pre">+</span> <span class="pre">N</span> <span class="pre">days</span></code> <strong>or</strong> <code class="docutils literal notranslate"><span class="pre">due_date.isEmpty()</span></code>, so an
+undated todo shows in every window (a standing nag to add a date). <code class="docutils literal notranslate"><span class="pre">isEmpty()</span></code> is
+load-bearing: a <em>missing</em> <code class="docutils literal notranslate"><span class="pre">due_date</span></code> (the common case — the key is absent, not blank)
+is <strong>not</strong> matched by <code class="docutils literal notranslate"><span class="pre">==</span> <span class="pre">&quot;&quot;</span></code>, which is exactly what hid undated todos from the
+bounded windows in the first live test. A <code class="docutils literal notranslate"><span class="pre">date_bucket</span></code> formula (<code class="docutils literal notranslate"><span class="pre">overdue</span> <span class="pre">=</span> <span class="pre">0</span></code>,
+<code class="docutils literal notranslate"><span class="pre">upcoming</span> <span class="pre">=</span> <span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">undated</span> <span class="pre">=</span> <span class="pre">2</span></code>, also keyed on <code class="docutils literal notranslate"><span class="pre">isEmpty()</span></code>) is the primary sort, then
+<code class="docutils literal notranslate"><span class="pre">due_date</span></code>, then <code class="docutils literal notranslate"><span class="pre">prio_rank</span></code> — so overdue actions lead, real upcoming deadlines
+follow (soonest first), and undated items trail as a priority-ordered backlog
+(urgent first). This fixes the lost-action bug: an <code class="docutils literal notranslate"><span class="pre">Urgent</span></code> capture with no
+<code class="docutils literal notranslate"><span class="pre">due_date</span></code> can no longer be invisible, while concrete near-term deadlines still
+outrank the undated tail. <code class="docutils literal notranslate"><span class="pre">All</span></code> carries no date filter (every open item of the
+class).</p></li>
+<li><p><strong>The curate prompt states today’s date and resolves relative deadlines.</strong> It now
+leads with <code class="docutils literal notranslate"><span class="pre">Today's</span> <span class="pre">date</span> <span class="pre">is</span> <span class="pre">&lt;YYYY-MM-DD&gt;</span> <span class="pre">(&lt;timezone&gt;)</span></code> and the file-plan contract
+instructs the model to resolve a relative/natural deadline (“monday”, “tomorrow”,
+“next week”) in the captured text into a concrete <code class="docutils literal notranslate"><span class="pre">due_date</span></code>, while never guessing a
+date when the text gives none. This is a prompt fix, not a date-parsing regex,
+consistent with the shape-via-prompt convention.</p></li>
+<li><p><strong>Timezone is configuration.</strong> <code class="docutils literal notranslate"><span class="pre">THOTH_TIMEZONE</span></code> (default <code class="docutils literal notranslate"><span class="pre">Europe/London</span></code>) resolves to
+a validated <code class="docutils literal notranslate"><span class="pre">ZoneInfo</span></code> on <code class="docutils literal notranslate"><span class="pre">Config</span></code>; a bogus name fails fast at startup. The curate
+date anchor reads it.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">index.md</span></code> is one callout per base</strong>, each embedding a default window (work and
+personal <code class="docutils literal notranslate"><span class="pre">7</span> <span class="pre">Days</span></code> expanded; media <code class="docutils literal notranslate"><span class="pre">All</span></code>, inbox, and recent collapsed). Each named
+view is the canonical default — the view dropdown restores its filters/sort/columns,
+and a hard reset is re-seeding the <code class="docutils literal notranslate"><span class="pre">.base</span></code> file (Obsidian Bases has no per-embed reset
+button to author).</p></li>
+</ul>
 </section>
 <section id="consequences">
 <h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>Plain prose like a reminder or a stray fact is now <em>filed</em> instead of <em>answered</em>,
-without requiring a <code class="docutils literal notranslate"><span class="pre">note:</span></code> prefix.</p></li>
-<li><p>One extra small model call is made <strong>per bare free-text message only</strong> — prefixed /
-URL / file messages skip the gate. It reuses the cached persona prefix, so the
-marginal cost is small.</p></li>
-<li><p>The classifier is an injectable seam with fakes, so routing is unit-tested with no
-live model or socket; the deterministic short-circuits keep their existing tests.</p></li>
-<li><p>A new failure mode (the model misclassifies) is bounded: the prefixes override it, the
-capture hint makes a misfile recoverable in one reply, and low confidence always
-defaults to the harmless query.</p></li>
+<li><p>Every open action lands in its class base and is visible in the <code class="docutils literal notranslate"><span class="pre">All</span></code> window (and in
+the bounded windows when due soon or undated), so a high-priority capture can no
+longer be invisible to the dashboard — even with no date.</p></li>
+<li><p>With the prompt fix, captures that <em>state</em> a deadline now usually arrive dated and
+land in the near windows directly; an undated item in a window is a deliberate “add a
+date” prompt rather than a leak.</p></li>
+<li><p>Media is a single queue spanning work and personal (its date windows mostly collapse,
+since media is rarely dated); the <code class="docutils literal notranslate"><span class="pre">personal</span></code> column keeps the distinction visible.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">recent</span></code>’s windows order by recency (<code class="docutils literal notranslate"><span class="pre">file.mtime</span></code> DESC), not the <code class="docutils literal notranslate"><span class="pre">date_bucket</span></code> rule —
+it has no <code class="docutils literal notranslate"><span class="pre">due_date</span></code>, so the expired/undated semantics do not apply there.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BASE_NAMES</span></code> becomes <code class="docutils literal notranslate"><span class="pre">actions,</span> <span class="pre">personal,</span> <span class="pre">media,</span> <span class="pre">inbox,</span> <span class="pre">recent,</span> <span class="pre">reference</span></code> (<code class="docutils literal notranslate"><span class="pre">triage</span></code>
+is split into <code class="docutils literal notranslate"><span class="pre">inbox</span></code> + <code class="docutils literal notranslate"><span class="pre">recent</span></code>); an existing vault is updated by copying the changed
+<code class="docutils literal notranslate"><span class="pre">.base</span></code> files and <code class="docutils literal notranslate"><span class="pre">index.md</span></code> in (seed never clobbers existing files).</p></li>
 </ul>
 </section>
 </section>
@@ -581,20 +614,20 @@ defaults to the harmless query.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="0002-switched-to-python-copier-template.html"
+       href="0013-lean-universal-schema-properties-not-tags.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">2. Adopt python-copier-template for project structure</p>
+        <p class="prev-next-title">13. Lean universal schema: view-critical facets are properties, not tags</p>
       </div>
     </a>
     <a class="right-next"
-       href="0004-index-all-content-with-tag-scoped-recall.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">4. Index all content in the embedding store, scope recall by tag</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -628,7 +661,7 @@ defaults to the harmless query.</p></li>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0003-slack-free-text-intent-gate.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0014-split-action-dashboards-and-resolve-relative-due-dates.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -643,7 +676,7 @@ defaults to the harmless query.</p></li>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/explanations/decisions/0003-slack-free-text-intent-gate.md.txt">
+    <a href="../../_sources/explanations/decisions/0014-split-action-dashboards-and-resolve-relative-due-dates.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
