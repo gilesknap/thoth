@@ -15,6 +15,7 @@ from thoth.config import (
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_ANALYSE_IMAGES,
     DEFAULT_OBSIDIAN_VAULT_NAME,
+    DEFAULT_TIMEZONE,
     Config,
     ConfigError,
     load_config,
@@ -139,6 +140,20 @@ def test_image_resize_threshold_rejects_non_integer() -> None:
     """A non-integer threshold is a clear ConfigError, not a silent default."""
     with pytest.raises(ConfigError, match="THOTH_IMAGE_RESIZE_THRESHOLD_BYTES"):
         load_config({"PKM_VAULT": "/x", "THOTH_IMAGE_RESIZE_THRESHOLD_BYTES": "loads"})
+
+
+def test_timezone_defaults_and_override() -> None:
+    """The timezone defaults to the owner's locale and an explicit IANA name wins."""
+    default = load_config({"PKM_VAULT": "/x"})
+    assert str(default.timezone) == DEFAULT_TIMEZONE == "Europe/London"
+    override = load_config({"PKM_VAULT": "/x", "THOTH_TIMEZONE": "America/New_York"})
+    assert str(override.timezone) == "America/New_York"
+
+
+def test_timezone_rejects_unknown_zone() -> None:
+    """A bogus THOTH_TIMEZONE is a clear ConfigError, not a silent fallback."""
+    with pytest.raises(ConfigError, match="THOTH_TIMEZONE"):
+        load_config({"PKM_VAULT": "/x", "THOTH_TIMEZONE": "Mars/Olympus_Mons"})
 
 
 def test_daily_llm_budget_rejects_non_integer() -> None:

@@ -18,6 +18,7 @@ import subprocess
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
@@ -575,12 +576,14 @@ def _build_ingestor(
     markers: MarkerStore | None = None,
     guard: Any = None,
     analyser: Any = None,
+    today: date | None = None,
 ) -> Ingestor:
     """Wire an :class:`Ingestor` with a real LLM (fake client) + the given fakes.
 
     ``analyser`` defaults to a :class:`FakeAnalyser` returning an empty analysis, so a
     binary capture's analyse pass (issue #42) makes no scripted-LLM call and leaves
-    routing/body unchanged unless a test supplies a richer fake.
+    routing/body unchanged unless a test supplies a richer fake. ``today`` pins the
+    date the curate prompt anchors relative-date resolution to (else the live date).
     """
     llm = LLM(harness.config, client=client, guard=guard)
     return Ingestor(
@@ -592,6 +595,7 @@ def _build_ingestor(
         harness.git,
         markers=markers,
         analyser=analyser if analyser is not None else FakeAnalyser(),  # type: ignore[arg-type]  # structural fake
+        today=today,
     )
 
 
@@ -3084,6 +3088,32 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         "slack",
     ):
         assert token in prompt, f"curate prompt missing {token!r}"
+
+
+def test_curate_prompt_states_today_for_relative_due_dates(
+    harness: IngestHarness,
+) -> None:
+    """The curate prompt states today's date and tells the model to resolve a relative
+    deadline ("monday") into a concrete due_date.
+
+    The model is never otherwise told what day it is, so an "urgent todo monday" capture
+    was filed with no due_date and fell out of every dated dashboard view. The date is
+    anchored to the configured timezone (``THOTH_TIMEZONE``), pinned here for the test.
+    """
+    ingestor = _build_ingestor(
+        harness,
+        client=_ScriptedClient("{}"),
+        extractor=FakeExtractor(),
+        hindsight=FakeHindsight(),
+        today=date(2026, 6, 13),
+    )
+    cls = Classification(page_type="action", slug="x", title="T")
+    raw = RawCaptureResult(raw_path=None, disposition="none")
+    prompt = ingestor._curate_prompt(Capture(text="urgent todo monday"), cls, raw, [])
+    assert "2026-06-13" in prompt
+    lowered = prompt.lower()
+    assert "relative" in lowered
+    assert "monday" in lowered
 
 
 def test_curate_prompt_forbids_empty_scaffold_sections(

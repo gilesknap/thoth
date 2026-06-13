@@ -560,6 +560,8 @@ class _CuratePass(_IngestorBase):
             "Given the SCHEMA (in the system prompt) and the captured item below, file "
             "it into the vault by CALLING the submit_file_plan tool with the file "
             "plan.\n\n"
+            f"Today's date is {self._today_iso()} (Europe/London) -- use it to resolve "
+            "any relative deadline in the captured text into a concrete due_date.\n\n"
             f"{file_plan_contract_text()}\n\n"
             f"Classification: type={cls.page_type} slug={cls.slug} title={cls.title}\n"
             f"Raw source page: {raw_block}\n"

@@ -86,6 +86,12 @@ def file_plan_contract_text() -> str:
         f'Action pages additionally require: "kind": one of [{kinds}] and "status": '
         f"one of [{statuses}] (use todo for new items); optionally "
         f'"due_date": "YYYY-MM-DD" and "priority": one of [{priorities}].\n'
+        "When the captured text states a deadline in RELATIVE or natural language "
+        '("monday", "tomorrow", "next week", "end of the month", "in 3 days"), '
+        'resolve it to a concrete "due_date" (YYYY-MM-DD) relative to TODAY\'S DATE '
+        "given in the prompt -- a bare weekday means its NEXT upcoming occurrence. "
+        "Do not leave such a deadline unset, and never guess a date when the text "
+        "gives no deadline (omit due_date instead).\n"
         f'When kind is media also set "media_type": one of [{media_types}] and "url" '
         "when known.\n"
         'Memory pages set "memory_date": "YYYY-MM-DD" when the memory happened '
