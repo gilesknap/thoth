@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>5. Collapse the knowledge / life-admin split into flat equal folders &#8212; thoth 0.9.1.dev22+g7820c0e1b documentation</title>
+    <title>15. Media is a type, dashboards filter on type, folders go loose &#8212; thoth 0.9.1.dev22+g7820c0e1b documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=30646c52"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0005-collapse-knowledge-life-admin-into-flat-folders';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0015-media-as-type-loose-folders-type-driven-dashboards';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="6. Transient base64 to the vision/document API for analysis" href="0006-transient-base64-to-vision-for-analysis.html" />
-    <link rel="prev" title="4. Index all content in the embedding store, scope recall by tag" href="0004-index-all-content-with-tag-scoped-recall.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="14. Split action dashboards by personal, surface undated actions, resolve relative due dates" href="0014-split-action-dashboards-and-resolve-relative-due-dates.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -428,7 +428,7 @@
 <li class="toctree-l2"><a class="reference internal" href="0002-switched-to-python-copier-template.html">2. Adopt python-copier-template for project structure</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0003-slack-free-text-intent-gate.html">3. Slack free-text intent gate (route prose to the right engine)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0004-index-all-content-with-tag-scoped-recall.html">4. Index all content in the embedding store, scope recall by tag</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html">5. Collapse the knowledge / life-admin split into flat equal folders</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0006-transient-base64-to-vision-for-analysis.html">6. Transient base64 to the vision/document API for analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
@@ -438,7 +438,7 @@
 <li class="toctree-l2"><a class="reference internal" href="0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0013-lean-universal-schema-properties-not-tags.html">13. Lean universal schema: view-critical facets are properties, not tags</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0014-split-action-dashboards-and-resolve-relative-due-dates.html">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</a></li>
-<li class="toctree-l2"><a class="reference internal" href="0015-media-as-type-loose-folders-type-driven-dashboards.html">15. Media is a type, dashboards filter on type, folders go loose</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">15. Media is a type, dashboards filter on type, folders go loose</a></li>
 </ul>
 </details></li>
 </ul>
@@ -487,7 +487,7 @@
     
     <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">5. Collapse the knowledge / life-admin split into flat equal folders</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">15. Media is a type, dashboards filter on type, folders go loose</span></li>
   </ul>
 </nav>
 </div>
@@ -504,129 +504,87 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="collapse-the-knowledge-life-admin-split-into-flat-equal-folders">
-<h1>5. Collapse the knowledge / life-admin split into flat equal folders<a class="headerlink" href="#collapse-the-knowledge-life-admin-split-into-flat-equal-folders" title="Link to this heading">#</a></h1>
-<p>Date: 2026-05-31</p>
+  <section id="media-is-a-type-dashboards-filter-on-type-folders-go-loose">
+<h1>15. Media is a type, dashboards filter on type, folders go loose<a class="headerlink" href="#media-is-a-type-dashboards-filter-on-type-folders-go-loose" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-13</p>
 <section id="status">
 <h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
 <p>Accepted</p>
-<p>Partly superseded by
-<a class="reference internal" href="0015-media-as-type-loose-folders-type-driven-dashboards.html"><span class="std std-doc">ADR 0015</span></a>: the strict
-folder-by-type contract below is loosened (the folder becomes a browsing convenience; the
-dashboards filter on the <code class="docutils literal notranslate"><span class="pre">type</span></code> property), and <code class="docutils literal notranslate"><span class="pre">media</span></code> is split back out of <code class="docutils literal notranslate"><span class="pre">actions/</span></code>
-into its own <code class="docutils literal notranslate"><span class="pre">type</span></code> and <code class="docutils literal notranslate"><span class="pre">media/</span></code> folder.</p>
+<p>Refines <a class="reference internal" href="0013-lean-universal-schema-properties-not-tags.html"><span class="std std-doc">ADR 0013</span></a> (retires the
+<code class="docutils literal notranslate"><span class="pre">kind</span></code> facet it introduced) and <a class="reference internal" href="0014-split-action-dashboards-and-resolve-relative-due-dates.html"><span class="std std-doc">ADR 0014</span></a>
+(its class bases now filter on the <code class="docutils literal notranslate"><span class="pre">type</span></code> property, not the folder). Loosens the
+strict folder-by-type contract of
+<a class="reference internal" href="0005-collapse-knowledge-life-admin-into-flat-folders.html"><span class="std std-doc">ADR 0005</span></a>: the folder is now a
+browsing convenience, not the thing the dashboards read.</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
-<p>The vault has always partitioned every non-<code class="docutils literal notranslate"><span class="pre">raw</span></code> page into two <em>families</em> by its
-frontmatter <code class="docutils literal notranslate"><span class="pre">type</span></code> (<code class="docutils literal notranslate"><span class="pre">thoth.vault</span></code>):</p>
-<ul class="simple">
-<li><p><strong>Knowledge</strong> (<code class="docutils literal notranslate"><span class="pre">KNOWLEDGE_TYPES</span></code> = <code class="docutils literal notranslate"><span class="pre">entity,</span> <span class="pre">concept,</span> <span class="pre">comparison,</span> <span class="pre">query,</span> <span class="pre">summary</span></code>) →
-<code class="docutils literal notranslate"><span class="pre">entities/</span> <span class="pre">concepts/</span> <span class="pre">comparisons/</span> <span class="pre">queries/</span></code></p></li>
-<li><p><strong>Life-admin</strong> (<code class="docutils literal notranslate"><span class="pre">LIFE_ADMIN_TYPES</span></code> = <code class="docutils literal notranslate"><span class="pre">action,</span> <span class="pre">media,</span> <span class="pre">memory,</span> <span class="pre">inbox</span></code>) →
-<code class="docutils literal notranslate"><span class="pre">actions/</span> <span class="pre">media/</span> <span class="pre">memories/</span> <span class="pre">people/</span> <span class="pre">inbox/</span></code></p></li>
-</ul>
-<p>That single partition fans out across the codebase: <code class="docutils literal notranslate"><span class="pre">ingest.py</span></code> hangs a <code class="docutils literal notranslate"><span class="pre">life_admin</span></code>
-dict on every <code class="docutils literal notranslate"><span class="pre">Classification</span></code>; the navigation pass gives knowledge pages an <code class="docutils literal notranslate"><span class="pre">index.md</span></code>
-catalog entry but life-admin pages none; <code class="docutils literal notranslate"><span class="pre">lint.py</span></code> and <code class="docutils literal notranslate"><span class="pre">summary.py</span></code> walk <code class="docutils literal notranslate"><span class="pre">KNOWLEDGE_DIRS</span></code>
-and <code class="docutils literal notranslate"><span class="pre">LIFE_ADMIN_DIRS</span></code> as two separate sweeps; recall is scoped by the family tag.</p>
-<p>The split was doing <strong>three</strong> jobs. Two are now obsolete or mis-named:</p>
+<p>ADR 0013 made a media item an <code class="docutils literal notranslate"><span class="pre">action</span></code> carrying <code class="docutils literal notranslate"><span class="pre">kind:</span> <span class="pre">media</span></code>, and ADR 0014 built the
+six class dashboards by filtering each <code class="docutils literal notranslate"><span class="pre">.base</span></code> on the <strong>folder</strong> plus that <code class="docutils literal notranslate"><span class="pre">kind</span></code>
+(<code class="docutils literal notranslate"><span class="pre">file.inFolder(&quot;actions&quot;)</span></code> + <code class="docutils literal notranslate"><span class="pre">kind</span> <span class="pre">!=</span> <span class="pre">&quot;media&quot;</span></code> for todos, <code class="docutils literal notranslate"><span class="pre">kind</span> <span class="pre">==</span> <span class="pre">&quot;media&quot;</span></code> for the
+queue). Two frictions surfaced in daily use:</p>
 <ol class="arabic simple">
-<li><p><strong>Different indexing — dead.</strong> ADR-0004 made the reindex embed <em>all</em> content and
-scope recall by tag at query time. The “knowledge gets a vector, life-admin doesn’t”
-rationale that originally justified the families is gone.</p></li>
-<li><p><strong>Recall precision — alive, but not a family concern.</strong> Keeping “what do I know about
-X?” from surfacing “TODO: read the X paper” is real, but ADR-0004 already handles it
-with a <em>per-query tag filter</em>. It does not need a two-tribe god-split in <code class="docutils literal notranslate"><span class="pre">vault.py</span></code>.</p></li>
-<li><p><strong>Actionable lifecycle — alive, and the only real distinction.</strong> Actions and the
-media queue carry <code class="docutils literal notranslate"><span class="pre">status</span></code>/<code class="docutils literal notranslate"><span class="pre">due</span></code>, so they can be open/overdue/done and want a
-date-sorted Bases dashboard plus overdue lint. A concept cannot be overdue.</p></li>
+<li><p><strong>Recategorising an item took two coordinated edits.</strong> The <code class="docutils literal notranslate"><span class="pre">type</span></code>/<code class="docutils literal notranslate"><span class="pre">kind</span></code> properties
+and the folder a file lives in encoded the <em>same</em> fact twice. Changing a page’s
+property (the natural Obsidian gesture — edit the frontmatter) did <strong>not</strong> move it
+between dashboards, because the bases keyed off <code class="docutils literal notranslate"><span class="pre">file.inFolder(...)</span></code>. To actually move
+an item you had to edit the property <em>and</em> drag the file. The SPEC’s own framing (ADR
+0005: “actionable is a property a page <em>has</em>, read straight off the frontmatter, not a
+tribe it must be filed into”) had drifted from the implementation.</p></li>
+<li><p><strong>Moving a todo to the media queue was a two-property change.</strong> A task becoming a
+to-consume item meant editing <code class="docutils literal notranslate"><span class="pre">kind:</span> <span class="pre">task</span></code> → <code class="docutils literal notranslate"><span class="pre">kind:</span> <span class="pre">media</span></code> while leaving <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">action</span></code> — two facets describing one move, with <code class="docutils literal notranslate"><span class="pre">kind</span></code> existing only to split one
+folder three ways (<code class="docutils literal notranslate"><span class="pre">task</span></code>/<code class="docutils literal notranslate"><span class="pre">media</span></code>/<code class="docutils literal notranslate"><span class="pre">errand</span></code>), where <code class="docutils literal notranslate"><span class="pre">errand</span></code> and <code class="docutils literal notranslate"><span class="pre">task</span></code> were never even
+distinguished by a dashboard.</p></li>
 </ol>
-<p>So the axis that actually earns its keep is <strong>reference vs actionable</strong>, <em>not</em> knowledge
-vs personal information — and “actionable” is a property a page <em>has</em> (it carries
-<code class="docutils literal notranslate"><span class="pre">status</span></code>/<code class="docutils literal notranslate"><span class="pre">due</span></code>), readable straight off the frontmatter, not a tribe it must be filed
-into. The two-family framing also mis-shelves content: <code class="docutils literal notranslate"><span class="pre">people/</span></code> pages are already
-<code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">entity</span></code> (knowledge wearing a separate folder), and <code class="docutils literal notranslate"><span class="pre">memory</span></code> pages are durable,
-link-worthy, lifecycle-free <em>personal reference knowledge</em> that behaves like a note.
-Capture is, in any case, already type-free for the user — the Haiku intent gate and the
-curate classifier pick the type; the user never names a family. The split is internal
-complexity the author was reading in the source, not a decision the system imposes.</p>
+<p>The redundancy was the root cause: folder, <code class="docutils literal notranslate"><span class="pre">type</span></code>, and <code class="docutils literal notranslate"><span class="pre">kind</span></code> carried overlapping
+information, so every recategorisation had to keep all three in sync by hand.</p>
 </section>
 <section id="decision">
 <h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
-<p><strong>Delete the knowledge/life-admin families. Reduce the eight content folders to four
-flat, equal folders. Derive the one surviving behaviour (actionable lifecycle) from page
-frontmatter, not from a type-family.</strong></p>
-<p>Content folders collapse 8 → 4:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Folder</p></th>
-<th class="head"><p>Lifecycle?</p></th>
-<th class="head"><p>Holds</p></th>
-<th class="head"><p>Absorbs</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">entities/</span></code></p></td>
-<td><p>no (reference)</p></td>
-<td><p>nouns: people, orgs, products, models, devices</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">people/</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">notes/</span></code></p></td>
-<td><p>no (reference)</p></td>
-<td><p>everything written, differentiated by a <code class="docutils literal notranslate"><span class="pre">tags:</span></code> value</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">concept</span></code>, <code class="docutils literal notranslate"><span class="pre">comparison</span></code>, <code class="docutils literal notranslate"><span class="pre">query</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">memories/</span></code></p></td>
-<td><p>no (reference)</p></td>
-<td><p>personal memories/milestones, kept as its own folder for Obsidian browsing</p></td>
-<td><p>—</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">actions/</span></code></p></td>
-<td><p><strong>yes</strong> (<code class="docutils literal notranslate"><span class="pre">status</span></code>/<code class="docutils literal notranslate"><span class="pre">due</span></code>)</p></td>
-<td><p>todos and the to-consume queue</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">media/</span></code> (a media item is an <code class="docutils literal notranslate"><span class="pre">action</span></code> tagged <code class="docutils literal notranslate"><span class="pre">media</span></code>)</p></td>
-</tr>
-</tbody>
-</table>
-</div>
+<p><strong>Make the frontmatter <code class="docutils literal notranslate"><span class="pre">type</span></code> the single source of truth for what a page is and which
+dashboard it appears in. Promote media to its own <code class="docutils literal notranslate"><span class="pre">type</span></code>, retire <code class="docutils literal notranslate"><span class="pre">kind</span></code>, and let the
+folder go loose.</strong></p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">KNOWLEDGE_TYPES</span></code> / <code class="docutils literal notranslate"><span class="pre">LIFE_ADMIN_TYPES</span></code> (and <code class="docutils literal notranslate"><span class="pre">KNOWLEDGE_DIRS</span></code> / <code class="docutils literal notranslate"><span class="pre">LIFE_ADMIN_DIRS</span></code>) are
-removed. The only behavioural fork left is: <em>does the page carry <code class="docutils literal notranslate"><span class="pre">status</span></code>/<code class="docutils literal notranslate"><span class="pre">due</span></code>?</em> → it
-appears in the actionable dashboards and gets overdue checks.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">summary</span></code> stops being a content type; it survives only as the label on the spine
-<code class="docutils literal notranslate"><span class="pre">index.md</span></code> Home page (could be renamed <code class="docutils literal notranslate"><span class="pre">home</span></code>). Nothing the user captures is a
-<code class="docutils literal notranslate"><span class="pre">summary</span></code>.</p></li>
-<li><p>Machinery is unchanged: <code class="docutils literal notranslate"><span class="pre">inbox/</span></code>, <code class="docutils literal notranslate"><span class="pre">raw/{articles,papers,transcripts,assets}/</span></code>,
-<code class="docutils literal notranslate"><span class="pre">_bases/</span> <span class="pre">_meta/</span> <span class="pre">_archive/</span> <span class="pre">.obsidian/</span></code>, and the <code class="docutils literal notranslate"><span class="pre">index.md</span></code>/<code class="docutils literal notranslate"><span class="pre">SCHEMA.md</span></code>/<code class="docutils literal notranslate"><span class="pre">log.md</span></code> spine.</p></li>
-<li><p>Recall scoping (ADR-0004) continues by tag; with families gone, tags carry the
-reference/actionable intent directly (e.g. exclude <code class="docutils literal notranslate"><span class="pre">action</span></code> from knowledge Q&amp;A).</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">media</span></code> becomes a content <code class="docutils literal notranslate"><span class="pre">type</span></code>.</strong> <code class="docutils literal notranslate"><span class="pre">TYPE_ENUMERATION</span></code> is now <code class="docutils literal notranslate"><span class="pre">entity,</span> <span class="pre">note,</span> <span class="pre">memory,</span> <span class="pre">action,</span> <span class="pre">media</span></code> (plus the <code class="docutils literal notranslate"><span class="pre">inbox</span></code> machinery type). A to-consume item that was <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">action</span></code> + <code class="docutils literal notranslate"><span class="pre">kind:</span> <span class="pre">media</span></code> is simply <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">media</span></code>. It keeps the shared <code class="docutils literal notranslate"><span class="pre">status</span></code>
+lifecycle and its <code class="docutils literal notranslate"><span class="pre">media_type</span></code>/<code class="docutils literal notranslate"><span class="pre">url</span></code> fields.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">kind</span></code> is deleted.</strong> <code class="docutils literal notranslate"><span class="pre">ACTION_KIND_VOCAB</span></code> and every consumer (the curate contract, the
+file-plan validator, lint check 4, the summary scans, the <code class="docutils literal notranslate"><span class="pre">.base</span></code> columns) drop it.
+<code class="docutils literal notranslate"><span class="pre">errand</span></code> is retired with it — an errand is just a <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">action</span></code> (no dashboard ever
+separated errands from tasks, so nothing is lost).</p></li>
+<li><p><strong>The dashboards filter on <code class="docutils literal notranslate"><span class="pre">type</span></code>, not the folder.</strong> <code class="docutils literal notranslate"><span class="pre">actions.base</span></code> is <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">&quot;action&quot;</span></code> + <code class="docutils literal notranslate"><span class="pre">personal</span> <span class="pre">!=</span> <span class="pre">true</span></code>; <code class="docutils literal notranslate"><span class="pre">personal.base</span></code> is <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">&quot;action&quot;</span></code> + <code class="docutils literal notranslate"><span class="pre">personal</span> <span class="pre">==</span> <span class="pre">true</span></code>; <code class="docutils literal notranslate"><span class="pre">media.base</span></code> is <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">&quot;media&quot;</span></code>; <code class="docutils literal notranslate"><span class="pre">reference.base</span></code>’s three views are <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">&quot;note&quot;/&quot;entity&quot;/&quot;memory&quot;</span></code>. Recategorising is now a <strong>single <code class="docutils literal notranslate"><span class="pre">type</span></code> edit</strong> and the
+dashboards re-sort instantly, no file move required.</p></li>
+<li><p><strong>The folder becomes a loose browsing convenience.</strong> Thoth still <em>writes</em> each page to
+its canonical folder (so a fresh capture lands tidily and the file tree stays
+navigable), but nothing behavioural depends on where a file sits — a manual move never
+hides a page from its dashboard. <code class="docutils literal notranslate"><span class="pre">inbox/</span></code> and <code class="docutils literal notranslate"><span class="pre">raw/</span></code> stay folder-strict: they are
+pipeline machinery, not content classes.</p></li>
+<li><p><strong>Media gets its own <code class="docutils literal notranslate"><span class="pre">media/</span></code> folder again.</strong> ADR 0005 folded the old <code class="docutils literal notranslate"><span class="pre">media/</span></code> into
+<code class="docutils literal notranslate"><span class="pre">actions/</span></code>; with media now a <code class="docutils literal notranslate"><span class="pre">type</span></code>, it gets a matching folder (one folder loosely per
+class). <code class="docutils literal notranslate"><span class="pre">FOLDER_TYPE_CONTRACT</span></code> gains <code class="docutils literal notranslate"><span class="pre">media</span> <span class="pre">-&gt;</span> <span class="pre">media</span></code>, <code class="docutils literal notranslate"><span class="pre">ACTIONABLE_DIRS</span></code> becomes
+<code class="docutils literal notranslate"><span class="pre">(actions,</span> <span class="pre">media)</span></code>, and the seed creates an empty <code class="docutils literal notranslate"><span class="pre">media/</span></code>.</p></li>
 </ul>
 </section>
 <section id="consequences">
 <h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>The mental model matches the implementation: throw anything in, it becomes an Obsidian
-page with frontmatter + links + semantic index, lands in one of four equal folders the
-classifier picks, and is found again without thinking about which “kind” it was.</p></li>
-<li><p>The single <code class="docutils literal notranslate"><span class="pre">vault.py</span></code> partition and its fan-out through <code class="docutils literal notranslate"><span class="pre">ingest.py</span></code>, <code class="docutils literal notranslate"><span class="pre">lint.py</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">summary.py</span></code> collapse to a frontmatter-property check, removing a layer of branching
-from the spine.</p></li>
-<li><p>Todos and the consume-queue keep their overdue nudges: the Bases dashboards and lint
-key off <code class="docutils literal notranslate"><span class="pre">due</span></code>/<code class="docutils literal notranslate"><span class="pre">status</span></code>, which is unchanged.</p></li>
-<li><p>This is a breaking change to the folder/type contract: <code class="docutils literal notranslate"><span class="pre">FOLDER_TYPE_CONTRACT</span></code>,
-<code class="docutils literal notranslate"><span class="pre">TYPE_ENUMERATION</span></code>, the curate file-plan validator (<code class="docutils literal notranslate"><span class="pre">thoth.llm</span></code>), the classify prompt,
-the Bases definitions, and the seed templates all change. Existing vault content under
-<code class="docutils literal notranslate"><span class="pre">people/</span></code>, <code class="docutils literal notranslate"><span class="pre">concepts/</span></code>, <code class="docutils literal notranslate"><span class="pre">comparisons/</span></code>, <code class="docutils literal notranslate"><span class="pre">queries/</span></code>, <code class="docutils literal notranslate"><span class="pre">media/</span></code> needs a one-time
-migration (move files, rewrite <code class="docutils literal notranslate"><span class="pre">type</span></code>, add <code class="docutils literal notranslate"><span class="pre">tags</span></code>), and <code class="docutils literal notranslate"><span class="pre">index.md</span></code> catalog sections
-are regenerated.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">media</span></code> loses its dedicated folder; existing <code class="docutils literal notranslate"><span class="pre">media</span></code>-backlog logic in <code class="docutils literal notranslate"><span class="pre">summary.py</span></code>
-re-targets <code class="docutils literal notranslate"><span class="pre">actions/</span></code> filtered by the <code class="docutils literal notranslate"><span class="pre">media</span></code> tag / <code class="docutils literal notranslate"><span class="pre">to_consume</span></code> status.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">raw/</span></code> is untouched, consistent with ADR-0004.</p></li>
-<li><p>The per-page catalog entry this ADR gave the reference types was later superseded by
-ADR-0008: the one-line gloss moved from the agent-maintained <code class="docutils literal notranslate"><span class="pre">index.md</span></code> catalog onto
-the page itself as a <code class="docutils literal notranslate"><span class="pre">summary:</span></code> frontmatter field (canonical + rebuildable), and
-<code class="docutils literal notranslate"><span class="pre">index.md</span></code> became a static set of Bases dashboards.</p></li>
+<li><p>The mental model and the implementation re-converge on ADR 0005’s stated intent: a
+page’s behaviour is read off its frontmatter, and the folder is just where it happens
+to sit. Moving an item between any two dashboards is one property edit.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kind</span></code> leaves the whole pipeline: the classify prompt offers <code class="docutils literal notranslate"><span class="pre">media</span></code> as a type, the
+curate contract and <code class="docutils literal notranslate"><span class="pre">validate_file_plan</span></code> require <code class="docutils literal notranslate"><span class="pre">status</span></code> (not <code class="docutils literal notranslate"><span class="pre">kind</span></code>) on <code class="docutils literal notranslate"><span class="pre">action</span></code> and
+<code class="docutils literal notranslate"><span class="pre">media</span></code> pages, lint check 4 enforces the <code class="docutils literal notranslate"><span class="pre">media</span></code> type’s <code class="docutils literal notranslate"><span class="pre">status</span></code>, and the daily-digest
+scans split todos (<code class="docutils literal notranslate"><span class="pre">actions/</span></code>, <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">!=</span> <span class="pre">media</span></code>) from the media queue (<code class="docutils literal notranslate"><span class="pre">media/</span></code>, <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">media</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">media</span></code> joins <code class="docutils literal notranslate"><span class="pre">INDEXED_DIRS</span></code> (it was already indexed inside <code class="docutils literal notranslate"><span class="pre">actions/</span></code>); reference
+recall still scopes to <code class="docutils literal notranslate"><span class="pre">REFERENCE_TYPES</span></code> (<code class="docutils literal notranslate"><span class="pre">entity</span></code>/<code class="docutils literal notranslate"><span class="pre">note</span></code>/<code class="docutils literal notranslate"><span class="pre">memory</span></code>), which excludes both
+<code class="docutils literal notranslate"><span class="pre">action</span></code> and <code class="docutils literal notranslate"><span class="pre">media</span></code>.</p></li>
+<li><p>This is a breaking change to the frontmatter/dashboard contract: the live vault needs a
+one-off, never-committed migration — strip <code class="docutils literal notranslate"><span class="pre">kind</span></code>; rewrite <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">action</span></code> + <code class="docutils literal notranslate"><span class="pre">kind:</span> <span class="pre">media</span></code> to <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">media</span></code> and move those files to <code class="docutils literal notranslate"><span class="pre">media/</span></code>; drop the <code class="docutils literal notranslate"><span class="pre">kind</span></code> column from
+the bases; re-seed the six <code class="docutils literal notranslate"><span class="pre">.base</span></code> files, <code class="docutils literal notranslate"><span class="pre">SCHEMA.md</span></code>, and <code class="docutils literal notranslate"><span class="pre">index.md</span></code>. Verified with
+<code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">lint</span></code> against a clone before pushing.</p></li>
+<li><p>The cost the redundancy was buying — a file’s folder always matching its type — is now
+only <em>eventually</em> true (thoth files canonically; a human may move a file and the
+dashboards still work). That is the deliberate trade: type is authoritative, folder is
+cosmetic.</p></li>
 </ul>
 </section>
 </section>
@@ -642,20 +600,20 @@ the page itself as a <code class="docutils literal notranslate"><span class="pre
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="0004-index-all-content-with-tag-scoped-recall.html"
+       href="0014-split-action-dashboards-and-resolve-relative-due-dates.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">4. Index all content in the embedding store, scope recall by tag</p>
+        <p class="prev-next-title">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</p>
       </div>
     </a>
     <a class="right-next"
-       href="0006-transient-base64-to-vision-for-analysis.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">6. Transient base64 to the vision/document API for analysis</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -689,7 +647,7 @@ the page itself as a <code class="docutils literal notranslate"><span class="pre
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0005-collapse-knowledge-life-admin-into-flat-folders.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0015-media-as-type-loose-folders-type-driven-dashboards.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -704,7 +662,7 @@ the page itself as a <code class="docutils literal notranslate"><span class="pre
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/explanations/decisions/0005-collapse-knowledge-life-admin-into-flat-folders.md.txt">
+    <a href="../../_sources/explanations/decisions/0015-media-as-type-loose-folders-type-driven-dashboards.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

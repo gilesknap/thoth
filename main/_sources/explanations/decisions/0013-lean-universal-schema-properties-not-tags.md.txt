@@ -15,6 +15,12 @@ index) is refined by
 [ADR 0014](0014-split-action-dashboards-and-resolve-relative-due-dates.md); the schema
 itself is unchanged.
 
+The `kind: task|media|errand` facet introduced below is **retired** by
+[ADR 0015](0015-media-as-type-loose-folders-type-driven-dashboards.md): `media` becomes
+its own `type`, `errand` folds into `action`, and the dashboards filter on `type` instead
+of folder + `kind`. The rest of the lean schema (properties not tags, the single `status`
+lifecycle, bare priority labels) stands.
+
 ## Context
 
 The index page's Bases dashboards were broken in two independent ways, confirmed

@@ -12,6 +12,12 @@ All view variants** and the 5-section index it introduced are replaced by the tw
 split and 6-section dashboard described here. The lean universal schema (properties not
 tags, bare priority labels, `prio_rank`) is unchanged.
 
+Refined by
+[ADR 0015](0015-media-as-type-loose-folders-type-driven-dashboards.md): the six bases
+below now filter on the `type` property rather than `file.inFolder(...)` + `kind` (with
+`media` promoted to its own `type`). The base set, views, and date-window logic are
+otherwise as described here.
+
 ## Context
 
 Three problems surfaced in live use of the ADR 0013 dashboard:
