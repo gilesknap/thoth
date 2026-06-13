@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Deploy the thoth appliance &#8212; thoth 0.9.1.dev15+gf3f410dac documentation</title>
+    <title>Deploy the thoth appliance &#8212; thoth 0.9.1.dev17+ga8230b060 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=7373db27"></script>
+    <script src="../_static/documentation_options.js?v=48f015fd"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -756,6 +756,15 @@ copy of both in your password manager — that is the <em>only</em> backup of yo
 cp<span class="w"> </span>/opt/thoth/deploy/thoth-slack.service<span class="w">     </span>/etc/systemd/system/
 systemctl<span class="w"> </span>daemon-reload
 
+<span class="c1"># REQUIRED: let pkm&#39;s IPC survive logout. Hindsight&#39;s embedded Postgres runs as</span>
+<span class="c1"># pkm, and systemd&#39;s RemoveIPC=yes (the default) deletes ALL IPC owned by a user</span>
+<span class="c1"># the moment their last login session ends — including Postgres&#39;s /dev/shm</span>
+<span class="c1"># shared-memory segment, out from under the still-running postmaster. Every new DB</span>
+<span class="c1"># connection then fails (`could not open shared memory segment &quot;/PostgreSQL.NNNN&quot;:</span>
+<span class="c1"># No such file or directory`) and Slack ingests fail at the indexing phase. A</span>
+<span class="c1"># lingering user is exempt from RemoveIPC, so enable it before starting the unit:</span>
+loginctl<span class="w"> </span>enable-linger<span class="w"> </span>pkm
+
 <span class="c1"># Index first (the Slack daemon orders after it and only TALKS to it).</span>
 systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>thoth-hindsight.service
 systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>thoth-slack.service
@@ -766,6 +775,17 @@ systemctl<span class="w"> </span>status<span class="w"> </span>thoth-hindsight.s
 <p>The units are pre-hardened (<code class="docutils literal notranslate"><span class="pre">ProtectSystem=strict</span></code>, <code class="docutils literal notranslate"><span class="pre">ProtectHome=read-only</span></code>, <code class="docutils literal notranslate"><span class="pre">PrivateTmp</span></code>,
 a narrow <code class="docutils literal notranslate"><span class="pre">ReadWritePaths</span></code>) and run as <code class="docutils literal notranslate"><span class="pre">pkm</span></code>. They read secrets only from
 <code class="docutils literal notranslate"><span class="pre">/home/pkm/.thoth/.env</span></code>; nothing sensitive is in the tracked unit files.</p>
+<div class="admonition important">
+<p class="admonition-title">Important</p>
+<p><code class="docutils literal notranslate"><span class="pre">loginctl</span> <span class="pre">enable-linger</span> <span class="pre">pkm</span></code> above is not optional — without it the embedded
+Postgres keeps running but stops accepting new connections as soon as anyone who
+<code class="docutils literal notranslate"><span class="pre">su</span></code>’d / SSH’d in as <code class="docutils literal notranslate"><span class="pre">pkm</span></code> logs out, and the only visible symptom is Slack ingests
+silently failing to index. Belt-and-suspenders, you can also disable the behaviour
+host-wide with a drop-in — <code class="docutils literal notranslate"><span class="pre">printf</span> <span class="pre">'[Login]\nRemoveIPC=no\n'</span> <span class="pre">&gt;</span> <span class="pre">/etc/systemd/logind.conf.d/10-removeipc.conf</span></code> then <code class="docutils literal notranslate"><span class="pre">systemctl</span> <span class="pre">restart</span> <span class="pre">systemd-logind</span></code>
+— but lingering alone is sufficient. If you ever hit the error on a running box,
+recover with <code class="docutils literal notranslate"><span class="pre">systemctl</span> <span class="pre">restart</span> <span class="pre">thoth-hindsight.service</span></code> (the postmaster recreates
+its segment), then <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">reindex</span></code> to backfill any pages that failed to index.</p>
+</div>
 <p>Install the cron jobs (reindex, summaries, config backup) for <code class="docutils literal notranslate"><span class="pre">pkm</span></code>, and create their logs:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>crontab<span class="w"> </span>-u<span class="w"> </span>pkm<span class="w"> </span>/opt/thoth/deploy/crontab
 install<span class="w"> </span>-d<span class="w"> </span>-o<span class="w"> </span>pkm<span class="w"> </span>-g<span class="w"> </span>pkm<span class="w"> </span>/var/log<span class="w">     </span><span class="c1"># logs: /var/log/thoth-*.log (paths in deploy/crontab)</span>
