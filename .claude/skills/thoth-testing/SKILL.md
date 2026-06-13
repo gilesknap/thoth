@@ -48,6 +48,13 @@ inner loop: `uv run pytest`, `uv run ruff check src/ tests/`, `uv run pyright`.
   stash entirely in parallel runs), and a pinned `UV_PROJECT_ENVIRONMENT` means every
   worktree syncs the *same* venv, repointing the editable install under the others — set
   `UV_PROJECT_ENVIRONMENT=$PWD/.venv` per worktree before any `uv` command.
+- **Testing a PR branch checked out in `.claude/worktrees/<x>`**: the shared venv's
+  editable `__editable__.thoth-*.pth` points at the *main* checkout's `src`, so a plain
+  `uv run --no-project pytest` from the worktree silently imports **main's** code and your
+  branch edits don't take effect (you'll see your new assertion fail against old source).
+  Fastest fix without a full per-worktree `uv sync`: prepend the worktree src —
+  `PYTHONPATH=$PWD/src uv run --no-project python -m pytest …` (confirm with
+  `PYTHONPATH=$PWD/src uv run --no-project python -c "import thoth.X; print(thoth.X.__file__)"`).
 
 **Docs inner loop** (run after any docs edit, without the full tox run):
 
