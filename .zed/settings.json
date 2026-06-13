@@ -1,0 +1,20 @@
+// Zed project settings.
+//
+// Language servers (basedpyright, ruff) run on the host and pick up the
+// workspace .venv directly — the devcontainer mirrors host paths, so the venv
+// is valid on both sides. Terminals are routed into the devcontainer via the
+// devshell wrapper (prerequisite: npm install -g @devcontainers/cli).
+//
+// The program path is resolved relative to the terminal's spawn cwd, so
+// terminal.working_directory must stay the project root (Zed's default,
+// "current_project_directory") — Zed offers no project-root variable here.
+{
+    "terminal": {
+        "shell": {
+            "with_arguments": {
+                "program": "./scripts/devshell.sh",
+                "args": []
+            }
+        }
+    }
+}

@@ -36,18 +36,17 @@ inner loop: `uv run pytest`, `uv run ruff check src/ tests/`, `uv run pyright`.
 
 **Sandboxed-session gate quirks** (agent sandboxes that are not the built devcontainer):
 
-- `tox -e type-checking` passes `--pythonpath {env:VIRTUAL_ENV}` — and an inherited
-  `VIRTUAL_ENV`/`UV_PROJECT_ENVIRONMENT` can point at a *foreign cached venv from another
-  project*, making pyright report phantom unknown-import errors. Override with
-  `VIRTUAL_ENV="$(uv run python -c 'import sys;print(sys.prefix)')"` (or run
-  `uv run pyright --pythonpath ... src tests` directly).
+- The project venv is the uv default — `.venv` in the workspace root. `tox -e
+  type-checking` passes `--pythonpath {env:VIRTUAL_ENV}`, so run the gate via
+  `uv run --locked tox ...` (which sets `VIRTUAL_ENV` to the workspace `.venv`); an
+  inherited foreign `VIRTUAL_ENV` makes pyright report phantom unknown-import errors.
 - Where the helm plugin is missing, run pre-commit (and `git commit`, which triggers the
   hook) with `SKIP=helm-schema` — skip that one hook, never delete it.
-- **Parallel agents in linked git worktrees** share more than they appear to: the
-  `git stash` stack is repo-wide (a bare `stash pop` can grab a sibling's work — avoid
-  stash entirely in parallel runs), and a pinned `UV_PROJECT_ENVIRONMENT` means every
-  worktree syncs the *same* venv, repointing the editable install under the others — set
-  `UV_PROJECT_ENVIRONMENT=$PWD/.venv` per worktree before any `uv` command.
+- **Parallel agents in linked git worktrees** share the repo-wide `git stash` stack — a
+  bare `stash pop` can grab a sibling's work, so avoid stash entirely in parallel runs.
+  Each worktree gets its own `.venv` by default; keep it that way (never point
+  `UV_PROJECT_ENVIRONMENT` at a shared location, which would repoint the editable
+  install under sibling worktrees).
 
 **Docs inner loop** (run after any docs edit, without the full tox run):
 
@@ -186,8 +185,8 @@ Two `helm-schema` hook foot-guns (`Charts/thoth/values.schema.json` is generated
   devcontainer (`Dockerfile` developer stage) and a dedicated `_precommit.yml` CI job
   (`ci.yml`'s `lint` uses it; `type-checking` stays on `_tox.yml`). Don't delete a
   failing schema hook — install the plugin where it runs. **A fresh agent sandbox is
-  often NOT the built devcontainer** (no `helm`/`gpg`, no `/cache` mount, no
-  `pre-commit`, read-only `/usr/local/bin`) — so don't try to live-install helm there;
+  often NOT the built devcontainer** (no `helm`/`gpg`, no `pre-commit`, read-only
+  `/usr/local/bin`) — so don't try to live-install helm there;
   the Dockerfile already has it, so **rebuild the container** to pick it up.
 - **`@schema` annotation comments must not contain `;`.** The parser treats `;` as the
   annotation separator, so a `;` in a description makes the generator error and write
