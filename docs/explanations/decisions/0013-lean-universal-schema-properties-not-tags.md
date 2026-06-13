@@ -56,6 +56,12 @@ and memories carried `sensitivity/personal` too).
 - **Single status vocabulary** `todo | in_progress | done | cancelled` for every
   action regardless of kind; media-ness is carried by `kind`, never by parallel
   status values (`to_consume`/`consuming`/`consumed` are retired).
+- **Priority is a bare severity label** `Urgent | High | Medium | Low` — not the old
+  sort-prefixed `1 - Urgent`..`4 - Low`. The numbers only existed to make a Bases
+  ASC string sort fall in severity order; that ordering now lives in a `prio_rank`
+  formula in `actions.base` (`Urgent=0`..`Low=3`, unknown last) and every view sorts
+  by `formula.prio_rank`. The stored value stays a clean label, the sort key lives in
+  one place, and the curate prompt no longer emits magic numbers.
 - **Three lifecycle bases** mirroring ACTIONABLE / CURATED / machinery:
   `actions.base`, `reference.base`, `triage.base` (replacing the seven per-folder
   files). Each action-backed section ships **Work · Personal · All view variants**

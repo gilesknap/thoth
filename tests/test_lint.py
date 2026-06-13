@@ -607,7 +607,7 @@ def test_frontmatter_valid_page_passes(vault: Vault, config: Config) -> None:
             "personal": False,
             "kind": "task",
             "status": "todo",
-            "priority": "2 - High",
+            "priority": "High",
         },
     )
     findings = [
