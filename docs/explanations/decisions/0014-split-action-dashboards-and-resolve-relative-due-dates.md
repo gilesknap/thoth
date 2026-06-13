@@ -55,11 +55,13 @@ leaf module rather than being configurable.
   load-bearing: a *missing* `due_date` (the common case — the key is absent, not blank)
   is **not** matched by `== ""`, which is exactly what hid undated todos from the
   bounded windows in the first live test. A `date_bucket` formula (`overdue = 0`,
-  `undated = 1`, `upcoming = 2`, also keyed on `isEmpty()`) is the primary sort, then
-  `due_date`, then `prio_rank` — so overdue actions lead, undated sit right behind
-  (priority-ordered, urgent first), and upcoming trail. This fixes the lost-action bug:
-  an `Urgent` capture with no `due_date` can no longer be invisible. `All` carries no
-  date filter (every open item of the class).
+  `upcoming = 1`, `undated = 2`, also keyed on `isEmpty()`) is the primary sort, then
+  `due_date`, then `prio_rank` — so overdue actions lead, real upcoming deadlines
+  follow (soonest first), and undated items trail as a priority-ordered backlog
+  (urgent first). This fixes the lost-action bug: an `Urgent` capture with no
+  `due_date` can no longer be invisible, while concrete near-term deadlines still
+  outrank the undated tail. `All` carries no date filter (every open item of the
+  class).
 - **The curate prompt states today's date and resolves relative deadlines.** It now
   leads with `Today's date is <YYYY-MM-DD> (<timezone>)` and the file-plan contract
   instructs the model to resolve a relative/natural deadline ("monday", "tomorrow",

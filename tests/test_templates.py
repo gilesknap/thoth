@@ -95,8 +95,8 @@ def test_date_window_views_always_include_undated_and_sort_expired_first() -> No
     Bases; ``== ""`` does NOT match an absent property -- the live failure that hid
     undated todos from the bounded windows), so the windows ``or:`` it in and undated
     items always show (a nag to add a date). The ``date_bucket`` formula then sorts
-    overdue (0) first, then undated (1), then upcoming (2) -- expired leads, nothing
-    hides.
+    overdue (0) first, then upcoming (1), then undated (2) last -- real deadlines lead
+    and undated items trail as a backlog, but nothing hides.
     """
     for base in ("actions", "personal", "media"):
         data: Any = yaml.safe_load(base_text(base))

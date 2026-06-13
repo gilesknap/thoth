@@ -7,7 +7,7 @@ filters:
     - status != "cancelled"
 formulas:
   prio_rank: 'if(priority == "Urgent", 0, if(priority == "High", 1, if(priority == "Medium", 2, if(priority == "Low", 3, 4))))'
-  date_bucket: 'if(due_date.isEmpty(), 1, if(due_date < now(), 0, 2))'
+  date_bucket: 'if(due_date.isEmpty(), 2, if(due_date < now(), 0, 1))'
 properties:
   status:     { displayName: Status }
   due_date:   { displayName: Due }
