@@ -21,6 +21,9 @@ Documented defaults (the single source of truth):
 * ``OBSIDIAN_VAULT_NAME`` defaults to :data:`DEFAULT_OBSIDIAN_VAULT_NAME`
   (``pkm-vault``).
 * ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME` (``~/.thoth``).
+* ``THOTH_TIMEZONE`` defaults to :data:`DEFAULT_TIMEZONE` (``Europe/London``) -- the
+  IANA timezone for every calendar-date computation (day boundary, schedules, lint
+  freshness, and the curate relative-date resolution). A bogus name fails fast.
 * ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
   (``claude-sonnet-4-6``).
 * ``THOTH_ANALYSE_MODEL`` defaults to ``None`` -- the folded analyse/kind/transcription
@@ -57,6 +60,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .model import Config, ConfigError
 from .model import _strip_user_token as _strip_user_token
@@ -70,6 +74,7 @@ __all__ = [
     "DEFAULT_MAX_ANALYSE_IMAGES",
     "DEFAULT_OBSIDIAN_VAULT_NAME",
     "DEFAULT_THOTH_HOME",
+    "DEFAULT_TIMEZONE",
     "REQUIRED_VARS",
     "Config",
     "ConfigError",
@@ -81,6 +86,14 @@ DEFAULT_OBSIDIAN_VAULT_NAME: str = "pkm-vault"
 
 DEFAULT_ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
 """Default Anthropic model id."""
+
+DEFAULT_TIMEZONE: str = "Europe/London"
+"""Default IANA timezone for every calendar-date computation (the owner's locale).
+
+``THOTH_TIMEZONE`` overrides it; it governs the day boundary for the daily budget,
+the summary/alert schedules, lint freshness, and the relative-date resolution that
+turns a captured "monday" into a concrete ``due_date``.
+"""
 
 DEFAULT_LOG_LEVEL: str = "INFO"
 """Default logging level (issue #52); ``THOTH_LOG_LEVEL`` overrides it at the daemon.
@@ -201,6 +214,7 @@ def load_config(
         vault_path=_resolve_path(vault_raw),
         vault_name=lookup("OBSIDIAN_VAULT_NAME") or DEFAULT_OBSIDIAN_VAULT_NAME,
         thoth_home=thoth_home,
+        timezone=_tz_opt(lookup("THOTH_TIMEZONE")),
         log_level=lookup("THOTH_LOG_LEVEL") or DEFAULT_LOG_LEVEL,
         anthropic_api_key=lookup("ANTHROPIC_API_KEY"),
         anthropic_model=lookup("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL,
@@ -289,6 +303,28 @@ def _resolve_path(value: str) -> Path:
 def _opt(value: str | None) -> str | None:
     """Treat an empty string as unset (shell/.env habit: blank means absent)."""
     return value or None
+
+
+def _tz_opt(value: str | None) -> ZoneInfo:
+    """Resolve an optional IANA timezone name, falling back to :data:`DEFAULT_TIMEZONE`.
+
+    Args:
+        value: The raw ``THOTH_TIMEZONE`` value (already ``None`` when unset/blank).
+
+    Returns:
+        The resolved :class:`zoneinfo.ZoneInfo` (the owner's locale when unset).
+
+    Raises:
+        ConfigError: when ``value`` names a timezone the ``tzdata`` database does not
+            know, so a typo fails fast at startup rather than silently mis-dating.
+    """
+    name = value or DEFAULT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ConfigError(
+            f"THOTH_TIMEZONE must be a valid IANA timezone name, got {name!r}"
+        ) from exc
 
 
 def _int_opt(value: str | None, *, default: int, name: str) -> int:

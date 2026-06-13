@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, overload
@@ -276,6 +277,7 @@ class _IngestorBase:
         schema_md: str | None = None,
         markers: MarkerStore | None = None,
         analyser: Analyser | None = None,
+        today: date | None = None,
     ) -> None:
         """Store the injected collaborators.
 
@@ -299,6 +301,9 @@ class _IngestorBase:
                 budget guard -- and configured with the ``analyse_model`` /
                 ``diagram_model`` knobs (issue #68); a test can inject a fake to drive
                 analysis with no real model call.
+            today: Optional fixed date used to anchor the curate prompt's relative-date
+                resolution (so "monday" becomes a concrete ``due_date``); ``None`` (the
+                default) reads the live date in the configured timezone.
         """
         self._config = config
         self._vault = vault
@@ -308,6 +313,7 @@ class _IngestorBase:
         self._git = git
         self._schema_md = schema_md
         self._markers = markers
+        self._today = today
         self._analyser = (
             analyser
             if analyser is not None
@@ -356,6 +362,19 @@ class _IngestorBase:
                     return kind
             return CaptureKind.URL
         return CaptureKind.TEXT
+
+    def _today_iso(self) -> str:
+        """Return the date that anchors relative-date resolution, as ``YYYY-MM-DD``.
+
+        The injected ``today`` when a test pins one, else the live date in the
+        configured timezone (``THOTH_TIMEZONE``). Fed into the curate prompt so the
+        model can turn a relative deadline ("monday", "tomorrow") in the captured text
+        into a concrete ``due_date`` -- the model is never otherwise told what day it
+        is, which left such deadlines unset (e.g. an "urgent todo monday" filed with no
+        date).
+        """
+        today = self._today or datetime.now(self._config.timezone).date()
+        return today.isoformat()
 
     @staticmethod
     def _capture_summary(

@@ -56,97 +56,82 @@ def test_each_base_parses_with_one_filter_key_and_views(name: str) -> None:
         assert view.get("name"), f"{name}: every view has a name"
 
 
-def test_actions_views_have_work_personal_all_variants() -> None:
-    """Imminent/Open/Media each ship the 3 view variants (ADR 0013 dashboard).
+def test_each_base_is_one_class_with_date_window_views() -> None:
+    """Each base is one item class; its views differ only by date window (ADR 0014).
 
-    The Work·Personal·All pattern: each action-backed dashboard section gets three
-    view variants differing only in the ``personal`` clause, switched in place via
-    the embed's view dropdown. The base view (the section's default) plus its two
-    variants must all exist for the dropdown to offer them.
+    The old Work·Personal·All triplication is gone. ``actions`` (work) and ``personal``
+    each ship 7 / 30 / All day windows; ``media`` (the consume queue, work + personal)
+    the same; ``recent`` ships 7 / 30 / 60; ``inbox`` is a single unfiled view.
     """
-    data: Any = yaml.safe_load(base_text("actions"))
-    names = {v["name"] for v in data["views"]}
-    assert {
-        "Imminent",
-        "Imminent · Personal",
-        "Imminent · All",
-        "Open",
-        "Open · Personal",
-        "Open · All",
-        "Media",
-        "Media · Work",
-        "Media · Personal",
-        "All Actions",
-    } == names
+    for base in ("actions", "personal", "media"):
+        data: Any = yaml.safe_load(base_text(base))
+        assert {v["name"] for v in data["views"]} == {"7 Days", "30 Days", "All"}, base
+    recent: Any = yaml.safe_load(base_text("recent"))
+    assert {v["name"] for v in recent["views"]} == {"7 Days", "30 Days", "60 Days"}
+    inbox: Any = yaml.safe_load(base_text("inbox"))
+    assert {v["name"] for v in inbox["views"]} == {"Inbox"}
 
 
-def test_actions_open_excludes_media_imminent_does_not() -> None:
-    """Open filters out kind: media; Imminent is kind-agnostic (a due film shows)."""
-    data: Any = yaml.safe_load(base_text("actions"))
-    open_view = next(v for v in data["views"] if v["name"] == "Open")
-    assert 'kind != "media"' in open_view["filters"]["and"]
-    imminent = next(v for v in data["views"] if v["name"] == "Imminent")
-    assert not any("kind" in str(c) for c in imminent["filters"]["and"])
+def test_class_split_lives_in_each_base_filter_not_per_view() -> None:
+    """Item class (work / personal / media) is the base-level filter, so views differ
+    by date only. Work is ``personal != true`` (unset counts as work -- Bases has no
+    coalesce); personal is ``personal == true``; media is ``kind == "media"``. The
+    todo bases exclude media and the closed statuses at the base level too."""
+    actions = yaml.safe_load(base_text("actions"))["filters"]["and"]
+    assert "personal != true" in actions and 'kind != "media"' in actions
+    assert 'status != "done"' in actions and 'status != "cancelled"' in actions
+    personal = yaml.safe_load(base_text("personal"))["filters"]["and"]
+    assert "personal == true" in personal and 'kind != "media"' in personal
+    media = yaml.safe_load(base_text("media"))["filters"]["and"]
+    assert 'kind == "media"' in media
+    assert not any("personal" in str(c) for c in media), "media spans both personal"
 
 
-def test_actions_work_views_treat_missing_personal_as_work() -> None:
-    """Work-default views filter ``personal != true`` so an unset value counts as
-    work (Bases has no coalesce; ``== false`` would drop legacy pages)."""
-    data: Any = yaml.safe_load(base_text("actions"))
-    for name in ("Imminent", "Open", "Media · Work"):
-        view = next(v for v in data["views"] if v["name"] == name)
-        assert "personal != true" in view["filters"]["and"], name
+def test_date_window_views_always_include_undated_and_sort_expired_first() -> None:
+    """Every dated window keeps undated items and orders overdue -> undated -> upcoming.
 
-
-def test_actions_base_has_imminent_view_first() -> None:
-    """``actions.base`` leads with an 'Imminent' view (issue #62 dashboard).
-
-    The Imminent view drives the dashboard's expanded red lead callout, so it is the
-    first view in the file (the embed pins it by name, but ordering keeps it the
-    default if the name pin is ever dropped).
+    The lost-action bug: an urgent todo with no ``due_date`` fell out of every dated
+    view. A *missing* ``due_date`` is matched with ``due_date.isEmpty()`` (Obsidian
+    Bases; ``== ""`` does NOT match an absent property -- the live failure that hid
+    undated todos from the bounded windows), so the windows ``or:`` it in and undated
+    items always show (a nag to add a date). The ``date_bucket`` formula then sorts
+    overdue (0) first, then upcoming (1), then undated (2) last -- real deadlines lead
+    and undated items trail as a backlog, but nothing hides.
     """
-    data: Any = yaml.safe_load(base_text("actions"))
-    assert data["views"][0]["name"] == "Imminent"
+    for base in ("actions", "personal", "media"):
+        data: Any = yaml.safe_load(base_text(base))
+        # The bucket formula is defined and is the primary sort key on every view.
+        assert "date_bucket" in data["formulas"], base
+        for view in data["views"]:
+            assert view["sort"][0]["property"] == "formula.date_bucket", view["name"]
+        # The bounded windows keep undated items via a ``.isEmpty()`` or-arm (an absent
+        # due_date, which ``== ""`` would miss).
+        for name in ("7 Days", "30 Days"):
+            view = next(v for v in data["views"] if v["name"] == name)
+            assert "due_date.isEmpty()" in view["filters"]["or"], (base, name)
+        # The bucket formula also uses ``.isEmpty()`` so undated items bucket correctly.
+        assert "due_date.isEmpty()" in data["formulas"]["date_bucket"], base
+        # The All window has no date filter at all (every open item of the class).
+        all_view = next(v for v in data["views"] if v["name"] == "All")
+        assert "filters" not in all_view, base
 
 
-def test_actions_base_imminent_filters_overdue_and_due_soon() -> None:
-    """'Imminent' filters open actions overdue or due within two days (issue #62)."""
-    data: Any = yaml.safe_load(base_text("actions"))
-    imminent = next(v for v in data["views"] if v["name"] == "Imminent")
-    conditions = imminent["filters"]["and"]
-    # Open only: a done/completed/cancelled action is never imminent.
-    assert 'status != "done"' in conditions
-    # Must carry a due date that is on or before now + 2 days; an overdue action
-    # (due_date already < now) therefore matches too.
-    assert 'due_date != ""' in conditions
-    assert 'due_date <= now() + "2 days"' in conditions
+def test_media_base_shows_a_personal_column() -> None:
+    """Media spans work + personal, so it carries a personal column to tell them apart
+    (the distinction is minor for leisure media, but visible)."""
+    media: Any = yaml.safe_load(base_text("media"))
+    assert "personal" in media["properties"]
+    for view in media["views"]:
+        assert "personal" in view["order"], view["name"]
 
 
-def test_triage_base_excludes_archive_via_nested_not() -> None:
-    """``triage.base`` nests a ``not: file.inFolder("_archive")`` in its and: list."""
-    data: Any = yaml.safe_load(base_text("triage"))
+def test_recent_base_excludes_archive_via_nested_not() -> None:
+    """``recent.base`` nests a ``not: file.inFolder("_archive")`` in its and: list."""
+    data: Any = yaml.safe_load(base_text("recent"))
     and_list = data["filters"]["and"]
     assert any(isinstance(c, dict) and "not" in c for c in and_list), (
-        "triage.base must nest a not: inside the top-level and: list"
+        "recent.base must nest a not: inside the top-level and: list"
     )
-
-
-def test_actions_base_media_views_filter_by_kind() -> None:
-    """The media queue keys off ``kind == "media"`` and the open lifecycle.
-
-    ADR 0013: a media item is an ``action`` with ``kind: media`` sharing the single
-    status lifecycle, so every media view is kind-scoped and excludes the closed
-    statuses (no more to_consume/consuming/consumed split).
-    """
-    data: Any = yaml.safe_load(base_text("actions"))
-    media_views = [v for v in data["views"] if "Media" in v["name"]]
-    assert media_views, "actions.base must ship media views"
-    for view in media_views:
-        and_list = view["filters"]["and"]
-        assert 'kind == "media"' in and_list, view["name"]
-        assert 'status != "done"' in and_list, view["name"]
-        assert 'status != "cancelled"' in and_list, view["name"]
-        assert not any("to_consume" in str(c) for c in and_list), view["name"]
 
 
 def test_bases_never_filter_on_tags() -> None:
@@ -167,22 +152,25 @@ def test_bases_never_filter_on_tags() -> None:
 
 
 def test_index_is_a_callout_dashboard() -> None:
-    """``index.md`` is the 5-section attention dashboard (issue #62 / ADR 0013)."""
+    """``index.md`` is the attention dashboard (issue #62 / ADR 0014).
+
+    One callout per item-class base, embedding a default date window. The two todo
+    lists (work, personal) lead expanded ('+'); media / inbox / recent are collapsed.
+    """
     text = template_text("index.md")
-    # Imminent actions lead in an expanded ('+') danger (red) callout.
-    assert "> [!danger]+" in text
-    # The other four sections are collapsed ('-') colour-coded callouts.
-    for marker in (
-        "> [!warning]-",
-        "> [!todo]-",
-        "> [!example]-",
-        "> [!info]-",
-    ):
+    assert "> [!danger]+" in text  # Work todos lead in an expanded red callout.
+    assert "> [!tip]+" in text  # Personal todos expanded.
+    # The remaining sections are collapsed ('-') colour-coded callouts.
+    for marker in ("> [!example]-", "> [!warning]-", "> [!info]-"):
         assert marker in text, marker
-    # The danger callout is the first callout on the page.
-    assert text.index("[!danger]+") < text.index("[!warning]-")
-    # It embeds the actions Imminent view.
-    assert "![[_bases/actions.base#Imminent]]" in text
+    # The work callout is the first callout on the page.
+    assert text.index("[!danger]+") < text.index("[!example]-")
+    # Each item-class base is embedded by a default view.
+    assert "![[_bases/actions.base#7 Days]]" in text
+    assert "![[_bases/personal.base#7 Days]]" in text
+    assert "![[_bases/media.base#All]]" in text
+    assert "![[_bases/inbox.base#Inbox]]" in text
+    assert "![[_bases/recent.base#7 Days]]" in text
     # The reference layer is a link line, not an embedded section (ADR 0013).
     assert "[[_bases/reference.base|" in text
 
@@ -298,8 +286,11 @@ def test_iter_templates_returns_all_templates_non_empty() -> None:
         "SCHEMA.md",
         "log.md",
         "_bases/actions.base",
+        "_bases/personal.base",
+        "_bases/media.base",
+        "_bases/inbox.base",
+        "_bases/recent.base",
         "_bases/reference.base",
-        "_bases/triage.base",
         *OBSIDIAN_NAMES,
         *ROOT_NAMES,
     ]

@@ -1,0 +1,14 @@
+filters:
+  and:
+    - file.ext == "md"
+    - file.inFolder("inbox")
+    - "!(file.name == \"README\")"
+properties:
+  title:   { displayName: Title }
+  created: { displayName: Captured }
+  source:  { displayName: Via }
+views:
+  - type: table
+    name: Inbox
+    order: [file.name, title, created, source]
+    sort: [{ property: created, direction: DESC }]

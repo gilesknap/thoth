@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 
 class ConfigError(Exception):
@@ -23,6 +24,7 @@ class Config:
     vault_path: Path
     vault_name: str
     thoth_home: Path
+    timezone: ZoneInfo
     log_level: str
     anthropic_api_key: str | None
     anthropic_model: str

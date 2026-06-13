@@ -10,6 +10,11 @@ Amends the media wording of
 [ADR 0005](0005-collapse-knowledge-life-admin-into-flat-folders.md): a media item
 is now an `action` with `kind: media`, not an action *tagged* `media`.
 
+The dashboard design below (the Work · Personal · All view variants and the 5-section
+index) is refined by
+[ADR 0014](0014-split-action-dashboards-and-resolve-relative-due-dates.md); the schema
+itself is unchanged.
+
 ## Context
 
 The index page's Bases dashboards were broken in two independent ways, confirmed

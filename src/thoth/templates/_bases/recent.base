@@ -1,0 +1,31 @@
+filters:
+  and:
+    - file.ext == "md"
+    - not:
+        - file.inFolder("_archive")
+properties:
+  type:    { displayName: Type }
+  created: { displayName: Captured }
+  updated: { displayName: Updated }
+views:
+  - type: table
+    name: 7 Days
+    filters:
+      and:
+        - file.mtime > now() - "7 days"
+    order: [file.name, type, created, file.mtime]
+    sort: [{ property: file.mtime, direction: DESC }]
+  - type: table
+    name: 30 Days
+    filters:
+      and:
+        - file.mtime > now() - "30 days"
+    order: [file.name, type, created, file.mtime]
+    sort: [{ property: file.mtime, direction: DESC }]
+  - type: table
+    name: 60 Days
+    filters:
+      and:
+        - file.mtime > now() - "60 days"
+    order: [file.name, type, created, file.mtime]
+    sort: [{ property: file.mtime, direction: DESC }]
