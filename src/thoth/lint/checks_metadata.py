@@ -4,7 +4,7 @@ vocabularies they validate against.
 
 Each check is a pure function over the parsed pages handed to it by
 :class:`thoth.lint.LintEngine`. The folder / type / slug contract constants AND the
-status / kind / priority / media_type vocabularies are imported from
+status / priority / media_type vocabularies are imported from
 :mod:`thoth.vault` (the single source, ADR 0013); the per-type mappings below only
 shape them for the check loop.
 """
@@ -15,7 +15,6 @@ from pathlib import PurePosixPath
 
 from thoth.fmfields import _is_truthy, _page_tags, _str_field
 from thoth.vault import (
-    ACTION_KIND_VOCAB,
     ACTION_STATUS_VOCAB,
     CONTENT_COMMON_FIELDS,
     FOLDER_TYPE_CONTRACT,
@@ -34,35 +33,31 @@ from .parse import parse_taxonomy_tags
 __all__ = [
     "TYPE_REQUIRED_FIELDS",
     "STATUS_VOCAB",
-    "KIND_VOCAB",
     "PRIORITY_VOCAB",
     "MEDIA_TYPE_VOCAB",
 ]
 
 TYPE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "action": ("status", "kind"),
+    "action": ("status",),
+    "media": ("status",),
 }
 """Type-specific required frontmatter fields beyond the common set (SPEC check 4).
 
-ADR 0013: every action carries the single ``status`` lifecycle plus a ``kind``
-(``task``/``media``/``errand``) -- the view-critical facet the Bases dashboards
-filter on (a media item is an ``action`` with ``kind: media``).
+ADR 0013/0015: every actionable page (``action`` or ``media``) carries the single
+``status`` lifecycle. ADR 0015 retired the ``kind`` facet -- media-ness is now the
+``type`` itself, so there is no per-action ``kind`` field to require.
 """
 
 STATUS_VOCAB: dict[str, frozenset[str]] = {
     "action": frozenset(ACTION_STATUS_VOCAB),
+    "media": frozenset(ACTION_STATUS_VOCAB),
 }
 """Allowed ``status`` values per ``type``
 (from :data:`thoth.vault.ACTION_STATUS_VOCAB`).
 
-ADR 0013: one lifecycle for every action regardless of kind -- media-ness is carried
-by the ``kind`` property, not by parallel status values.
+ADR 0013/0015: one lifecycle for every actionable page regardless of type -- media-ness
+is carried by the ``type`` (ADR 0015), not by parallel status values.
 """
-
-KIND_VOCAB: dict[str, frozenset[str]] = {
-    "action": frozenset(ACTION_KIND_VOCAB),
-}
-"""Allowed ``kind`` values per ``type`` (from :data:`thoth.vault.ACTION_KIND_VOCAB`)."""
 
 PRIORITY_VOCAB: frozenset[str] = frozenset(_PRIORITY_VOCAB)
 """Allowed ``priority`` values (from :data:`thoth.vault.PRIORITY_VOCAB`)."""
@@ -152,10 +147,6 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
         and (status not in allowed_status)
     ):
         flag(f"status {status!r} is not in the {page_type} vocabulary")
-    kind = _str_field(meta.get("kind"))
-    allowed_kind = KIND_VOCAB.get(page_type or "")
-    if kind is not None and allowed_kind is not None and (kind not in allowed_kind):
-        flag(f"kind {kind!r} is not in the {page_type} vocabulary")
     priority = _str_field(meta.get("priority"))
     if priority is not None and priority not in PRIORITY_VOCAB:
         flag(f"priority {priority!r} is not in the vault vocabulary")

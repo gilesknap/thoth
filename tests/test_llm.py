@@ -485,34 +485,56 @@ def test_validate_file_plan_accepts_page_without_summary() -> None:
 
 
 def _good_action_page() -> dict[str, Any]:
-    """A well-formed action page (kind + status required, ADR 0013)."""
+    """A well-formed action page (status required; no kind since ADR 0015)."""
     page = _good_page("ship-the-release")
     page["folder"] = "actions"
-    page["frontmatter"].update({"type": "action", "kind": "task", "status": "todo"})
+    page["frontmatter"].update({"type": "action", "status": "todo"})
     return page
 
 
-def test_validate_file_plan_accepts_action_with_kind_and_status() -> None:
-    """An action page carrying kind + status validates."""
+def _good_media_page() -> dict[str, Any]:
+    """A well-formed media page (its own type + status required, ADR 0015)."""
+    page = _good_page("read-ddia")
+    page["folder"] = "media"
+    page["frontmatter"].update(
+        {"type": "media", "status": "todo", "media_type": "book"}
+    )
+    return page
+
+
+def test_validate_file_plan_accepts_action_with_status() -> None:
+    """An action page carrying status validates (kind retired, ADR 0015)."""
     validate_file_plan({"pages": [_good_action_page()]})
 
 
-def test_validate_file_plan_rejects_action_missing_kind_and_status() -> None:
-    """An action page must carry kind and status (ADR 0013)."""
+def test_validate_file_plan_accepts_media_page() -> None:
+    """A media page (its own type) carrying status validates (ADR 0015)."""
+    validate_file_plan({"pages": [_good_media_page()]})
+
+
+def test_validate_file_plan_rejects_action_missing_status() -> None:
+    """An action page must carry status (ADR 0013/0015)."""
     page = _good_action_page()
-    del page["frontmatter"]["kind"]
     del page["frontmatter"]["status"]
     with pytest.raises(SchemaValidationError) as exc:
         validate_file_plan({"pages": [page]})
     message = str(exc.value)
-    assert "'kind'" in message and "'status'" in message
+    assert "'status'" in message
+
+
+def test_validate_file_plan_rejects_media_missing_status() -> None:
+    """A media page must carry status too (ADR 0015)."""
+    page = _good_media_page()
+    del page["frontmatter"]["status"]
+    with pytest.raises(SchemaValidationError) as exc:
+        validate_file_plan({"pages": [page]})
+    assert "'status'" in str(exc.value)
 
 
 @pytest.mark.parametrize(
     ("field", "bad_value"),
     [
         ("status", "to_consume"),  # the retired media status
-        ("kind", "movie"),
         ("priority", "urgent"),
         ("media_type", "vinyl"),
     ],
@@ -520,7 +542,7 @@ def test_validate_file_plan_rejects_action_missing_kind_and_status() -> None:
 def test_validate_file_plan_enum_checks_vocab_fields(
     field: str, bad_value: str
 ) -> None:
-    """status/kind/priority/media_type values outside the vault vocab are reported."""
+    """status/priority/media_type values outside the vault vocab are reported."""
     page = _good_action_page()
     page["frontmatter"][field] = bad_value
     with pytest.raises(SchemaValidationError, match=field):
@@ -683,23 +705,24 @@ def test_file_plan_contract_text_covers_validator_contract() -> None:
     assert "create" in text and "update" in text
     assert "wikilinks" in text
     # The per-page summary instruction is present and now covers EVERY page
-    # including actions (ADR 0013); the removed catalog vocabulary is gone.
+    # including actions and media (ADR 0013/0015); the removed catalog vocab is gone.
     assert "summary" in text
-    assert "EVERY page, including actions" in text
+    assert "EVERY page, including actions and media" in text
     assert "index_entries" not in text
     assert "catalog" not in text
-    # The universal personal boolean and the action kind/status vocabularies are
-    # rendered from the vault constants (ADR 0013).
+    # The universal personal boolean and the actionable status vocabulary are
+    # rendered from the vault constants (ADR 0013); ``media`` is now a type, not a kind.
     assert '"personal": true|false' in text
-    for value in ("task", "media", "errand"):
-        assert value in text, f"kind {value!r} missing from contract"
+    assert 'type "media"' in text
     for value in ("todo", "in_progress", "done", "cancelled"):
         assert value in text, f"status {value!r} missing from contract"
     for value in ("book", "film", "podcast"):
         assert value in text, f"media_type {value!r} missing from contract"
     assert "memory_date" in text
+    # The ``kind`` facet is retired (ADR 0015): no kind enum and no kind tag warning.
+    assert '"kind"' not in text
     # Tags are descriptive only -- the promoted facets must not be duplicated.
-    assert "never duplicate type, kind, or" in text
+    assert "never duplicate type or" in text
     # The retired media statuses are gone from the prompt surface.
     assert "to_consume" not in text
     assert "tagged 'media'" not in text

@@ -1,5 +1,14 @@
 # PKM Thin-App — Design Sketch
 
+> **Historical / not maintained.** This was the original design sketch that bootstrapped
+> the build, and it is **no longer kept in sync with the code** — parts of it predate
+> ADR 0005 (it still lists the old `concept|comparison|query|summary` types) and ADR 0014
+> (its dashboard examples describe a design since replaced). The living sources of truth
+> are the **ADRs** (`docs/explanations/decisions/`), the **code and its docstrings**, the
+> seed **SCHEMA.md**, and the **test suite**. Kept for provenance and because much of the
+> codebase still cites it ("SPEC Appendix → …"); do **not** trust it for current
+> behaviour.
+
 > **Status:** this document is fully self-contained (originally derived from an earlier Hermes-framework
 > deployment spec, now superseded). The vault model, frontmatter contract, ingest/retrieve flows, sync
 > protocol, Hindsight tuning, and life-admin/summary/lint specs are all reproduced here — the body gives the

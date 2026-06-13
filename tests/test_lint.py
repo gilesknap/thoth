@@ -437,7 +437,7 @@ def test_summary_gloss_flags_blank_summary(vault: Vault, config: Config) -> None
 
 
 def test_summary_gloss_flags_action_pages_too(vault: Vault, config: Config) -> None:
-    """An action page without a ``summary:`` is flagged (ADR 0013: all 4 types)."""
+    """An action page without a ``summary:`` is flagged (ADR 0013: all types)."""
     _knowledge(
         vault,
         "actions",
@@ -446,7 +446,7 @@ def test_summary_gloss_flags_action_pages_too(vault: Vault, config: Config) -> N
         body="do it\n",
         tags=["chores"],
         summary=None,
-        extra={"status": "todo", "kind": "task"},
+        extra={"status": "todo"},
     )
     findings = _engine(vault, config).check_summaries()
     assert {f.path for f in findings} == {"actions/todo.md"}
@@ -541,18 +541,19 @@ def test_frontmatter_action_missing_status_flagged(
 def test_frontmatter_bad_vocab_values_flagged(vault: Vault, config: Config) -> None:
     """status/priority/media_type values outside the vocab are each flagged.
 
-    A media item is an ``action`` tagged ``media`` filed under ``actions/`` (ADR 0005).
+    Media is its own ``type`` filed under ``media/`` (ADR 0015); it carries the same
+    ``status`` lifecycle plus ``media_type``.
     """
     _write(
         vault,
-        "actions/bad.md",
+        "media/bad.md",
         {
             "title": "Bad media",
-            "type": "action",
+            "type": "media",
             "created": "2026-05-30",
             "updated": "2026-05-30",
             "source": "slack",
-            "tags": ["media"],
+            "tags": ["reading"],
             "status": "watching",  # not in the action status vocab
             "priority": "super-high",  # not in PRIORITY_VOCAB
             "media_type": "scroll",  # not in MEDIA_TYPE_VOCAB
@@ -561,7 +562,7 @@ def test_frontmatter_bad_vocab_values_flagged(vault: Vault, config: Config) -> N
     msgs = [
         f.message
         for f in _engine(vault, config).check_frontmatter()
-        if f.path == "actions/bad.md"
+        if f.path == "media/bad.md"
     ]
     assert any("status 'watching'" in m for m in msgs)
     assert any("priority 'super-high'" in m for m in msgs)
@@ -605,7 +606,6 @@ def test_frontmatter_valid_page_passes(vault: Vault, config: Config) -> None:
             "source": "slack",
             "tags": ["chores"],
             "personal": False,
-            "kind": "task",
             "status": "todo",
             "priority": "High",
         },
@@ -618,53 +618,53 @@ def test_frontmatter_valid_page_passes(vault: Vault, config: Config) -> None:
     assert findings == []
 
 
-def test_frontmatter_action_missing_kind_flagged(vault: Vault, config: Config) -> None:
-    """An action missing its required ``kind`` field is flagged (ADR 0013)."""
+def test_frontmatter_valid_media_page_passes(vault: Vault, config: Config) -> None:
+    """A fully-valid media page (its own type/folder, ADR 0015) passes the check."""
     _write(
         vault,
-        "actions/no-kind.md",
+        "media/ddia.md",
         {
-            "title": "No kind",
-            "type": "action",
+            "title": "DDIA",
+            "type": "media",
             "created": "2026-05-30",
             "updated": "2026-05-30",
             "source": "slack",
-            "tags": ["chores"],
-            "personal": False,
+            "tags": ["reading"],
+            "personal": True,
+            "summary": "A book to read.",
             "status": "todo",
+            "media_type": "book",
+        },
+    )
+    findings = [
+        f
+        for f in _engine(vault, config).check_frontmatter()
+        if f.path == "media/ddia.md"
+    ]
+    assert findings == []
+
+
+def test_frontmatter_media_missing_status_flagged(vault: Vault, config: Config) -> None:
+    """A media page missing its required ``status`` field is flagged (ADR 0015)."""
+    _write(
+        vault,
+        "media/no-status.md",
+        {
+            "title": "No status",
+            "type": "media",
+            "created": "2026-05-30",
+            "updated": "2026-05-30",
+            "source": "slack",
+            "tags": ["reading"],
+            "personal": True,
         },
     )
     msgs = [
         f.message
         for f in _engine(vault, config).check_frontmatter()
-        if f.path == "actions/no-kind.md"
+        if f.path == "media/no-status.md"
     ]
-    assert any("'kind'" in m for m in msgs)
-
-
-def test_frontmatter_kind_outside_vocab_flagged(vault: Vault, config: Config) -> None:
-    """A ``kind`` value outside the action vocabulary is flagged."""
-    _write(
-        vault,
-        "actions/bad-kind.md",
-        {
-            "title": "Bad kind",
-            "type": "action",
-            "created": "2026-05-30",
-            "updated": "2026-05-30",
-            "source": "slack",
-            "tags": ["chores"],
-            "personal": False,
-            "kind": "movie",  # not in the action kind vocab
-            "status": "todo",
-        },
-    )
-    msgs = [
-        f.message
-        for f in _engine(vault, config).check_frontmatter()
-        if f.path == "actions/bad-kind.md"
-    ]
-    assert any("kind 'movie'" in m for m in msgs)
+    assert any("'status'" in m for m in msgs)
 
 
 def test_frontmatter_personal_must_be_real_boolean(
@@ -794,32 +794,31 @@ def test_overdue_open_action_flagged_closed_exempt(
 
 
 def test_media_backlog_cold_flagged(vault: Vault, config: Config) -> None:
-    """A still-todo media action older than MEDIA_STALE_DAYS is flagged; recent is not.
+    """A still-todo media page older than MEDIA_STALE_DAYS is flagged; recent is not.
 
-    ADR 0013: a media item is an ``action`` with ``kind: media`` under ``actions/``;
-    an unconsumed backlog item is simply still ``todo``.
+    ADR 0015: a media item is its own ``type: media`` under ``media/``; an unconsumed
+    backlog item is simply still ``todo``.
     """
     cold = (TODAY - _dt.timedelta(days=MEDIA_STALE_DAYS + 1)).isoformat()
     warm = (TODAY - _dt.timedelta(days=MEDIA_STALE_DAYS - 1)).isoformat()
     for slug, created in (("cold", cold), ("warm", warm)):
         _write(
             vault,
-            f"actions/{slug}.md",
+            f"media/{slug}.md",
             {
                 "title": slug,
-                "type": "action",
+                "type": "media",
                 "created": created,
                 "updated": created,
                 "source": "slack",
                 "tags": ["reading"],
-                "kind": "media",
                 "status": "todo",
             },
         )
     cold_paths = {
         f.path for f in _engine(vault, config).check_stale() if f.name == "media-cold"
     }
-    assert cold_paths == {"actions/cold.md"}
+    assert cold_paths == {"media/cold.md"}
 
 
 # --------------------------------------------------------------------------------------
@@ -1297,7 +1296,7 @@ def test_parse_taxonomy_tags_absent_heading_is_empty() -> None:
 def test_constants_align_with_contract() -> None:
     """The folder/spine/excluded constants match the SPEC shape."""
     assert CURATED_DIRS == ("entities", "notes", "memories")
-    assert ACTIONABLE_DIRS == ("actions",)
+    assert ACTIONABLE_DIRS == ("actions", "media")
     assert SPINE_FILES == frozenset({"index.md", "SCHEMA.md", "log.md"})
     assert {"_archive", "_bases", "_meta"} <= EXCLUDED_DIRS
     assert PAGE_SIZE_LIMIT == 200

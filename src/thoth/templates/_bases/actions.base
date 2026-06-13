@@ -1,8 +1,7 @@
 filters:
   and:
-    - file.inFolder("actions")
+    - type == "action"
     - file.ext == "md"
-    - kind != "media"
     - personal != true
     - status != "done"
     - status != "cancelled"
@@ -13,7 +12,6 @@ properties:
   status:    { displayName: Status }
   due_date:  { displayName: Due }
   priority:  { displayName: Priority }
-  kind:      { displayName: Kind }
   summary:   { displayName: Summary }
 views:
   - type: table
@@ -22,7 +20,7 @@ views:
       or:
         - due_date.isEmpty()
         - due_date <= now() + "7 days"
-    order: [file.name, due_date, priority, status, kind, summary]
+    order: [file.name, due_date, priority, status, summary]
     sort:
       - { property: formula.date_bucket, direction: ASC }
       - { property: due_date, direction: ASC }
@@ -33,14 +31,14 @@ views:
       or:
         - due_date.isEmpty()
         - due_date <= now() + "30 days"
-    order: [file.name, due_date, priority, status, kind, summary]
+    order: [file.name, due_date, priority, status, summary]
     sort:
       - { property: formula.date_bucket, direction: ASC }
       - { property: due_date, direction: ASC }
       - { property: formula.prio_rank, direction: ASC }
   - type: table
     name: All
-    order: [file.name, due_date, priority, status, kind, summary]
+    order: [file.name, due_date, priority, status, summary]
     sort:
       - { property: formula.date_bucket, direction: ASC }
       - { property: due_date, direction: ASC }

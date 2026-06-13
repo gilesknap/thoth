@@ -6,6 +6,12 @@ Date: 2026-05-31
 
 Accepted
 
+Partly superseded by
+[ADR 0015](0015-media-as-type-loose-folders-type-driven-dashboards.md): the strict
+folder-by-type contract below is loosened (the folder becomes a browsing convenience; the
+dashboards filter on the `type` property), and `media` is split back out of `actions/`
+into its own `type` and `media/` folder.
+
 ## Context
 
 The vault has always partitioned every non-`raw` page into two *families* by its

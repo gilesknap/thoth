@@ -17,7 +17,6 @@ import pytest
 
 from thoth.config import Config, load_config
 from thoth.vault import (
-    ACTION_KIND_VOCAB,
     ACTION_STATUS_VOCAB,
     ACTIONABLE_DIRS,
     ASSET_SLUG_RE,
@@ -128,25 +127,27 @@ def _valid_frontmatter(**overrides: object) -> dict[str, object]:
 # --- module constants --------------------------------------------------------------
 
 
-def test_type_constants_four_content_types_plus_inbox() -> None:
-    """VALID_TYPES is the four content types plus the inbox machinery type."""
-    assert VALID_TYPES == {"entity", "note", "memory", "action", INBOX_TYPE}
+def test_type_constants_five_content_types_plus_inbox() -> None:
+    """VALID_TYPES is the five content types plus the inbox machinery type."""
+    assert VALID_TYPES == {"entity", "note", "memory", "action", "media", INBOX_TYPE}
     assert INBOX_TYPE == "inbox"
     # inbox is machinery, not a classify target, so it is absent from the enumeration.
     assert INBOX_TYPE not in TYPE_ENUMERATION
     # REFERENCE_TYPES are the lifecycle-free types: everything that is not actionable.
     assert REFERENCE_TYPES == {"entity", "note", "memory"}
     assert "action" not in REFERENCE_TYPES
+    assert "media" not in REFERENCE_TYPES
     assert VALID_SOURCES == {"slack", "mcp", "web", "manual", "cron", "import"}
 
 
-def test_folder_type_contract_is_four_flat_folders_plus_inbox() -> None:
-    """The folder contract is the 4 flat content folders plus inbox (ADR 0005)."""
+def test_folder_type_contract_is_five_flat_folders_plus_inbox() -> None:
+    """The folder contract is the 5 flat content folders plus inbox (ADR 0005, 0015)."""
     assert FOLDER_TYPE_CONTRACT == {
         "entities": {"entity"},
         "notes": {"note"},
         "memories": {"memory"},
         "actions": {"action"},
+        "media": {"media"},
         "inbox": {"inbox"},
     }
     for allowed in FOLDER_TYPE_CONTRACT.values():
@@ -162,13 +163,13 @@ def test_folder_type_contract_is_four_flat_folders_plus_inbox() -> None:
     )
 
 
-def test_type_enumeration_is_the_four_content_types() -> None:
-    """TYPE_ENUMERATION (the classify prompt's list) is the four content types.
+def test_type_enumeration_is_the_five_content_types() -> None:
+    """TYPE_ENUMERATION (the classify prompt's list) is the five content types.
 
     The classify prompt derives its "type (one of ...)" list from this tuple, so it must
-    enumerate the four content types once with no extras and no inbox machinery type.
+    enumerate the five content types once with no extras and no inbox machinery type.
     """
-    assert TYPE_ENUMERATION == ("entity", "note", "memory", "action")
+    assert TYPE_ENUMERATION == ("entity", "note", "memory", "action", "media")
     assert set(TYPE_ENUMERATION) == VALID_TYPES - {INBOX_TYPE}
     assert len(TYPE_ENUMERATION) == len(set(TYPE_ENUMERATION))  # no duplicates
 
@@ -186,14 +187,13 @@ def test_content_and_inbox_field_sets() -> None:
     )
     # Inbox is machinery: no tags, no content universals.
     assert "tags" not in INBOX_REQUIRED_FIELDS
-    # Every content type (all four) now carries the one-line summary gloss.
+    # Every content type (all five) now carries the one-line summary gloss.
     assert SUMMARY_TYPES == set(TYPE_ENUMERATION)
 
 
 def test_action_vocabularies_single_sourced() -> None:
-    """The action status/kind vocabularies are the ADR 0013 single vocabularies."""
+    """The action status vocabulary is the ADR 0013 single lifecycle (no kind, 0015)."""
     assert ACTION_STATUS_VOCAB == ("todo", "in_progress", "done", "cancelled")
-    assert ACTION_KIND_VOCAB == ("task", "media", "errand")
 
 
 def test_folder_dir_tuples_partition_the_folder_contract() -> None:
@@ -204,7 +204,7 @@ def test_folder_dir_tuples_partition_the_folder_contract() -> None:
     folder must be exactly the top-level folders the contract governs, with no overlap.
     """
     assert CURATED_DIRS == ("entities", "notes", "memories")
-    assert ACTIONABLE_DIRS == ("actions",)
+    assert ACTIONABLE_DIRS == ("actions", "media")
     assert set(CURATED_DIRS).isdisjoint(ACTIONABLE_DIRS)
     assert set(CURATED_DIRS) | set(ACTIONABLE_DIRS) | {"inbox"} == set(
         FOLDER_TYPE_CONTRACT
@@ -374,6 +374,7 @@ def test_validate_folder_type_ok(vault: Vault) -> None:
     Vault.validate_folder_type("notes", "note")
     Vault.validate_folder_type("memories", "memory")
     Vault.validate_folder_type("actions", "action")
+    Vault.validate_folder_type("media", "media")
     Vault.validate_folder_type("inbox", "inbox")
 
 
@@ -384,6 +385,8 @@ def test_validate_folder_type_ok(vault: Vault) -> None:
         ("notes", "action"),
         ("actions", "entity"),
         ("notes", "entity"),
+        ("actions", "media"),
+        ("media", "action"),
     ],
 )
 def test_validate_folder_type_mismatch(

@@ -1,8 +1,7 @@
 filters:
   and:
-    - file.inFolder("actions")
+    - type == "media"
     - file.ext == "md"
-    - kind == "media"
     - status != "done"
     - status != "cancelled"
 formulas:

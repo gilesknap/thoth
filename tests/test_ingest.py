@@ -405,9 +405,9 @@ def _file_plan_json(
         "body": body,
         "wikilinks": wikilinks or ["[[attention]]", "[[neural-networks]]"],
     }
-    if page_type == "action":
-        # Action pages require kind + status (validate_file_plan, ADR 0013).
-        page["frontmatter"].update({"kind": "task", "status": "todo"})
+    if page_type in ("action", "media"):
+        # Action and media pages require status (validate_file_plan, ADR 0013/0015).
+        page["frontmatter"]["status"] = "todo"
     if summary is not None:
         page["summary"] = summary
     if embeds is not None:

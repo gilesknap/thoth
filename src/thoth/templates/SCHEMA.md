@@ -2,19 +2,23 @@
 
 ## Domain
 Personal knowledge management for one user: everything captured — research/reference
-knowledge, todos, a to-consume backlog, and personal memories — lands in one of four
+knowledge, todos, a to-consume backlog, and personal memories — lands in one of five
 flat, equal folders. The only behavioural distinction is whether a page is *actionable*
-(carries `status`/`due`), read straight off the frontmatter, not a folder family.
+(carries `status`/`due`), read straight off the frontmatter `type`, not a folder family.
 The vault is the single source of truth. Hindsight indexes it; it is never the store.
 
-## Layers (4 flat content folders + machinery, ADR 0005)
+## Layers (5 flat content folders + machinery, ADR 0005, 0015)
+The folder is a loose browsing convenience — Thoth files each page in its canonical
+folder, but the Bases dashboards filter on the `type` property, so moving a file between
+folders never hides it. `inbox/` and `raw/` stay folder-strict machinery.
 - raw/      Immutable sources. The agent READS but NEVER edits these.
 - entities/  Reference. Nouns: people, orgs, products, models, devices. `type: entity`.
 - notes/     Reference. Everything written, differentiated by a `tags:` value
              (concept / comparison / query). `type: note`.
 - memories/  Reference. Personal memories/milestones. `type: memory`.
-- actions/   Actionable (`status`/`due`). Todos, errands AND the to-consume queue;
-             `kind` separates them (a media item is `kind: media`). `type: action`.
+- actions/   Actionable (`status`/`due`). Todos and errands. `type: action`.
+- media/     Actionable (`status`/`due`). The to-consume queue (books/films/...).
+             `type: media`.
 - inbox/     Machinery: durable pre-curate holding pages. `type: inbox`.
 - index.md (Home) / SCHEMA.md / log.md   Navigational + structural backbone.
 
@@ -28,22 +32,22 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
 - Provenance: on pages synthesising 3+ sources, append ^[raw/articles/source.md] to
   paragraphs whose claims trace to one source.
 
-## Frontmatter (ADR 0013)
+## Frontmatter (ADR 0013, 0015)
 Universal (every content page): title, type, created, updated, source, tags,
 summary, personal.
-type is one of: entity, note, memory, action (plus the inbox machinery type).
+type is one of: entity, note, memory, action, media (plus the inbox machinery type).
 `summary` is one crisp line saying what the page is about — its canonical,
 rebuildable gloss (no separate index catalog). `personal` is a real boolean:
 true when the item concerns the owner's private life (people, errands,
 books/films to watch), false for work / technical / general knowledge — the
 property the Work·Personal dashboard views filter on.
 
-Action pages (`type: action`) additionally carry:
-- kind: task | media | errand   (a media item is `kind: media`)
-- status: todo | in_progress | done | cancelled   (one lifecycle for every kind)
+Action and media pages (`type: action`, `type: media`) additionally carry:
+- status: todo | in_progress | done | cancelled   (one lifecycle for both types)
 - due_date: YYYY-MM-DD (optional), priority: Urgent | High | Medium | Low (optional)
-- when kind is media: media_type (book/film/tv/podcast/article/video/music) and
-  url when known.
+Media pages (`type: media`) also carry, when known:
+- media_type: book | film | tv | podcast | article | video | music
+- url
 
 Memory pages (`type: memory`) carry memory_date: YYYY-MM-DD — when the memory
 happened (falls back to `created` when omitted).
@@ -61,7 +65,7 @@ Compute sha256 over the body only. On re-ingest of the same URL: recompute, comp
 skip if identical, flag drift + update if changed.
 
 ## Tag Taxonomy
-Tags are descriptive topic labels ONLY — never duplicate `type`, `kind`, or
+Tags are descriptive topic labels ONLY — never duplicate `type` or
 `personal` as a tag (those are frontmatter properties the views filter on).
 Add a tag HERE before using it (prevents sprawl). Seed set:
 - Note kind: concept, comparison, query, reference, how-to
