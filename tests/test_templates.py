@@ -100,7 +100,9 @@ def test_date_window_views_always_include_undated_and_sort_expired_first() -> No
     overdue (0) first, then upcoming (1), then undated (2) last -- real deadlines lead
     and undated items trail as a backlog, but nothing hides.
     """
-    for base in ("actions", "personal", "media"):
+    # The todo bases (action/personal) sort by due date; media sorts by recency
+    # instead (see test_media_sorts_by_priority_then_recency), so it is excluded here.
+    for base in ("actions", "personal"):
         data: Any = yaml.safe_load(base_text(base))
         # The bucket formula is defined and is the primary sort key on every view.
         assert "date_bucket" in data["formulas"], base
@@ -125,6 +127,21 @@ def test_media_base_shows_a_personal_column() -> None:
     assert "personal" in media["properties"]
     for view in media["views"]:
         assert "personal" in view["order"], view["name"]
+
+
+def test_media_sorts_by_priority_then_recency_with_created_column() -> None:
+    """The consume queue surfaces recent additions: it sorts by priority, then by
+    ``created`` descending (most-recently-added first), and shows an Added column.
+
+    Media is mostly undated, so the due-date bucketing the todo bases use is moot here;
+    recency is the useful signal instead.
+    """
+    media: Any = yaml.safe_load(base_text("media"))
+    assert "created" in media["properties"]
+    for view in media["views"]:
+        assert "created" in view["order"], view["name"]
+        assert view["sort"][0] == {"property": "formula.prio_rank", "direction": "ASC"}
+        assert view["sort"][1] == {"property": "created", "direction": "DESC"}
 
 
 def test_recent_base_excludes_archive_via_nested_not() -> None:
