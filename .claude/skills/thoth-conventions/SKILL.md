@@ -135,3 +135,37 @@ problem discovered in passing rather than folding it into the current change.
   `gh run rerun` replays the original merge snapshot and proves nothing. For a
   stack, ripple the fix upward with plain merge commits (base → each branch) —
   no rebase needed, and each push triggers fresh runs.
+
+## Obsidian Bases dashboards (`src/thoth/templates/_bases/*.base`)
+
+The index dashboards are `.base` YAML, one per **item class**, views differing only by
+date window (ADR 0014/0015). Authoring foot-guns, all found live (CI can't render Bases):
+
+- **`due_date.isEmpty()` — NOT `due_date == ""` — matches a *missing* property.** Most
+  pages have no `due_date` key at all (absent, not blank); `== ""` only matches
+  present-but-empty, so undated items silently vanished from every bounded view. Use the
+  `.isEmpty()` method form in both filters and formulas. (Operator-style `is empty` did
+  *not* work when tested; `.isEmpty()` is canonical.)
+- **Filters and formulas share one expression language**; the docs' operator table is
+  incomplete (omits `isEmpty()`), so verify in real Obsidian, not just the docs.
+- **Sort undated items deterministically with a bucket formula**, e.g.
+  `date_bucket: 'if(due_date.isEmpty(), 2, if(due_date < now(), 0, 1))'` → overdue(0) →
+  upcoming(1) → undated(2); plain `due_date ASC` leaves empty-date ordering
+  version-dependent. The consume queue (`media`) instead sorts by priority then
+  `created` DESC (recency), since media is mostly undated.
+- **Dashboards filter on the `type` property, not folder/`kind`** (ADR 0015: `media` is a
+  type, `kind` retired; folders are a loose browsing convenience).
+
+When retiring a frontmatter facet (e.g. `kind`), grep the **whole** capture path, not
+just the vocab/validator: the curate `_SUBMIT_FILE_PLAN_TOOL` schema *description* and the
+`_file_as_is` defaults in `ingest/curate.py` re-introduce a field the model then emits
+(the tool schema is `additionalProperties: True`), and lint that merely stops *requiring*
+a field won't *forbid* it — so the cruft reappears on every new page despite green CI.
+
+## `personal` keys off the subject, not the task shape
+
+The universal `personal` boolean is true for the owner's *private-life subject* (home,
+family, hobbies, personal admin, books/films), false for work/technical/professional —
+**a chore/errand being task-shaped does not make it personal** (a work errand like
+booking a meeting room is `personal: false`). Don't list "errands" as a bare personal
+example in the prompt; it biases every chore toward personal.
