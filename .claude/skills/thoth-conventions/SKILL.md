@@ -56,6 +56,26 @@ changes, document only the new way and assume a clean slate. The vault itself is
 disposable test data during this phase — never write backfill/migration code for
 existing vault content.
 
+## Bulk vault migrations — sync first; obsidian-git mis-merges YAML silently
+
+A migration that rewrites **every** page's frontmatter is uniquely dangerous under the
+vault's two-way obsidian-git sync. Git merges frontmatter as **text, not YAML**: when the
+migration commit later merges against a divergent obsidian-git "vault backup" line, git
+auto-interleaves the old and new frontmatter on non-overlapping lines **with no conflict
+markers** — producing duplicate keys and orphaned `- tag` list items that commit silently.
+This actually happened to the ADR 0013 schema migration: the clean migration commit was
+corrupted by the very next auto-backup merge, breaking several `actions/` pages.
+
+Before any bulk frontmatter rewrite: **sync/pull every device first**, run the migration on
+one checkout, push, then pull everywhere before editing resumes — so the migration never
+merges against a stale backup line. Do **not** add a vault pre-commit lint hook as a guard:
+it is fiddly on mobile (a failed commit blocks the sync) and `pre-commit` does not fire on
+merge commits anyway, which is exactly where this corruption is born. The failure is
+**silent** downstream too — `thoth lint` and the nightly reindex both catch the YAML parse
+error and skip the page (`engine.py` does `except yaml.YAMLError: continue`), so a
+mis-merged page quietly drops out of the Hindsight index rather than raising. The cheap,
+reliable safeguard is the pull-first habit, not tooling.
+
 ## Live config/code is the source of truth — not a stale issue body or plan
 
 Issue bodies and saved plans capture intent *when written* and go stale as the code
