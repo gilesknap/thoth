@@ -16,14 +16,16 @@ Two kinds of template ship:
   embeds the Bases dashboards; ``SCHEMA.md`` carries the frontmatter contract and
   the ``## Tag Taxonomy`` section that :func:`thoth.lint.parse_taxonomy_tags`
   reads as its single source of truth; ``log.md`` is the append-only action log.
-* **Bases dashboards** -- :data:`BASE_NAMES` (``actions``, ``reference``,
-  ``triage``): YAML ``.base`` files under ``_bases/`` used by ``index.md``. The
-  three mirror the vault lifecycle (ADR 0013): ``actions`` (the actionable layer,
-  with Work / Personal / All view variants switched via the embed's view
-  dropdown), ``reference`` (the curated Notes / Entities / Memories layer) and
-  ``triage`` (machinery: the inbox holding queue + vault-wide recent activity).
-  Every ``filters:`` block is an object keyed by exactly one of ``and:`` /
-  ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
+* **Bases dashboards** -- :data:`BASE_NAMES` (``actions``, ``personal``,
+  ``media``, ``inbox``, ``recent``, ``reference``): YAML ``.base`` files under
+  ``_bases/`` used by ``index.md``. Each base is one *class* of item and its views
+  differ only by date window (ADR 0014): ``actions`` (open work todos) and
+  ``personal`` (open personal todos) each ship ``7 Days`` / ``30 Days`` / ``All``;
+  ``media`` is the consume queue (work + personal, with a personal column);
+  ``inbox`` is the unfiled holding queue; ``recent`` is vault-wide activity
+  (``7`` / ``30`` / ``60 Days``); ``reference`` is the curated Notes / Entities /
+  Memories layer. Every ``filters:`` block is an object keyed by exactly one of
+  ``and:`` / ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
 
 **Bases vs Dataview is a VPS / Obsidian-time decision (SPEC section 15, open item
 2), so this module ships and documents BOTH.** The *v1 target is Bases* if the
@@ -72,8 +74,11 @@ __all__ = [
 #: ``index.md`` embeds them.
 BASE_NAMES: tuple[str, ...] = (
     "actions",
+    "personal",
+    "media",
+    "inbox",
+    "recent",
     "reference",
-    "triage",
 )
 
 #: The three vault-spine file names shipped as package data.

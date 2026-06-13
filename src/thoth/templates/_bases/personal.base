@@ -3,7 +3,7 @@ filters:
     - file.inFolder("actions")
     - file.ext == "md"
     - kind != "media"
-    - personal != true
+    - personal == true
     - status != "done"
     - status != "cancelled"
 formulas:

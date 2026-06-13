@@ -934,7 +934,7 @@ def test_seed_writes_spine_and_creates_folders(bare_vault: Vault) -> None:
     root = bare_vault.root
     for name in ("index.md", "SCHEMA.md", "log.md"):
         assert (root / name).is_file()
-    for base in ("actions", "reference", "triage"):
+    for base in ("actions", "personal", "media", "inbox", "recent", "reference"):
         assert (root / "_bases" / f"{base}.base").is_file()
     for folder in SEED_DIRS:
         assert (root / folder).is_dir()
