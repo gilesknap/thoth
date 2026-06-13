@@ -728,6 +728,20 @@ def test_file_plan_contract_text_covers_validator_contract() -> None:
     assert "tagged 'media'" not in text
 
 
+def test_file_plan_contract_personal_keys_off_subject_not_errand() -> None:
+    """``personal`` guidance keys off the subject, not whether the item is an errand.
+
+    The live miss: "book the seminar room" (a work errand) came back personal: true
+    because the old wording listed *errands* as a canonical personal example, biasing
+    every chore-shaped task toward personal regardless of work context.
+    """
+    text = file_plan_contract_text().lower()
+    assert "subject" in text
+    # An errand being a chore must NOT imply personal; a work errand is personal: false.
+    assert "errand does not make it personal" in text
+    assert "work errand" in text and "personal: false" in text
+
+
 def test_file_plan_contract_text_describes_a_pages_envelope() -> None:
     """The contract leads with the required ``pages`` array shape (not just prose)."""
     text = file_plan_contract_text()

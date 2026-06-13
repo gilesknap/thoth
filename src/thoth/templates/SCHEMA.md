@@ -37,10 +37,13 @@ Universal (every content page): title, type, created, updated, source, tags,
 summary, personal.
 type is one of: entity, note, memory, action, media (plus the inbox machinery type).
 `summary` is one crisp line saying what the page is about — its canonical,
-rebuildable gloss (no separate index catalog). `personal` is a real boolean:
-true when the item concerns the owner's private life (people, errands,
-books/films to watch), false for work / technical / general knowledge — the
-property the Work·Personal dashboard views filter on.
+rebuildable gloss (no separate index catalog). `personal` is a real boolean that
+keys off the **subject, not whether it is a chore**: true when the item concerns
+the owner's private life (home, family, friends, hobbies, personal admin,
+books/films to watch), false for work / technical / professional / general
+knowledge. A task being an errand does not make it personal — a work errand (e.g.
+booking a meeting room) is `personal: false`. It is the property the
+Work·Personal dashboard views filter on.
 
 Action and media pages (`type: action`, `type: media`) additionally carry:
 - status: todo | in_progress | done | cancelled   (one lifecycle for both types)

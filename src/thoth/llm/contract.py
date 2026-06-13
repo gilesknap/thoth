@@ -76,9 +76,11 @@ def file_plan_contract_text() -> str:
         "}\n"
         f"Folder -> required type: {folder_types}.\n"
         "A note carries a tag for its sub-kind (concept/comparison/query).\n"
-        '"personal" is true when the item concerns the owner\'s private life (people, '
-        "errands, books/films to watch), false for work / technical / general "
-        "knowledge.\n"
+        '"personal" keys off the SUBJECT, not whether it is a chore: true when the '
+        "item concerns the owner's private life (home, family, friends, hobbies, "
+        "personal admin, books/films to watch), false for work / technical / "
+        "professional / general knowledge. A task being an errand does not make it "
+        "personal -- a work errand (e.g. booking a meeting room) is personal: false.\n"
         'Author a crisp one-line "summary" for EVERY page, including actions and '
         "media; it becomes the page's canonical one-line gloss in frontmatter.\n"
         f'Action and media pages additionally require: "status": one of [{statuses}] '
