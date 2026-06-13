@@ -41,7 +41,7 @@ property the Work·Personal dashboard views filter on.
 Action pages (`type: action`) additionally carry:
 - kind: task | media | errand   (a media item is `kind: media`)
 - status: todo | in_progress | done | cancelled   (one lifecycle for every kind)
-- due_date: YYYY-MM-DD (optional), priority: "1 - Urgent".."4 - Low" (optional)
+- due_date: YYYY-MM-DD (optional), priority: Urgent | High | Medium | Low (optional)
 - when kind is media: media_type (book/film/tv/podcast/article/video/music) and
   url when known.
 

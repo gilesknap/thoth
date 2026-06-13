@@ -67,7 +67,7 @@ class ActionItem:
     status: str
     """The action ``status`` (e.g. ``todo`` / ``in_progress``)."""
     priority: str | None
-    """The action ``priority`` (e.g. ``2 - High``), or ``None`` when unset."""
+    """The action ``priority`` (e.g. ``High``), or ``None`` when unset."""
     due_date: date | None
     """The parsed ``due_date``, or ``None`` when absent / malformed."""
     wikilink: str

@@ -845,13 +845,11 @@ def test_title_falls_back_to_slug(vault: Vault, config: Config) -> None:
 
 def test_action_priority_surfaces(vault: Vault, config: Config) -> None:
     """priority is parsed and rendered on the action line."""
-    _action(
-        vault, "p", title="Priority task", due_date="2026-06-02", priority="2 - High"
-    )
+    _action(vault, "p", title="Priority task", due_date="2026-06-02", priority="High")
     engine = _engine(vault, config)
     item = engine.open_actions()[0]
-    assert item.priority == "2 - High"
-    assert "2 - High" in engine.daily_digest().text
+    assert item.priority == "High"
+    assert "High" in engine.daily_digest().text
 
 
 # --------------------------------------------------------------------------------------

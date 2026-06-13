@@ -2,6 +2,8 @@ filters:
   and:
     - file.inFolder("actions")
     - file.ext == "md"
+formulas:
+  prio_rank: 'if(priority == "Urgent", 0, if(priority == "High", 1, if(priority == "Medium", 2, if(priority == "Low", 3, 4))))'
 properties:
   status:     { displayName: Status }
   due_date:   { displayName: Due }
@@ -24,7 +26,7 @@ views:
     order: [file.name, due_date, priority, status, kind]
     sort:
       - { property: due_date, direction: ASC }
-      - { property: priority, direction: ASC }
+      - { property: formula.prio_rank, direction: ASC }
   - type: table
     name: Imminent · Personal
     filters:
@@ -37,7 +39,7 @@ views:
     order: [file.name, due_date, priority, status, kind]
     sort:
       - { property: due_date, direction: ASC }
-      - { property: priority, direction: ASC }
+      - { property: formula.prio_rank, direction: ASC }
   - type: table
     name: Imminent · All
     filters:
@@ -49,7 +51,7 @@ views:
     order: [file.name, due_date, priority, status, kind, personal]
     sort:
       - { property: due_date, direction: ASC }
-      - { property: priority, direction: ASC }
+      - { property: formula.prio_rank, direction: ASC }
   - type: table
     name: Open
     filters:
@@ -60,7 +62,7 @@ views:
         - personal != true
     order: [file.name, due_date, priority, status, kind, summary]
     sort:
-      - { property: priority, direction: ASC }
+      - { property: formula.prio_rank, direction: ASC }
       - { property: due_date, direction: ASC }
   - type: table
     name: Open · Personal
@@ -72,7 +74,7 @@ views:
         - personal == true
     order: [file.name, due_date, priority, status, kind, summary]
     sort:
-      - { property: priority, direction: ASC }
+      - { property: formula.prio_rank, direction: ASC }
       - { property: due_date, direction: ASC }
   - type: table
     name: Open · All
@@ -83,7 +85,7 @@ views:
         - kind != "media"
     order: [file.name, due_date, priority, status, kind, personal, summary]
     sort:
-      - { property: priority, direction: ASC }
+      - { property: formula.prio_rank, direction: ASC }
       - { property: due_date, direction: ASC }
   - type: table
     name: Media
@@ -93,7 +95,7 @@ views:
         - status != "done"
         - status != "cancelled"
     order: [file.name, media_type, status, priority, url, summary]
-    sort: [{ property: priority, direction: ASC }]
+    sort: [{ property: formula.prio_rank, direction: ASC }]
   - type: table
     name: Media · Work
     filters:
@@ -103,7 +105,7 @@ views:
         - status != "cancelled"
         - personal != true
     order: [file.name, media_type, status, priority, url, summary]
-    sort: [{ property: priority, direction: ASC }]
+    sort: [{ property: formula.prio_rank, direction: ASC }]
   - type: table
     name: Media · Personal
     filters:
@@ -113,7 +115,7 @@ views:
         - status != "cancelled"
         - personal == true
     order: [file.name, media_type, status, priority, url, summary]
-    sort: [{ property: priority, direction: ASC }]
+    sort: [{ property: formula.prio_rank, direction: ASC }]
   - type: table
     name: All Actions
     order: [file.name, status, kind, due_date, priority, personal, summary]

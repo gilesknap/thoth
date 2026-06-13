@@ -196,8 +196,15 @@ Replaces the old ``action-kind/*`` tag facet -- Bases view filters need a frontm
 property, not a nested tag. Ordered for prompt rendering.
 """
 
-PRIORITY_VOCAB: tuple[str, ...] = ("1 - Urgent", "2 - High", "3 - Medium", "4 - Low")
-"""Allowed ``priority`` values (SPEC frontmatter table); ordered for prompts."""
+PRIORITY_VOCAB: tuple[str, ...] = ("Urgent", "High", "Medium", "Low")
+"""Allowed ``priority`` values, ordered high-to-low (ADR 0013); the curate prompt
+renders them in this order.
+
+Bare severity labels, not sort-prefixed (the old ``1 - Urgent``..``4 - Low``). The
+Bases dashboards recover the severity ordering through a ``prio_rank`` formula in
+``actions.base`` (Urgent=0..Low=3, unknown=4) and sort by ``formula.prio_rank``, so
+the stored value stays a clean label and an ASC string sort never sees the labels.
+"""
 
 MEDIA_TYPE_VOCAB: tuple[str, ...] = (
     "book",
