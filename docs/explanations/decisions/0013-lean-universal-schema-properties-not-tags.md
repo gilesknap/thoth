@@ -21,6 +21,13 @@ its own `type`, `errand` folds into `action`, and the dashboards filter on `type
 of folder + `kind`. The rest of the lean schema (properties not tags, the single `status`
 lifecycle, bare priority labels) stands.
 
+The "view-critical facets are properties, not tags" rule is **clarified** by the
+[amendment at the foot](#amendment--grouping-may-bucket-on-tags-2026-06-13)
+(2026-06-13): the rule governs what a view *filters or sorts* on; a view may *group* on
+a tag-derived key, because grouping buckets every page (an absent tag falls into a
+visible `uncategorized` group) and so cannot reintroduce the silent-incompleteness
+failure this ADR exists to prevent.
+
 ## Context
 
 The index page's Bases dashboards were broken in two independent ways, confirmed
@@ -100,3 +107,29 @@ and memories carried `sensitivity/personal` too).
   and verified with `thoth lint` before pushing.
 - Fewer knobs: anything we later want a view to filter on must first earn a
   property + curate + lint slot, which is the point.
+
+## Amendment — grouping may bucket on tags (2026-06-13)
+
+The reference browse layer (the `notes` / `entities` / `memories` bases) groups its card
+views on a tag-derived key — Notes ▸ *By Topic* on the first `domain/*` tag, Entities ▸
+*By Kind* on `entity-kind/*` — so ~150 reference pages become browsable by subject.
+
+This does **not** weaken the rule above. The failure that rule prevents is a page being
+*silently dropped* from a view when an unreliable, LLM-applied tag is missing (the live
+near-empty Media and personal dashboards). Grouping cannot cause that failure:
+
+- The base filters on a property the pipeline enforces (`type == "note"`), so **every**
+  page of that type is in the view.
+- The tag only chooses which *bucket* a page sits in. A page with no matching tag is not
+  hidden — it falls into a visible `uncategorized` group.
+
+So the operative rule is sharpened, not broken:
+
+> View **membership and sort order** must key on enforced frontmatter properties, never
+> on tags — a missing tag would silently drop or mis-order a page. A view **may group**
+> on a tag-derived display bucket, since an absent tag yields a visible `uncategorized`
+> group rather than an invisible page.
+
+Concretely: `tags.contains(...)` in a base `filters:` block stays forbidden (still
+guarded by `test_no_base_filters_on_tags`); deriving a group key from tags via a
+`formula:` consumed by `groupBy:` is permitted.

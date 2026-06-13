@@ -78,7 +78,9 @@ BASE_NAMES: tuple[str, ...] = (
     "media",
     "inbox",
     "recent",
-    "reference",
+    "notes",
+    "entities",
+    "memories",
 )
 
 #: The three vault-spine file names shipped as package data.

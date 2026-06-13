@@ -1,0 +1,46 @@
+filters:
+  and:
+    - file.ext == "md"
+    - type == "note"
+formulas:
+  topic: if(tags.filter(value.toString().contains("domain/")).isEmpty(), "uncategorized", tags.filter(value.toString().contains("domain/"))[0].toString().replace("#", "").replace("domain/", ""))
+properties:
+  formula.topic:
+    displayName: Topic
+  summary:
+    displayName: Summary
+  tags:
+    displayName: Tags
+  updated:
+    displayName: Updated
+views:
+  - type: cards
+    name: Recent
+    order:
+      - summary
+      - tags
+      - updated
+    sort:
+      - property: updated
+        direction: DESC
+  - type: cards
+    name: By Topic
+    groupBy:
+      property: formula.topic
+      direction: ASC
+    order:
+      - summary
+      - updated
+    sort:
+      - property: updated
+        direction: DESC
+  - type: table
+    name: Table
+    order:
+      - file.name
+      - summary
+      - tags
+      - updated
+    sort:
+      - property: updated
+        direction: DESC

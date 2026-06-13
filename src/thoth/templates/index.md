@@ -10,7 +10,7 @@ updated: 2026-06-13
 > [!danger]+ Work
 > ![[_bases/actions.base#7 Days]]
 
-> [!tip]+ Personal
+> [!tip]- Personal
 > ![[_bases/personal.base#7 Days]]
 
 > [!example]- Media
@@ -22,4 +22,16 @@ updated: 2026-06-13
 > [!info]- Recent
 > ![[_bases/recent.base#7 Days]]
 
-Browse the reference layer: [[_bases/reference.base|Notes · Entities · Memories]]
+---
+## 📚 Reference Library
+
+> [!note]- Notes — browse by topic
+> ![[_bases/notes.base#By Topic]]
+
+> [!abstract]- Entities — people · orgs · products · devices
+> ![[_bases/entities.base#By Kind]]
+
+> [!quote]- Memories
+> ![[_bases/memories.base#Timeline]]
+
+Open full: [[_bases/notes.base|Notes]] · [[_bases/entities.base|Entities]] · [[_bases/memories.base|Memories]]
