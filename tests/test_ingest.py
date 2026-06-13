@@ -4381,10 +4381,14 @@ def test_ingest_as_is_skips_curate_and_files_verbatim(harness: IngestHarness) ->
     assert [r.rel_path for r in hindsight.retained] == ["notes/my-note.md"]
 
 
-def test_ingest_as_is_action_gets_status_and_kind_defaults(
+def test_ingest_as_is_action_gets_status_default_and_no_kind(
     harness: IngestHarness,
 ) -> None:
-    """An as-is action import stamps status: todo + kind: task (ADR 0013)."""
+    """An as-is action import stamps status: todo and carries NO kind (ADR 0015).
+
+    ADR 0015 retired the kind facet, so the as-is path must not re-introduce it -- the
+    bug this guards: the path used to hard-set ``kind: task`` even after the refactor.
+    """
     client = _ScriptedClient(_classify_json(page_type="action", slug="buy-milk"))
     ingestor = _build_ingestor(
         harness, client=client, extractor=FakeExtractor(), hindsight=FakeHindsight()
@@ -4399,8 +4403,44 @@ def test_ingest_as_is_action_gets_status_and_kind_defaults(
         .split("---", 2)[1]
     )
     assert "status: todo" in head
-    assert "kind: task" in head
+    assert "kind:" not in head
     assert "personal: false" in head
+
+
+def test_ingest_as_is_media_gets_status_default_and_no_kind(
+    harness: IngestHarness,
+) -> None:
+    """An as-is media import stamps status: todo (media is actionable) and no kind."""
+    client = _ScriptedClient(_classify_json(page_type="media", slug="watch-dune"))
+    ingestor = _build_ingestor(
+        harness, client=client, extractor=FakeExtractor(), hindsight=FakeHindsight()
+    )
+
+    report = ingestor.ingest(Capture(text="watch Dune", source="import"), as_is=True)
+
+    assert report.page_paths == ["media/watch-dune.md"]
+    head = (
+        (harness.work / "media/watch-dune.md")
+        .read_text(encoding="utf-8")
+        .split("---", 2)[1]
+    )
+    assert "status: todo" in head
+    assert "kind:" not in head
+
+
+def test_curate_tool_schema_does_not_advertise_kind() -> None:
+    """The submit_file_plan tool must not tell the model actions carry a kind (#0015).
+
+    The frontmatter schema is permissive (additionalProperties), so any ``kind`` in
+    its description is re-emitted by the model and lands on the page -- the live
+    failure where a new media capture came back ``type: action`` + ``kind: media``.
+    """
+    from thoth.ingest.curate import _SUBMIT_FILE_PLAN_TOOL
+
+    desc = _SUBMIT_FILE_PLAN_TOOL["input_schema"]["properties"]["pages"]["items"][
+        "properties"
+    ]["frontmatter"]["description"]
+    assert "kind" not in desc, desc
 
 
 def test_ingest_as_is_omits_curating_phase(harness: IngestHarness) -> None:
