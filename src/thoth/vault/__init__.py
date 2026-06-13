@@ -33,7 +33,6 @@ one import path.
 """
 
 from .contract import (
-    ACTION_KIND_VOCAB,
     ACTION_STATUS_VOCAB,
     ACTIONABLE_DIRS,
     ASSET_SLUG_RE,
@@ -66,7 +65,6 @@ from .core import (
 from .redact import redact_secrets
 
 __all__ = [
-    "ACTION_KIND_VOCAB",
     "ACTION_STATUS_VOCAB",
     "ACTIONABLE_DIRS",
     "ASSET_SLUG_RE",

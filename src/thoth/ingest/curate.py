@@ -77,7 +77,7 @@ _SUBMIT_FILE_PLAN_TOOL: dict[str, Any] = {
                             "type": "object",
                             "description": (
                                 "title, type, created, updated, source, tags, "
-                                "personal (+ kind/status on actions)"
+                                "personal (+ status on action/media pages)"
                             ),
                             "additionalProperties": True,
                         },
@@ -260,8 +260,9 @@ class _CuratePass(_IngestorBase):
         The low-touch import mode (ADR 0010): the cheap classify call has already chosen
         the routing (``type``/``slug``/``title``), so this writes ONE page into that
         type's content folder with the **original body verbatim** and a minimal derived
-        frontmatter (``title``/``type``/``source``/``tags``/``personal``, plus the
-        ``status``/``kind`` defaults on an action) -- no second (curate) LLM call, no
+        frontmatter (``title``/``type``/``source``/``tags``/``personal``, plus a
+        ``status`` default on an actionable action/media page) -- no second (curate)
+        LLM call, no
         reshaping, no wikilink/dedup-merge, no summary synthesis. Any saved
         asset is embedded and any analysed OCR text appended (the same enrichment the
         curated path applies), so a binary import is still searchable on its content.
@@ -298,13 +299,14 @@ class _CuratePass(_IngestorBase):
             "type": cls.page_type,
             "source": capture.source,
             "tags": [],
-            # No curate pass runs, so stamp the universal + action defaults the
-            # contract expects (ADR 0013); write_page would default personal anyway.
+            # No curate pass runs, so stamp the universal default the contract expects
+            # (write_page would default personal anyway).
             "personal": False,
         }
-        if cls.page_type == "action":
+        # Actionable types (action, media) require a status; stamp the open default
+        # (ADR 0015 retired the kind facet, so no kind is set).
+        if cls.page_type in ("action", "media"):
             frontmatter["status"] = "todo"
-            frontmatter["kind"] = "task"
         try:
             rel = self._vault.write_page(folder, cls.slug, frontmatter, body)
         except (SchemaError, SlugError, VaultError) as exc:

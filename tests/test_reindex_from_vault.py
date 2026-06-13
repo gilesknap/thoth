@@ -679,12 +679,13 @@ def test_only_indexed_dirs_are_walked_skip_files_and_excluded_dirs_ignored(
 
 
 def test_indexed_dirs_and_skip_files_constants_are_as_specified() -> None:
-    """INDEXED_DIRS = the 4 content folders (ADR 0004 + ADR 0005); spine skipped."""
+    """INDEXED_DIRS = the 5 content folders (ADR 0004 + 0005 + 0015); spine skipped."""
     assert INDEXED_DIRS == (
         "entities",
         "notes",
         "memories",
         "actions",
+        "media",
     )
     assert "inbox" not in INDEXED_DIRS
     assert SKIP_FILES == frozenset({"SCHEMA.md", "index.md", "log.md"})

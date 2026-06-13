@@ -1,18 +1,17 @@
 filters:
   and:
-    - file.inFolder("actions")
+    - type == "media"
     - file.ext == "md"
-    - kind == "media"
     - status != "done"
     - status != "cancelled"
 formulas:
   prio_rank: 'if(priority == "Urgent", 0, if(priority == "High", 1, if(priority == "Medium", 2, if(priority == "Low", 3, 4))))'
-  date_bucket: 'if(due_date.isEmpty(), 2, if(due_date < now(), 0, 1))'
 properties:
   status:     { displayName: Status }
   due_date:   { displayName: Due }
   priority:   { displayName: Priority }
   media_type: { displayName: Media Type }
+  created:    { displayName: Added }
   personal:   { displayName: Personal }
   url:        { displayName: URL }
   summary:    { displayName: Summary }
@@ -23,26 +22,23 @@ views:
       or:
         - due_date.isEmpty()
         - due_date <= now() + "7 days"
-    order: [file.name, media_type, priority, status, personal, url, summary]
+    order: [file.name, media_type, created, priority, status, personal, url, summary]
     sort:
-      - { property: formula.date_bucket, direction: ASC }
-      - { property: due_date, direction: ASC }
       - { property: formula.prio_rank, direction: ASC }
+      - { property: created, direction: DESC }
   - type: table
     name: 30 Days
     filters:
       or:
         - due_date.isEmpty()
         - due_date <= now() + "30 days"
-    order: [file.name, media_type, priority, status, personal, url, summary]
+    order: [file.name, media_type, created, priority, status, personal, url, summary]
     sort:
-      - { property: formula.date_bucket, direction: ASC }
-      - { property: due_date, direction: ASC }
       - { property: formula.prio_rank, direction: ASC }
+      - { property: created, direction: DESC }
   - type: table
     name: All
-    order: [file.name, media_type, priority, status, personal, url, summary]
+    order: [file.name, media_type, created, priority, status, personal, url, summary]
     sort:
-      - { property: formula.date_bucket, direction: ASC }
-      - { property: due_date, direction: ASC }
       - { property: formula.prio_rank, direction: ASC }
+      - { property: created, direction: DESC }

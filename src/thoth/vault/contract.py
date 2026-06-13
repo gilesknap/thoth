@@ -23,15 +23,20 @@ TYPE_ENUMERATION: tuple[str, ...] = (
     "note",
     "memory",
     "action",
+    "media",
 )
-"""Canonical ordering of the four content :data:`VALID_TYPES` offered to the classifier.
+"""Canonical ordering of the five content :data:`VALID_TYPES` offered to the classifier.
 
-ADR 0005 collapsed the eight folders into four flat, equal folders, so a capture is one
-of exactly four content types: ``entity`` (nouns), ``note`` (everything written,
+ADR 0005 collapsed the eight folders into flat, equal folders, so a capture is one of
+exactly five content types: ``entity`` (nouns), ``note`` (everything written,
 differentiated by a ``tags:`` value such as ``concept``/``comparison``/``query``),
-``memory`` (personal reference), and ``action`` (carries ``status``/``due``; a media
-item is an ``action`` with ``kind: media``, ADR 0013). ``summary`` is no longer a
-content type -- it survives only as the label on the spine ``index.md`` Home page.
+``memory`` (personal reference), ``action`` (a todo or errand carrying ``status``/
+``due``), and ``media`` (a to-consume queue item -- a book/film/podcast -- carrying the
+same ``status``/``due`` lifecycle plus ``media_type``/``url``). ADR 0015 promoted media
+from an ``action`` with ``kind: media`` to its own ``type`` and retired the ``kind``
+facet, so moving an item between the actionable dashboards is now one ``type`` edit.
+``summary`` is no longer a content type -- it survives only as the label on the spine
+``index.md`` Home page.
 """
 
 INBOX_TYPE: str = "inbox"
@@ -43,7 +48,7 @@ but a legal frontmatter ``type`` :meth:`thoth.vault.Vault.write_page` accepts fo
 """
 
 VALID_TYPES: frozenset[str] = frozenset(TYPE_ENUMERATION) | {INBOX_TYPE}
-"""Every legal frontmatter ``type`` value (the four content types plus ``inbox``)."""
+"""Every legal frontmatter ``type`` value (the five content types plus ``inbox``)."""
 
 REFERENCE_TYPES: frozenset[str] = frozenset({"entity", "note", "memory"})
 """The lifecycle-free reference content types (ADR 0005): the non-actionable types.
@@ -51,7 +56,8 @@ REFERENCE_TYPES: frozenset[str] = frozenset({"entity", "note", "memory"})
 Replaces the old ``KNOWLEDGE_TYPES`` family. Used as the default recall scope for
 knowledge Q&A (:meth:`thoth.query.QueryEngine.recall_paths`): with the knowledge /
 life-admin families gone, "what do I know about X?" excludes the actionable ``action``
-type (todos and the to-consume media queue) by scoping to these reference types instead.
+and ``media`` types (todos and the to-consume queue) by scoping to these reference
+types instead.
 """
 
 VALID_SOURCES: frozenset[str] = frozenset(
@@ -71,15 +77,19 @@ FOLDER_TYPE_CONTRACT: dict[str, frozenset[str]] = {
     "notes": frozenset({"note"}),
     "memories": frozenset({"memory"}),
     "actions": frozenset({"action"}),
+    "media": frozenset({"media"}),
     "inbox": frozenset({"inbox"}),
 }
 """Top-level vault folder -> the ``type`` values allowed to be written there (ADR 0005).
 
-Four flat content folders plus the ``inbox/`` holding folder. ``entities/`` absorbs the
+Five flat content folders plus the ``inbox/`` holding folder. ``entities/`` absorbs the
 old ``people/``; ``notes/`` absorbs ``concepts/``/``comparisons/``/``queries/``
-(differentiated by a ``tags:`` value, not a folder); ``actions/`` absorbs ``media/`` (a
-media item is an ``action`` with ``kind: media``); ``memories/`` is kept as its own
-folder.
+(differentiated by a ``tags:`` value, not a folder); ``memories/`` is kept as its own
+folder. ADR 0015 gave ``media`` its own ``type`` and so its own ``media/`` folder again
+(the to-consume queue ADR 0005 had folded into ``actions/``). The folder a page lives in
+is a loose browsing convenience: thoth writes each type to its canonical folder, but the
+Bases dashboards key off ``type``, not folder, so a manual move never hides a page (ADR
+0015). ``inbox/`` and ``raw/`` stay folder-strict machinery.
 """
 
 CURATED_DIRS: tuple[str, ...] = ("entities", "notes", "memories")
@@ -91,15 +101,15 @@ instead of restating it. These are the reference pages that carry a one-line
 ``status``/``due`` lifecycle.
 """
 
-ACTIONABLE_DIRS: tuple[str, ...] = ("actions",)
-"""The lifecycle-bearing folder(s) scanned for overdue / cold checks (ADR 0005).
+ACTIONABLE_DIRS: tuple[str, ...] = ("actions", "media")
+"""The lifecycle-bearing folders scanned for overdue / cold checks (ADR 0005, 0015).
 
-A page here carries ``status``/``due`` and shows in the actionable Bases dashboards; the
-to-consume media queue lives here too (an ``action`` with ``kind: media``). Together
-with
-:data:`CURATED_DIRS` and the ``inbox/`` holding folder these are the
-:data:`FOLDER_TYPE_CONTRACT` folders (a consistency the tests assert), so adding a
-folder is a one-place edit.
+A page here carries ``status``/``due`` and shows in the actionable Bases dashboards:
+``actions/`` holds todos and errands (``type: action``), ``media/`` holds the
+to-consume queue (``type: media``, ADR 0015 -- its own type and folder rather than
+``actions/`` with ``kind: media``). Together with :data:`CURATED_DIRS` and the
+``inbox/`` holding folder these are the :data:`FOLDER_TYPE_CONTRACT` folders (a
+consistency the tests assert), so adding a folder is a one-place edit.
 """
 
 RAW_SUBDIRS: frozenset[str] = frozenset({"articles", "papers", "transcripts", "assets"})
@@ -113,7 +123,7 @@ SEED_DIRS: tuple[str, ...] = (
 )
 """Every empty content folder :meth:`thoth.vault.Vault.seed` creates.
 
-The four flat content folders (:data:`CURATED_DIRS` + :data:`ACTIONABLE_DIRS`) plus the
+The five flat content folders (:data:`CURATED_DIRS` + :data:`ACTIONABLE_DIRS`) plus the
 ``inbox/`` holding folder and the ``raw/`` subdirectories, so a freshly seeded vault has
 the full browsable skeleton in Obsidian even before any page is filed. Derived from the
 same canonical dir constants rather than restating them, so adding a folder is a
@@ -182,18 +192,12 @@ content; a hold has not been classified yet) and none of the content universals.
 """
 
 ACTION_STATUS_VOCAB: tuple[str, ...] = ("todo", "in_progress", "done", "cancelled")
-"""The single action ``status`` lifecycle (ADR 0013).
+"""The single ``status`` lifecycle shared by ``action`` and ``media`` pages (ADR 0013).
 
-One vocabulary for every action regardless of kind: media-ness is carried by the
-``kind`` property, not by parallel status values (the old ``to_consume``/``consuming``/
-``consumed`` media statuses are gone). Ordered for prompt rendering.
-"""
-
-ACTION_KIND_VOCAB: tuple[str, ...] = ("task", "media", "errand")
-"""Allowed action ``kind`` values (ADR 0013): the view-critical action facet.
-
-Replaces the old ``action-kind/*`` tag facet -- Bases view filters need a frontmatter
-property, not a nested tag. Ordered for prompt rendering.
+One vocabulary for every actionable page regardless of type: media-ness is carried by
+the ``type`` (ADR 0015), not by parallel status values (the old
+``to_consume``/``consuming``/``consumed`` media statuses are gone). Ordered for prompt
+rendering.
 """
 
 PRIORITY_VOCAB: tuple[str, ...] = ("Urgent", "High", "Medium", "Low")
@@ -221,8 +225,9 @@ rendering."""
 SUMMARY_TYPES: frozenset[str] = frozenset(TYPE_ENUMERATION)
 """Page ``type`` values that carry a one-line ``summary:`` frontmatter gloss (#72).
 
-All four content types (ADR 0013 extended the gloss to ``action`` pages so the Bases
-dashboards have a Summary column to show). ``inbox`` holds do not get one (machinery,
+All five content types (ADR 0013 extended the gloss to ``action`` pages, and ADR 0015
+to ``media``, so the Bases dashboards have a Summary column to show). ``inbox`` holds do
+not get one (machinery,
 not content). The ``summary`` is plain frontmatter that round-trips through
 :meth:`thoth.vault.Vault.read_page` / :meth:`thoth.vault.Vault.write_page` like any
 other field, so it needs no special write path; this constant exists so the curate

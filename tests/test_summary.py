@@ -115,7 +115,6 @@ def _action(
         "updated": "2026-05-20",
         "source": "slack",
         "tags": ["chores"],
-        "kind": "task",
         "status": status,
     }
     if due_date is not None:
@@ -134,21 +133,20 @@ def _media(
     created: str | None = "2026-05-20",
     media_type: str | None = "book",
 ) -> None:
-    """Author a media item: an actions/<slug>.md action with kind: media (ADR 0013)."""
+    """Author a media item: a media/<slug>.md page with type: media (ADR 0015)."""
     meta: dict[str, Any] = {
         "title": title,
-        "type": "action",
+        "type": "media",
         "updated": "2026-05-20",
         "source": "slack",
         "tags": ["reading"],
-        "kind": "media",
         "status": status,
     }
     if created is not None:
         meta["created"] = created
     if media_type is not None:
         meta["media_type"] = media_type
-    _write(vault, f"actions/{slug}.md", meta)
+    _write(vault, f"media/{slug}.md", meta)
 
 
 def _curated(
@@ -294,18 +292,19 @@ def test_in_progress_counts_as_open(vault: Vault, config: Config) -> None:
 
 
 def test_media_items_excluded_from_open_actions(vault: Vault, config: Config) -> None:
-    """A kind: media action never surfaces as an open action (ADR 0013).
+    """A type: media page never surfaces as an open action (ADR 0015).
 
-    Media items share the action lifecycle (status: todo), so without the kind
-    exclusion every unwatched film would flood the daily ACTIONS section and the
-    pkm_actions MCP tool; they belong to the media backlog instead.
+    Media items share the actionable lifecycle (status: todo) but are their own
+    type/folder; the actions scan reads ``actions/`` only, so an unwatched film cannot
+    flood the daily ACTIONS section or the pkm_actions MCP tool -- it belongs to the
+    media backlog instead.
     """
     _media(vault, "film", title="Watch Dune", created="2026-05-20")
     _action(vault, "real", title="Real task", status="todo")
 
     engine = _engine(vault, config)
     assert [a.path for a in engine.open_actions()] == ["actions/real.md"]
-    assert [m.path for m in engine.media_backlog()] == ["actions/film.md"]
+    assert [m.path for m in engine.media_backlog()] == ["media/film.md"]
 
 
 def test_action_with_no_due_date_lists_but_never_overdue_or_soon(
@@ -446,8 +445,8 @@ def test_media_backlog_only_unconsumed_oldest_first(
 
     engine = _engine(vault, config)
     backlog = engine.media_backlog()
-    assert [m.path for m in backlog] == ["actions/oldest.md", "actions/newest.md"]
-    assert "actions/consumed.md" not in {m.path for m in backlog}
+    assert [m.path for m in backlog] == ["media/oldest.md", "media/newest.md"]
+    assert "media/consumed.md" not in {m.path for m in backlog}
 
 
 def test_daily_surfaces_media_nudge_with_link(vault: Vault, config: Config) -> None:
@@ -465,7 +464,7 @@ def test_daily_surfaces_media_nudge_with_link(vault: Vault, config: Config) -> N
     daily = engine.daily_digest()
     assert "MEDIA BACKLOG" in daily.text
     # The nudge is a clickable obsidian link, not a dead wikilink.
-    assert "actions%2Fddia.md" in daily.text
+    assert "media%2Fddia.md" in daily.text
     assert "Designing Data-Intensive Applications" in daily.text
     assert "[[" not in daily.text
     # capped at two nudges

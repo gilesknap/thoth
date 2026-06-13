@@ -63,7 +63,6 @@ from .checks_freshness import (
     STALE_DAYS,
 )
 from .checks_metadata import (
-    KIND_VOCAB,
     MEDIA_TYPE_VOCAB,
     PRIORITY_VOCAB,
     STATUS_VOCAB,
@@ -85,7 +84,6 @@ __all__ = [
     "MEDIA_STALE_DAYS",
     "TYPE_REQUIRED_FIELDS",
     "STATUS_VOCAB",
-    "KIND_VOCAB",
     "PRIORITY_VOCAB",
     "MEDIA_TYPE_VOCAB",
     "Severity",

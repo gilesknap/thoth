@@ -74,16 +74,18 @@ def test_each_base_is_one_class_with_date_window_views() -> None:
 
 def test_class_split_lives_in_each_base_filter_not_per_view() -> None:
     """Item class (work / personal / media) is the base-level filter, so views differ
-    by date only. Work is ``personal != true`` (unset counts as work -- Bases has no
-    coalesce); personal is ``personal == true``; media is ``kind == "media"``. The
-    todo bases exclude media and the closed statuses at the base level too."""
+    by date only. The class is read off the ``type`` property (ADR 0015), not the
+    folder: work todos are ``type == "action"`` + ``personal != true`` (unset counts as
+    work -- Bases has no coalesce); personal todos are ``type == "action"`` +
+    ``personal == true``; media is ``type == "media"``. The closed statuses are excluded
+    at the base level too."""
     actions = yaml.safe_load(base_text("actions"))["filters"]["and"]
-    assert "personal != true" in actions and 'kind != "media"' in actions
+    assert 'type == "action"' in actions and "personal != true" in actions
     assert 'status != "done"' in actions and 'status != "cancelled"' in actions
     personal = yaml.safe_load(base_text("personal"))["filters"]["and"]
-    assert "personal == true" in personal and 'kind != "media"' in personal
+    assert 'type == "action"' in personal and "personal == true" in personal
     media = yaml.safe_load(base_text("media"))["filters"]["and"]
-    assert 'kind == "media"' in media
+    assert 'type == "media"' in media
     assert not any("personal" in str(c) for c in media), "media spans both personal"
 
 
@@ -98,7 +100,9 @@ def test_date_window_views_always_include_undated_and_sort_expired_first() -> No
     overdue (0) first, then upcoming (1), then undated (2) last -- real deadlines lead
     and undated items trail as a backlog, but nothing hides.
     """
-    for base in ("actions", "personal", "media"):
+    # The todo bases (action/personal) sort by due date; media sorts by recency
+    # instead (see test_media_sorts_by_priority_then_recency), so it is excluded here.
+    for base in ("actions", "personal"):
         data: Any = yaml.safe_load(base_text(base))
         # The bucket formula is defined and is the primary sort key on every view.
         assert "date_bucket" in data["formulas"], base
@@ -123,6 +127,21 @@ def test_media_base_shows_a_personal_column() -> None:
     assert "personal" in media["properties"]
     for view in media["views"]:
         assert "personal" in view["order"], view["name"]
+
+
+def test_media_sorts_by_priority_then_recency_with_created_column() -> None:
+    """The consume queue surfaces recent additions: it sorts by priority, then by
+    ``created`` descending (most-recently-added first), and shows an Added column.
+
+    Media is mostly undated, so the due-date bucketing the todo bases use is moot here;
+    recency is the useful signal instead.
+    """
+    media: Any = yaml.safe_load(base_text("media"))
+    assert "created" in media["properties"]
+    for view in media["views"]:
+        assert "created" in view["order"], view["name"]
+        assert view["sort"][0] == {"property": "formula.prio_rank", "direction": "ASC"}
+        assert view["sort"][1] == {"property": "created", "direction": "DESC"}
 
 
 def test_recent_base_excludes_archive_via_nested_not() -> None:
@@ -331,17 +350,18 @@ def test_schema_round_trips_through_lint_taxonomy_parser() -> None:
 
 
 def test_schema_taxonomy_excludes_promoted_facets() -> None:
-    """The taxonomy carries no type/kind/personal tags (ADR 0013).
+    """The taxonomy carries no type/personal tags (ADR 0013, 0015).
 
-    Tags are purely descriptive now: the view-critical facets (the page ``type``,
-    the action ``kind`` values, and ``personal``) are frontmatter properties, so
-    listing them as taxonomy tags would invite the LLM to duplicate them -- the
-    exact drift that broke the original dashboards.
+    Tags are purely descriptive now: the view-critical facets (the page ``type`` --
+    which since ADR 0015 subsumes the old action ``kind``, including ``media`` -- and
+    ``personal``) are frontmatter properties, so listing them as taxonomy tags would
+    invite the LLM to duplicate them -- the exact drift that broke the original
+    dashboards.
     """
     lint = pytest.importorskip("thoth.lint")
-    from thoth.vault import ACTION_KIND_VOCAB, TYPE_ENUMERATION
+    from thoth.vault import TYPE_ENUMERATION
 
     tags = lint.parse_taxonomy_tags(template_text("SCHEMA.md"))
-    promoted = set(TYPE_ENUMERATION) | set(ACTION_KIND_VOCAB) | {"personal"}
+    promoted = set(TYPE_ENUMERATION) | {"personal"}
     leaked = promoted & tags
     assert not leaked, f"promoted facets leaked into the taxonomy: {sorted(leaked)}"

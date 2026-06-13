@@ -14,7 +14,7 @@ from datetime import date
 
 from thoth.fmfields import _parse_date, _str_field
 from thoth.summary import MEDIA_BACKLOG_STATUS
-from thoth.summary.types import _MEDIA_KIND
+from thoth.summary.types import _MEDIA_TYPE
 from thoth.vault import Vault
 
 from .model import Finding, Severity, _finding, _Page
@@ -73,14 +73,14 @@ def _check_stale(
 def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Finding]:
     """Return overdue-action / cold-media findings for one actionable page.
 
-    The media queue lives in ``actions/`` as an ``action`` with ``kind: media``
-    (ADR 0013), so the cold-media check keys off the ``kind`` property plus the
-    still-``todo`` backlog status rather than a separate ``media`` type / folder.
+    The media queue is its own ``type: media`` in the ``media/`` folder (ADR 0015), so
+    the cold-media check keys off the ``type`` plus the still-``todo`` backlog status;
+    ``action`` pages (todos/errands) get the overdue check.
     """
     out: list[Finding] = []
     page_type = _str_field(page.meta.get("type"))
     status = _str_field(page.meta.get("status"))
-    if page_type != "action":
+    if page_type not in ("action", "media"):
         return out
     if status not in _ACTION_CLOSED_STATUSES:
         due = _parse_date(page.meta.get("due_date"))
@@ -91,13 +91,10 @@ def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Findi
                     "overdue",
                     Severity.STALE,
                     page.path,
-                    f"action is past its due date {due.isoformat()}",
+                    f"{page_type} is past its due date {due.isoformat()}",
                 )
             )
-    if (
-        status == MEDIA_BACKLOG_STATUS
-        and _str_field(page.meta.get("kind")) == _MEDIA_KIND
-    ):
+    if status == MEDIA_BACKLOG_STATUS and page_type == _MEDIA_TYPE:
         added = _parse_date(page.meta.get("created"))
         if added is not None and added < media_floor:
             out.append(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from thoth.vault import (
-    ACTION_KIND_VOCAB,
     ACTION_STATUS_VOCAB,
     FOLDER_TYPE_CONTRACT,
     MEDIA_TYPE_VOCAB,
@@ -31,7 +30,7 @@ def file_plan_contract_text() -> str:
 
     It is rendered from the **same canonical constants the validator enforces**
     (:data:`~thoth.vault.FOLDER_TYPE_CONTRACT`, :data:`~thoth.vault.VALID_SOURCES`,
-    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, the action ``kind``/``status`` and
+    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, the actionable ``status`` and
     ``priority``/``media_type`` vocabularies, :data:`_VALID_LOG_ACTIONS`,
     :data:`_MIN_WIKILINKS`), so the instructions and :func:`validate_file_plan` cannot
     drift -- a new folder/type/source/vocab-value/log-action flows into the prompt
@@ -50,7 +49,6 @@ def file_plan_contract_text() -> str:
     sources = ", ".join(sorted(VALID_SOURCES))
     required = ", ".join((*REQUIRED_COMMON_FIELDS, "personal"))
     log_actions = ", ".join(sorted(_VALID_LOG_ACTIONS))
-    kinds = ", ".join(ACTION_KIND_VOCAB)
     statuses = ", ".join(ACTION_STATUS_VOCAB)
     priorities = ", ".join(PRIORITY_VOCAB)
     media_types = ", ".join(MEDIA_TYPE_VOCAB)
@@ -77,26 +75,29 @@ def file_plan_contract_text() -> str:
         '"files": ["folder/slug.md"]}   // optional\n'
         "}\n"
         f"Folder -> required type: {folder_types}.\n"
-        "A note carries a tag for its kind (concept/comparison/query).\n"
-        '"personal" is true when the item concerns the owner\'s private life (people, '
-        "errands, books/films to watch), false for work / technical / general "
-        "knowledge.\n"
-        'Author a crisp one-line "summary" for EVERY page, including actions; it '
-        "becomes the page's canonical one-line gloss in frontmatter.\n"
-        f'Action pages additionally require: "kind": one of [{kinds}] and "status": '
-        f"one of [{statuses}] (use todo for new items); optionally "
-        f'"due_date": "YYYY-MM-DD" and "priority": one of [{priorities}].\n'
+        "A note carries a tag for its sub-kind (concept/comparison/query).\n"
+        '"personal" keys off the SUBJECT, not whether it is a chore: true when the '
+        "item concerns the owner's private life (home, family, friends, hobbies, "
+        "personal admin, books/films to watch), false for work / technical / "
+        "professional / general knowledge. A task being an errand does not make it "
+        "personal -- a work errand (e.g. booking a meeting room) is personal: false.\n"
+        'Author a crisp one-line "summary" for EVERY page, including actions and '
+        "media; it becomes the page's canonical one-line gloss in frontmatter.\n"
+        f'Action and media pages additionally require: "status": one of [{statuses}] '
+        '(use todo for new items); optionally "due_date": "YYYY-MM-DD" and '
+        f'"priority": one of [{priorities}].\n'
         "When the captured text states a deadline in RELATIVE or natural language "
         '("monday", "tomorrow", "next week", "end of the month", "in 3 days"), '
         'resolve it to a concrete "due_date" (YYYY-MM-DD) relative to TODAY\'S DATE '
         "given in the prompt -- a bare weekday means its NEXT upcoming occurrence. "
         "Do not leave such a deadline unset, and never guess a date when the text "
         "gives no deadline (omit due_date instead).\n"
-        f'When kind is media also set "media_type": one of [{media_types}] and "url" '
-        "when known.\n"
+        'Use type "media" (folder media/) for a to-consume book/film/podcast/etc; a '
+        f'media page also sets "media_type": one of [{media_types}] and "url" when '
+        "known.\n"
         'Memory pages set "memory_date": "YYYY-MM-DD" when the memory happened '
         "(else omit; it falls back to created).\n"
-        "Tags are descriptive topic labels only -- never duplicate type, kind, or "
+        "Tags are descriptive topic labels only -- never duplicate type or "
         "personal as a tag.\n"
         '"source" is the capture CHANNEL (one of the list above) -- NEVER a file path '
         "or the raw page path.\n"

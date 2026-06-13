@@ -36,8 +36,9 @@ from .types import (
     _ACTIONS_DIR,
     _CURATED_DIRS,
     _MARKER_LABELS,
-    _MEDIA_KIND,
+    _MEDIA_DIR,
     _MEDIA_NUDGE_LIMIT,
+    _MEDIA_TYPE,
     _REVIEW_STATUS,
     _WEEK_DAYS,
     ACTION_OPEN_STATUSES,
@@ -407,16 +408,18 @@ class SummaryEngine:
     # ---- internal scans -------------------------------------------------------------
 
     def _scan_actions(self) -> list[ActionItem]:
-        """Parse every non-media ``actions/*.md`` page into an action item.
+        """Parse every ``actions/*.md`` page (excluding strays) into an action item.
 
-        Media items share the action lifecycle (ADR 0013: ``kind: media``, ``status:
-        todo``...), so without this exclusion every unwatched film would surface as an
-        open action in the daily digest and the ``pkm_actions`` MCP tool; the media
-        queue has its own scan (:meth:`_scan_media_with_status`) and digest section.
+        Media items share the actionable lifecycle (``status: todo``...) but are their
+        own ``type: media`` in the ``media/`` folder (ADR 0015), so this scans
+        ``actions/`` and skips any ``type: media`` page manually moved in -- without it
+        an unwatched film could surface as an open action in the daily digest and the
+        ``pkm_actions`` MCP tool. The media queue has its own scan
+        (:meth:`_scan_media_with_status`) and digest section.
         """
         items: list[ActionItem] = []
         for rel, meta in self._iter_pages(_ACTIONS_DIR):
-            if _str_field(meta.get("kind")) == _MEDIA_KIND:
+            if _str_field(meta.get("type")) == _MEDIA_TYPE:
                 continue
             slug = PurePosixPath(rel).stem
             items.append(
@@ -433,18 +436,18 @@ class SummaryEngine:
         return items
 
     def _scan_media_with_status(self) -> list[tuple[MediaItem, str]]:
-        """Parse every ``kind: media`` ``actions/*.md`` page into a (item, status) pair.
+        """Parse every ``media/*.md`` page into a (item, status) pair.
 
-        The media queue lives in ``actions/`` as an ``action`` with ``kind: media``
-        (ADR 0013), so this walks ``actions/`` and keeps only pages whose ``kind`` is
-        media. The status is returned alongside the item (rather than stored on the
-        frozen :class:`~thoth.summary.MediaItem`, whose contract has no status field)
-        so :meth:`media_backlog` can filter on the backlog status without the item
-        carrying a field it does not declare.
+        The media queue lives in ``media/`` as ``type: media`` (ADR 0015), so this walks
+        ``media/`` and keeps only pages whose ``type`` is media (guarding against a
+        stray non-media page manually moved in). The status is returned with the item
+        (rather than stored on the frozen :class:`~thoth.summary.MediaItem`, whose
+        contract has no status field) so :meth:`media_backlog` can filter on the backlog
+        status without the item carrying a field it does not declare.
         """
         pairs: list[tuple[MediaItem, str]] = []
-        for rel, meta in self._iter_pages(_ACTIONS_DIR):
-            if _str_field(meta.get("kind")) != _MEDIA_KIND:
+        for rel, meta in self._iter_pages(_MEDIA_DIR):
+            if _str_field(meta.get("type")) != _MEDIA_TYPE:
                 continue
             slug = PurePosixPath(rel).stem
             item = MediaItem(

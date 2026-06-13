@@ -35,12 +35,15 @@ DUE_SOON_DAYS: int = 3
 # exactly one place (ADR 0005); a divergence is caught by the tests.
 _CURATED_DIRS: tuple[str, ...] = CURATED_DIRS
 
-# Folder holding actionable pages (todos + the media consume queue). ADR 0005 folded the
-# old media/ folder in here: a media item is an action with kind: media (ADR 0013).
+# Folder holding todo/errand actions (``type: action``). ADR 0015 split the media
+# consume queue back out into its own media/ folder, so this folder is todos only.
 _ACTIONS_DIR: str = "actions"
 
-# The action ``kind`` that marks a media-queue item (ADR 0013).
-_MEDIA_KIND: str = "media"
+# Folder holding the media consume queue (``type: media``, ADR 0015).
+_MEDIA_DIR: str = "media"
+
+# The ``type`` value that marks a media-queue item (ADR 0015, was ``kind: media``).
+_MEDIA_TYPE: str = "media"
 
 # Weekly window length in days.
 _WEEK_DAYS: int = 7

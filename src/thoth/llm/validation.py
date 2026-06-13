@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from thoth.vault import (
-    ACTION_KIND_VOCAB,
     ACTION_STATUS_VOCAB,
     MEDIA_TYPE_VOCAB,
     PRIORITY_VOCAB,
@@ -26,7 +25,6 @@ from .contract import _MIN_WIKILINKS, _VALID_LOG_ACTIONS
 # page-level plan field).
 _ENUM_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("status", ACTION_STATUS_VOCAB),
-    ("kind", ACTION_KIND_VOCAB),
     ("priority", PRIORITY_VOCAB),
     ("media_type", MEDIA_TYPE_VOCAB),
 )
@@ -56,12 +54,11 @@ def _check_frontmatter(
             f"{where}: invalid source {source!r} (allowed: "
             f"{', '.join(sorted(VALID_SOURCES))})"
         )
-    if page_type == "action":
-        for field in ("kind", "status"):
-            if field not in frontmatter:
-                problems.append(
-                    f"{where}: action page missing required frontmatter field '{field}'"
-                )
+    if page_type in ("action", "media"):
+        if "status" not in frontmatter:
+            problems.append(
+                f"{where}: {page_type} page missing required frontmatter field 'status'"
+            )
     for field, vocab in _ENUM_FIELDS:
         value = frontmatter.get(field)
         if value is not None and value not in vocab:
@@ -121,8 +118,8 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
     Reuses :mod:`thoth.vault`'s validators so a passing plan is guaranteed to survive
     :meth:`thoth.vault.Vault.write_page`. Each ``pages[*]`` entry is checked for a known
     ``action``, a valid ``slug``, an allowed ``folder`` x ``type`` pairing, the required
-    common frontmatter fields (plus ``kind``/``status`` on action pages, with
-    ``status``/``kind``/``priority``/``media_type`` values enum-checked against the
+    common frontmatter fields (plus ``status`` on action and media pages, with
+    ``status``/``priority``/``media_type`` values enum-checked against the
     vault vocabularies -- the repair loop self-corrects on the listed values), a valid
     ``source``, a string ``summary`` when present, and ``>= 2`` ``wikilinks``. Any
     ``log`` block is shape-checked too.
