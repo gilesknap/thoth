@@ -232,6 +232,15 @@ cp /opt/thoth/deploy/thoth-hindsight.service /etc/systemd/system/
 cp /opt/thoth/deploy/thoth-slack.service     /etc/systemd/system/
 systemctl daemon-reload
 
+# REQUIRED: let pkm's IPC survive logout. Hindsight's embedded Postgres runs as
+# pkm, and systemd's RemoveIPC=yes (the default) deletes ALL IPC owned by a user
+# the moment their last login session ends — including Postgres's /dev/shm
+# shared-memory segment, out from under the still-running postmaster. Every new DB
+# connection then fails (`could not open shared memory segment "/PostgreSQL.NNNN":
+# No such file or directory`) and Slack ingests fail at the indexing phase. A
+# lingering user is exempt from RemoveIPC, so enable it before starting the unit:
+loginctl enable-linger pkm
+
 # Index first (the Slack daemon orders after it and only TALKS to it).
 systemctl enable --now thoth-hindsight.service
 systemctl enable --now thoth-slack.service
@@ -242,6 +251,18 @@ systemctl status thoth-hindsight.service thoth-slack.service --no-pager
 The units are pre-hardened (`ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp`,
 a narrow `ReadWritePaths`) and run as `pkm`. They read secrets only from
 `/home/pkm/.thoth/.env`; nothing sensitive is in the tracked unit files.
+
+```{important}
+`loginctl enable-linger pkm` above is not optional — without it the embedded
+Postgres keeps running but stops accepting new connections as soon as anyone who
+`su`'d / SSH'd in as `pkm` logs out, and the only visible symptom is Slack ingests
+silently failing to index. Belt-and-suspenders, you can also disable the behaviour
+host-wide with a drop-in — `printf '[Login]\nRemoveIPC=no\n' >
+/etc/systemd/logind.conf.d/10-removeipc.conf` then `systemctl restart systemd-logind`
+— but lingering alone is sufficient. If you ever hit the error on a running box,
+recover with `systemctl restart thoth-hindsight.service` (the postmaster recreates
+its segment), then `thoth reindex` to backfill any pages that failed to index.
+```
 
 Install the cron jobs (reindex, summaries, config backup) for `pkm`, and create their logs:
 
