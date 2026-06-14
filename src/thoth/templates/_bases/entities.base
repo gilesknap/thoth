@@ -1,0 +1,44 @@
+filters:
+  and:
+    - file.ext == "md"
+    - type == "entity"
+formulas:
+  kind: if(tags.filter(value.toString().contains("entity-kind/")).isEmpty(), "uncategorized", tags.filter(value.toString().contains("entity-kind/"))[0].toString().replace("#", "").replace("entity-kind/", ""))
+properties:
+  formula.kind:
+    displayName: Kind
+  summary:
+    displayName: Summary
+  tags:
+    displayName: Tags
+  updated:
+    displayName: Updated
+views:
+  - type: cards
+    name: By Kind
+    groupBy:
+      property: formula.kind
+      direction: ASC
+    order:
+      - summary
+    sort:
+      - property: file.name
+        direction: ASC
+  - type: cards
+    name: Cards
+    order:
+      - summary
+      - tags
+    sort:
+      - property: file.name
+        direction: ASC
+  - type: table
+    name: Table
+    order:
+      - file.name
+      - summary
+      - tags
+      - updated
+    sort:
+      - property: file.name
+        direction: ASC

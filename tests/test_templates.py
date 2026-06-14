@@ -52,7 +52,9 @@ def test_each_base_parses_with_one_filter_key_and_views(name: str) -> None:
     views = data.get("views")
     assert isinstance(views, list) and views, f"{name}: needs a non-empty views list"
     for view in views:
-        assert view.get("type") == "table", f"{name}: every view is a table"
+        assert view.get("type") in ("table", "cards"), (
+            f"{name}: every view is a table or cards, got {view.get('type')!r}"
+        )
         assert view.get("name"), f"{name}: every view has a name"
 
 
@@ -173,14 +175,13 @@ def test_bases_never_filter_on_tags() -> None:
 def test_index_is_a_callout_dashboard() -> None:
     """``index.md`` is the attention dashboard (issue #62 / ADR 0014).
 
-    One callout per item-class base, embedding a default date window. The two todo
-    lists (work, personal) lead expanded ('+'); media / inbox / recent are collapsed.
+    One callout per item-class base, embedding a default date window. The work todo
+    list leads expanded ('+'); personal / media / inbox / recent are collapsed.
     """
     text = template_text("index.md")
     assert "> [!danger]+" in text  # Work todos lead in an expanded red callout.
-    assert "> [!tip]+" in text  # Personal todos expanded.
-    # The remaining sections are collapsed ('-') colour-coded callouts.
-    for marker in ("> [!example]-", "> [!warning]-", "> [!info]-"):
+    # Every remaining section is a collapsed ('-') colour-coded callout.
+    for marker in ("> [!tip]-", "> [!example]-", "> [!warning]-", "> [!info]-"):
         assert marker in text, marker
     # The work callout is the first callout on the page.
     assert text.index("[!danger]+") < text.index("[!example]-")
@@ -190,8 +191,13 @@ def test_index_is_a_callout_dashboard() -> None:
     assert "![[_bases/media.base#All]]" in text
     assert "![[_bases/inbox.base#Inbox]]" in text
     assert "![[_bases/recent.base#7 Days]]" in text
-    # The reference layer is a link line, not an embedded section (ADR 0013).
-    assert "[[_bases/reference.base|" in text
+    # The reference layer is its own embedded "Reference Library" section: one
+    # collapsed callout per reference type, each embedding a browse-oriented view.
+    assert "## 📚 Reference Library" in text
+    assert "![[_bases/notes.base#By Topic]]" in text
+    assert "![[_bases/entities.base#By Kind]]" in text
+    assert "![[_bases/memories.base#Timeline]]" in text
+    assert "[[_bases/notes.base|" in text
 
 
 def test_index_dashboard_embeds_resolve_to_real_base_views() -> None:
@@ -309,7 +315,9 @@ def test_iter_templates_returns_all_templates_non_empty() -> None:
         "_bases/media.base",
         "_bases/inbox.base",
         "_bases/recent.base",
-        "_bases/reference.base",
+        "_bases/notes.base",
+        "_bases/entities.base",
+        "_bases/memories.base",
         *OBSIDIAN_NAMES,
         *ROOT_NAMES,
     ]

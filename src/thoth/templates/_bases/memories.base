@@ -1,0 +1,31 @@
+filters:
+  and:
+    - file.ext == "md"
+    - type == "memory"
+properties:
+  summary:
+    displayName: Summary
+  tags:
+    displayName: Tags
+  memory_date:
+    displayName: When
+views:
+  - type: cards
+    name: Timeline
+    order:
+      - summary
+      - memory_date
+      - tags
+    sort:
+      - property: memory_date
+        direction: DESC
+  - type: table
+    name: Table
+    order:
+      - file.name
+      - summary
+      - memory_date
+      - tags
+    sort:
+      - property: memory_date
+        direction: DESC
