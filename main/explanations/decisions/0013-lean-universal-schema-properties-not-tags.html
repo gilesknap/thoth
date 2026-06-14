@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>13. Lean universal schema: view-critical facets are properties, not tags &#8212; thoth 0.9.1.dev24+g98f48397f documentation</title>
+    <title>13. Lean universal schema: view-critical facets are properties, not tags &#8212; thoth 0.9.1.dev27+gb000b2092 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../../_static/documentation_options.js?v=21503220"></script>
+    <script src="../../_static/documentation_options.js?v=bffd2e34"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -522,6 +522,12 @@ itself is unchanged.</p>
 its own <code class="docutils literal notranslate"><span class="pre">type</span></code>, <code class="docutils literal notranslate"><span class="pre">errand</span></code> folds into <code class="docutils literal notranslate"><span class="pre">action</span></code>, and the dashboards filter on <code class="docutils literal notranslate"><span class="pre">type</span></code> instead
 of folder + <code class="docutils literal notranslate"><span class="pre">kind</span></code>. The rest of the lean schema (properties not tags, the single <code class="docutils literal notranslate"><span class="pre">status</span></code>
 lifecycle, bare priority labels) stands.</p>
+<p>The “view-critical facets are properties, not tags” rule is <strong>clarified</strong> by the
+<a class="reference internal" href="#adr0013-grouping-amendment">amendment at the foot</a>
+(2026-06-13): the rule governs what a view <em>filters or sorts</em> on; a view may <em>group</em> on
+a tag-derived key, because grouping buckets every page (an absent tag falls into a
+visible <code class="docutils literal notranslate"><span class="pre">uncategorized</span></code> group) and so cannot reintroduce the silent-incompleteness
+failure this ADR exists to prevent.</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
@@ -607,6 +613,31 @@ and verified with <code class="docutils literal notranslate"><span class="pre">t
 property + curate + lint slot, which is the point.</p></li>
 </ul>
 </section>
+<section id="amendment-grouping-may-bucket-on-tags-2026-06-13">
+<span id="adr0013-grouping-amendment"></span><h2>Amendment — grouping may bucket on tags (2026-06-13)<a class="headerlink" href="#amendment-grouping-may-bucket-on-tags-2026-06-13" title="Link to this heading">#</a></h2>
+<p>The reference browse layer (the <code class="docutils literal notranslate"><span class="pre">notes</span></code> / <code class="docutils literal notranslate"><span class="pre">entities</span></code> / <code class="docutils literal notranslate"><span class="pre">memories</span></code> bases) groups its card
+views on a tag-derived key — Notes ▸ <em>By Topic</em> on the first <code class="docutils literal notranslate"><span class="pre">domain/*</span></code> tag, Entities ▸
+<em>By Kind</em> on <code class="docutils literal notranslate"><span class="pre">entity-kind/*</span></code> — so ~150 reference pages become browsable by subject.</p>
+<p>This does <strong>not</strong> weaken the rule above. The failure that rule prevents is a page being
+<em>silently dropped</em> from a view when an unreliable, LLM-applied tag is missing (the live
+near-empty Media and personal dashboards). Grouping cannot cause that failure:</p>
+<ul class="simple">
+<li><p>The base filters on a property the pipeline enforces (<code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">&quot;note&quot;</span></code>), so <strong>every</strong>
+page of that type is in the view.</p></li>
+<li><p>The tag only chooses which <em>bucket</em> a page sits in. A page with no matching tag is not
+hidden — it falls into a visible <code class="docutils literal notranslate"><span class="pre">uncategorized</span></code> group.</p></li>
+</ul>
+<p>So the operative rule is sharpened, not broken:</p>
+<blockquote>
+<div><p>View <strong>membership and sort order</strong> must key on enforced frontmatter properties, never
+on tags — a missing tag would silently drop or mis-order a page. A view <strong>may group</strong>
+on a tag-derived display bucket, since an absent tag yields a visible <code class="docutils literal notranslate"><span class="pre">uncategorized</span></code>
+group rather than an invisible page.</p>
+</div></blockquote>
+<p>Concretely: <code class="docutils literal notranslate"><span class="pre">tags.contains(...)</span></code> in a base <code class="docutils literal notranslate"><span class="pre">filters:</span></code> block stays forbidden (still
+guarded by <code class="docutils literal notranslate"><span class="pre">test_no_base_filters_on_tags</span></code>); deriving a group key from tags via a
+<code class="docutils literal notranslate"><span class="pre">formula:</span></code> consumed by <code class="docutils literal notranslate"><span class="pre">groupBy:</span></code> is permitted.</p>
+</section>
 </section>
 
 
@@ -660,6 +691,7 @@ property + curate + lint slot, which is the point.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#context">Context</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decision">Decision</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#consequences">Consequences</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#amendment-grouping-may-bucket-on-tags-2026-06-13">Amendment — grouping may bucket on tags (2026-06-13)</a></li>
 </ul>
   </nav></div>
 
