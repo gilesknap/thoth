@@ -22,7 +22,7 @@ of folder + `kind`. The rest of the lean schema (properties not tags, the single
 lifecycle, bare priority labels) stands.
 
 The "view-critical facets are properties, not tags" rule is **clarified** by the
-[amendment at the foot](#amendment--grouping-may-bucket-on-tags-2026-06-13)
+[amendment at the foot](#adr0013-grouping-amendment)
 (2026-06-13): the rule governs what a view *filters or sorts* on; a view may *group* on
 a tag-derived key, because grouping buckets every page (an absent tag falls into a
 visible `uncategorized` group) and so cannot reintroduce the silent-incompleteness
@@ -107,6 +107,8 @@ and memories carried `sensitivity/personal` too).
   and verified with `thoth lint` before pushing.
 - Fewer knobs: anything we later want a view to filter on must first earn a
   property + curate + lint slot, which is the point.
+
+(adr0013-grouping-amendment)=
 
 ## Amendment — grouping may bucket on tags (2026-06-13)
 
