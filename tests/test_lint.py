@@ -1,4 +1,4 @@
-"""Tests for :mod:`thoth.lint` -- the 13-check pure vault maintenance scan.
+"""Tests for :mod:`thoth.lint` -- the pure vault maintenance scan.
 
 These build a real seeded vault under ``tmp_path`` (hand-authored spine + curated /
 life-admin / raw pages carrying the relevant frontmatter, written straight to disk so
@@ -36,9 +36,12 @@ from thoth.lint import (
     LintReport,
     Severity,
     extract_embeds,
-    extract_wikilinks,
+    extract_links,
+    extract_wiki_embeds,
+    extract_wiki_links,
     parse_taxonomy_tags,
 )
+from thoth.lint.parse import _normalise_target
 from thoth.vault import Vault
 
 # A frozen "today": the SPEC worked-example anchor day.
@@ -242,13 +245,14 @@ def test_lint_error_is_exception() -> None:
 
 def test_clean_vault_yields_no_findings(vault: Vault, config: Config) -> None:
     """A valid vault (linked pages, valid frontmatter, embed, fresh raw) is clean."""
-    # Two knowledge pages that link each other (no orphans, no broken links).
+    # Two knowledge pages that link each other with OKF standard markdown links (#189):
+    # no orphans, no broken links, and the link-style check (14) finds nothing.
     _knowledge(
         vault,
         "entities",
         "alpha",
         page_type="entity",
-        body="see [[beta]] and the diagram ![[diagram-ab12.png]]\n",
+        body="see [beta](../notes/beta.md) and ![](../raw/assets/diagram-ab12.png)\n",
         tags=["entity", "controls"],
     )
     _knowledge(
@@ -256,7 +260,7 @@ def test_clean_vault_yields_no_findings(vault: Vault, config: Config) -> None:
         "notes",
         "beta",
         page_type="note",
-        body="see [[alpha]]\n",
+        body="see [alpha](../entities/alpha.md)\n",
         tags=["concept"],
     )
     # The embedded asset exists.
@@ -338,7 +342,7 @@ def test_broken_wikilink_flagged_highest_severity(vault: Vault, config: Config) 
     _knowledge(
         vault, "entities", "a", page_type="entity", body="link to [[no-such-page]]\n"
     )
-    findings = _engine(vault, config).check_broken_wikilinks()
+    findings = _engine(vault, config).check_broken_links()
     assert [f.severity for f in findings] == [Severity.BROKEN]
     assert "no-such-page" in findings[0].message
     assert Severity.BROKEN == min(Severity)
@@ -354,7 +358,7 @@ def test_label_and_anchor_wikilinks_resolve(vault: Vault, config: Config) -> Non
         page_type="note",
         body="[[real|A Label]] and [[real#Heading]]\n",
     )
-    broken = _engine(vault, config).check_broken_wikilinks()
+    broken = _engine(vault, config).check_broken_links()
     assert broken == []
 
 
@@ -375,7 +379,7 @@ def test_alias_target_is_not_broken(vault: Vault, config: Config) -> None:
         page_type="note",
         body="see [[Program Motion Controller]]\n",
     )
-    broken = {f.path for f in _engine(vault, config).check_broken_wikilinks()}
+    broken = {f.path for f in _engine(vault, config).check_broken_links()}
     assert "notes/ref.md" not in broken
 
 
@@ -400,7 +404,7 @@ def test_wikilink_resolves_by_full_path(vault: Vault, config: Config) -> None:
         page_type="entity",
         body="with [[entities/jane-doe]]\n",
     )
-    broken = _engine(vault, config).check_broken_wikilinks()
+    broken = _engine(vault, config).check_broken_links()
     assert broken == []
 
 
@@ -1066,6 +1070,63 @@ def test_image_hygiene_orphan_broken_and_sidecar(vault: Vault, config: Config) -
 
 
 # --------------------------------------------------------------------------------------
+# check 14: OKF link style
+# --------------------------------------------------------------------------------------
+
+
+def test_link_style_flags_wiki_links_and_image_embeds(
+    vault: Vault, config: Config
+) -> None:
+    """[[wikilink]] and ![[image.png]] are STYLE findings; markdown links pass (#189).
+
+    The OKF link-style check (14) flags legacy Obsidian forms in active content pages.
+    """
+    _knowledge(
+        vault,
+        "entities",
+        "wikiish",
+        page_type="entity",
+        body="legacy [[other]] and ![[photo.png]] here\n",
+    )
+    _knowledge(
+        vault,
+        "notes",
+        "okf",
+        page_type="note",
+        body="modern [other](../entities/wikiish.md) and ![](../raw/assets/p.png)\n",
+    )
+    findings = _engine(vault, config).check_link_style()
+    flagged = {f.path for f in findings}
+    assert "entities/wikiish.md" in flagged
+    assert "notes/okf.md" not in flagged  # standard markdown links are not flagged
+    assert all(f.severity is Severity.STYLE and f.check == 14 for f in findings)
+    names = {f.name for f in findings if f.path == "entities/wikiish.md"}
+    assert names == {"wiki-link", "wiki-embed"}
+
+
+def test_link_style_exempts_base_and_excalidraw_embeds(
+    vault: Vault, config: Config
+) -> None:
+    """Bases (.base) and Excalidraw (.excalidraw) wiki embeds are exempt (#189)."""
+    _knowledge(
+        vault,
+        "notes",
+        "dash",
+        page_type="note",
+        body=(
+            "![[_bases/x.base#View]] and ![[sketch.excalidraw]] "
+            "and [ok](../entities/thing.md)\n"
+        ),
+    )
+    flagged = [
+        f
+        for f in _engine(vault, config).check_link_style()
+        if f.path == "notes/dash.md"
+    ]
+    assert flagged == []
+
+
+# --------------------------------------------------------------------------------------
 # check 12: log rotation
 # --------------------------------------------------------------------------------------
 
@@ -1245,32 +1306,71 @@ def test_missing_folders_yield_clean_run(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_extract_wikilinks_brackets_pipes_anchors_and_fences() -> None:
-    """extract_wikilinks handles pipes/anchors and ignores code-fenced links."""
+def test_extract_links_markdown_and_residual_wiki() -> None:
+    """extract_links returns internal markdown link targets + any residual wiki link."""
     body = (
-        "plain [[alpha]], aliased [[beta|Beta Label]], anchored [[gamma#Section]].\n"
-        "an embed ![[asset.png]] is NOT a wikilink.\n"
-        "```\n[[in-fence]]\n```\n"
-        "inline `[[in-code]]` too.\n"
+        "md [Alpha](../entities/alpha.md), anchored [Beta](notes/beta.md#section), "
+        "encoded [Spaced](my%20note.md), external [site](https://example.com), "
+        "same-page [top](#top).\n"
+        "an image ![](../raw/assets/x.png) is NOT a link.\n"
+        "a residual wiki [[gamma]] still counts.\n"
+        "```\n[fenced](in-fence.md) [[also-fenced]]\n```\n"
+        "inline `[c](in-code.md)` too.\n"
     )
-    links = extract_wikilinks(body)
-    assert links == ["alpha", "beta|Beta Label", "gamma#Section"]
-    assert "in-fence" not in " ".join(links)
-    assert "in-code" not in " ".join(links)
-    assert "asset.png" not in " ".join(links)
+    links = extract_links(body)
+    assert "../entities/alpha.md" in links
+    assert "notes/beta.md#section" in links
+    assert "my%20note.md" in links
+    assert "gamma" in links  # residual wiki link is still recognised
+    # external URLs, same-page anchors, images and code-fenced/inline links are excluded
+    assert all("example.com" not in target for target in links)
+    assert "#top" not in links
+    assert all("x.png" not in target for target in links)
+    assert all(
+        "in-fence" not in target and "also-fenced" not in target for target in links
+    )
+    assert all("in-code" not in target for target in links)
 
 
-def test_extract_embeds_distinguishes_embeds_from_links() -> None:
-    """extract_embeds returns only ![[...]] filenames, stripping alias/anchor."""
+def test_normalise_target_reduces_to_bare_stem() -> None:
+    """A markdown href or wiki target normalises to the bare slug stem it resolves to.
+
+    Directory, ``.md``, ``#anchor``, ``|alias`` and URL-escapes are all stripped.
+    """
+    assert _normalise_target("../entities/alpha.md#bio") == "alpha"
+    assert _normalise_target("notes/beta.md") == "beta"
+    assert _normalise_target("my%20note.md") == "my note"
+    assert _normalise_target("gamma|Gamma Label") == "gamma"
+
+
+def test_extract_embeds_markdown_and_residual_wiki() -> None:
+    """extract_embeds returns asset basenames from markdown images and wiki embeds."""
     body = (
-        "![[diagram-aa11.png]] and a link [[not-an-embed]] "
-        "and ![[photo.jpg|caption]].\n"
-        "```\n![[in-fence.png]]\n```\n"
+        "md image ![](../raw/assets/diagram-aa11.png), sized "
+        "![|300](raw/assets/photo%20one.jpg), a link [x](note.md), "
+        "external ![alt](https://example.com/remote.png).\n"
+        "wiki ![[legacy.png]], excalidraw ![[sketch.excalidraw]].\n"
+        "```\n![](in-fence.png)\n```\n"
     )
     embeds = extract_embeds(body)
-    assert embeds == ["diagram-aa11.png", "photo.jpg"]
-    assert "not-an-embed" not in embeds
+    assert "diagram-aa11.png" in embeds
+    assert "photo one.jpg" in embeds  # %20 decoded, the |300 size lives in the alt text
+    assert "legacy.png" in embeds
+    assert "sketch.excalidraw" in embeds
+    assert "remote.png" not in embeds  # external image URL dropped
+    assert "note.md" not in embeds  # a link is not an embed
     assert "in-fence.png" not in embeds
+
+
+def test_extract_wiki_tokens_for_okf_style_check() -> None:
+    """extract_wiki_links/_embeds isolate legacy tokens for the OKF link-style check."""
+    body = (
+        "wiki link [[alpha]] and a md link [Beta](beta.md).\n"
+        "wiki image ![[photo.png]], excalidraw ![[s.excalidraw]], base ![[d.base]].\n"
+        "```\n[[fenced]] ![[fenced.png]]\n```\n"
+    )
+    assert extract_wiki_links(body) == ["alpha"]
+    assert extract_wiki_embeds(body) == ["photo.png", "s.excalidraw", "d.base"]
 
 
 def test_parse_taxonomy_tags_reads_bullets() -> None:

@@ -27,8 +27,9 @@ from .checks_freshness import (
 )
 from .checks_links import (
     _ASSETS_DIR,
-    _check_broken_wikilinks,
+    _check_broken_links,
     _check_image_hygiene,
+    _check_link_style,
     _check_orphans,
 )
 from .checks_metadata import (
@@ -61,7 +62,7 @@ _RAW_DIRS: tuple[str, ...] = ("articles", "papers", "transcripts")
 
 
 class LintEngine:
-    """Pure, deterministic 13-check vault linter built from a frozen Config + Vault.
+    """Pure, deterministic vault linter built from a frozen Config + Vault.
 
     All retrieval is a pure read over the vault folders; no LLM and no network are used.
     The single non-deterministic input -- the current calendar date -- is injected as
@@ -93,9 +94,10 @@ class LintEngine:
     # ---- aggregate -------------------------------------------------------------------
 
     def run(self) -> LintReport:
-        """Run checks 1-12 and aggregate into a sorted :class:`~thoth.lint.LintReport`.
+        """Run checks 1-12 + 14 and aggregate into a sorted
+        :class:`~thoth.lint.LintReport`.
 
-        Findings are concatenated across the twelve checks and sorted by
+        Findings are concatenated across the checks and sorted by
         ``(severity, check, path)`` so the report is deterministic. Check 13
         (:meth:`record`) is *not* run here -- the caller decides whether to log.
 
@@ -108,7 +110,7 @@ class LintEngine:
         """
         checks = (
             self.check_orphans,
-            self.check_broken_wikilinks,
+            self.check_broken_links,
             self.check_summaries,
             self.check_frontmatter,
             self.check_stale,
@@ -119,6 +121,7 @@ class LintEngine:
             self.check_tag_audit,
             self.check_image_hygiene,
             self.check_log_rotation,
+            self.check_link_style,
         )
         findings: list[Finding] = []
         for check in checks:
@@ -157,18 +160,19 @@ class LintEngine:
         """
         return _check_orphans(self._curated_pages())
 
-    def check_broken_wikilinks(self) -> list[Finding]:
-        """Flag ``[[target]]`` links resolving to no page, honouring aliases (check 2).
+    def check_broken_links(self) -> list[Finding]:
+        """Flag ``[text](path.md)`` links resolving to no page, honouring aliases (2).
 
-        A target resolves if it matches any page's slug, its full vault-relative path
-        (with or without the ``.md`` suffix), or one of its ``aliases``. The alias /
-        anchor portions of a link are stripped before resolution. Highest severity
-        (``Severity.BROKEN``).
+        Recognises the OKF standard markdown link form and any residual wikilink. A
+        target resolves if its bare stem matches any page's slug, its full
+        vault-relative path (with or without the ``.md`` suffix), or one of its
+        ``aliases``. The alias / anchor portions of a link are stripped before
+        resolution. Highest severity (``Severity.BROKEN``).
 
         Returns:
-            One :class:`~thoth.lint.Finding` per unresolved wikilink occurrence.
+            One :class:`~thoth.lint.Finding` per unresolved link occurrence.
         """
-        return _check_broken_wikilinks(self._all_scanned_pages())
+        return _check_broken_links(self._all_scanned_pages())
 
     def check_summaries(self) -> list[Finding]:
         """Flag content pages missing a one-line ``summary:`` gloss (check 3).
@@ -327,6 +331,22 @@ class LintEngine:
         except LintError:
             return []
         return _check_log_rotation(log_text)
+
+    def check_link_style(self) -> list[Finding]:
+        """Flag legacy Obsidian wiki links/embeds; OKF wants markdown links (check 14).
+
+        Every ``[[wikilink]]`` and every wiki *image* embed (``![[photo.png]]``) in a
+        scanned content page is flagged ``Severity.STYLE`` -- the vault adopts OKF
+        standard markdown links ``[text](path.md)`` / ``![alt](path)`` (issue #189).
+        Bases (``.base``) and Excalidraw (``.excalidraw``) embeds are exempt: they have
+        no markdown equivalent and stay in Obsidian ``![[...]]`` form. Spine files,
+        ``raw/`` and ``_bases/`` are out of scan scope so the dashboards are never
+        flagged.
+
+        Returns:
+            One :class:`~thoth.lint.Finding` per legacy wiki link / non-exempt embed.
+        """
+        return _check_link_style(self._all_scanned_pages())
 
     # ---- internal page walks ---------------------------------------------------------
 

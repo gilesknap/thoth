@@ -232,8 +232,9 @@ Knowledge add-ons: `sources` (list, required if any raw exists), `confidence`, `
 `ingested`, `sha256` (digest of body). Full field semantics, naming rules, SCHEMA.md text,
 and worked examples: **Appendix → Vault schema & SCHEMA.md** (the schema is framework-independent).
 
-**Images:** embed-and-describe on the owning page (`![[slug-hash.ext]]`), binary in `raw/assets/`, no
-sidecar, never base64.
+**Images:** embed-and-describe on the owning page with a standard markdown image embed
+(`![](../raw/assets/slug-hash.ext)`, OKF — see [ADR 0017](docs/explanations/decisions/0017-adopt-okf-standard-markdown-links.md)),
+binary in `raw/assets/`, no sidecar, never base64.
 
 **Dashboards:** Bases-if-it-validates, else Dataview (still an open item, §15; examples in Appendix → Dashboards). The appliance does the date
 math for summaries regardless, so dashboards are not load-bearing for the daily briefing.
@@ -256,8 +257,8 @@ Same operation as the Hermes spec, minus Hermes tool names, run as **bounded val
                       raw frontmatter: source_url, ingested, sha256(body). Skip if sha256 exists.
 3. FETCH CANDIDATES   search_vault() for every named entity/concept -> the existing pages to maybe update.
 4. CURATE (file-plan) second Claude call: given SCHEMA + candidate pages, RETURN a validated plan of
-                      pages to create/update (full frontmatter + body, >=2 wikilinks each, image embeds,
-                      confidence/provenance). Harness validates + writes via write_page/write_raw/save_asset.
+                      pages to create/update (full frontmatter + body, >=2 markdown links each, image
+                      embeds, confidence/provenance). Harness validates + writes via write_page/write_raw/save_asset.
 5. NAVIGATION         append_log() listing every file touched (a reference page's one-line gloss rides in its
                       own summary: frontmatter; index.md is static — no catalog edit, ADR-0008).
 6. RETAIN             hindsight.retain(path, facts) per curated page (vault-path-keyed); probe it landed.
@@ -322,7 +323,7 @@ fabricated:
 ```
 query
   -> grep the vault (search_files; scans frontmatter, so a page's summary: gloss matches here)
-  -> known page?          -> follow [[wikilinks]]
+  -> known page?          -> follow the markdown links
   -> phrasing-independent? -> hindsight.recall(query) -> vault page paths
   -> COMPOSE answer from page(s); harness appends obsidian:// link + path + [[wikilink]]
 ```
@@ -447,8 +448,9 @@ pg connection/socket is VPS-time, so the dump command is fully overridable
 
 ## 11. Maintenance / lint — `lint.py` (carried forward: Appendix → Lint checks)
 
-The 13 checks (orphans, broken wikilinks/embeds, index completeness, frontmatter validation, stale content,
-contradictions, source drift, quality signals, page size, tag audit, image hygiene, log rotation, report+log)
+The checks (orphans, broken links/embeds, index completeness, frontmatter validation, stale content,
+contradictions, source drift, quality signals, page size, tag audit, image hygiene, log rotation, report+log,
+and the OKF link-style check — [ADR 0017](docs/explanations/decisions/0017-adopt-okf-standard-markdown-links.md))
 are a pure markdown scan — framework-independent, carried verbatim in **Appendix → Lint checks**. Runs weekly via cron and on
 demand after a bulk migration/restore. Independent of the reindex job. Phase 4 (not needed for first light).
 
@@ -641,7 +643,7 @@ Knowledge pages add (all optional except where noted):
 | `contradictions` | list | page slugs this one conflicts with |
 
 (`aliases` was dropped from the contract — nothing populated it. Obsidian-native alias *resolution*
-still works in lint's wikilink checks if a human adds one by hand.)
+still works in lint's link checks if a human adds one by hand.)
 
 Type-specific fields (ADR 0013 — every listed field is actively populated by curate and
 lint-enforced; the old sparse optionals `aliases`/`people`/`location`/`project`/`recurrence`/`creator`
@@ -675,22 +677,24 @@ Notes:
 | Binary assets | `raw/assets/<slug>-<shorthash>.<ext>` — stable, collision-proof, descriptive | `raw/assets/motor-control-diagram-e4a408.png` |
 
 This abandons the old 2ndBrain `Attachments/20260207_113000_photo.png` timestamp-prefix scheme: timestamps in
-filenames are noise once frontmatter carries dates, and a descriptive slug makes wiki-embeds self-documenting
+filenames are noise once frontmatter carries dates, and a descriptive slug makes embeds self-documenting
 and survivable across re-ingests.
 
 #### Images: embed-and-describe, not sidecar
 
 1. Binary lands in `raw/assets/` with a descriptive slug.
 2. The **curated page** (an entity/concept/memory page) **both embeds and describes** the image inline using
-   an Obsidian wiki-embed: `![[motor-control-diagram-e4a408.png]]`.
+   a standard markdown image embed (OKF, [ADR 0017](docs/explanations/decisions/0017-adopt-okf-standard-markdown-links.md)):
+   `![](../raw/assets/motor-control-diagram-e4a408.png)`.
 3. No separate descriptive `.md` per image. The description is prose on the page that owns the image; the
    asset is referenced, never narrated in isolation.
 4. Obsidian's attachment folder is set to `raw/assets`, so drag-drop in Obsidian and app writes converge on
    the same location. Binaries are committed as-is — **never base64**.
 
-Because the embed uses the bare filename (Obsidian resolves `![[name.ext]]` vault-wide), curated pages don't
-need the `raw/assets/` path prefix in the embed; the `sources:` frontmatter still records provenance with the
-full path.
+The markdown embed carries the page-relative path to the asset (a content page is one folder deep, so
+`![](../raw/assets/name.ext)`); the `sources:` frontmatter still records provenance with the full path.
+Excalidraw `.excalidraw` drawings and Bases `.base` views have no standard-markdown form and stay as
+Obsidian `![[...]]` embeds.
 
 #### SCHEMA.md (PKM-tuned) — full body text
 
@@ -712,10 +716,12 @@ The vault is the single source of truth. Hindsight indexes it; it is never the s
 ## Conventions
 - File names: lowercase, hyphens, no spaces, no dates (dates live in frontmatter).
 - Every page starts with YAML frontmatter (see Frontmatter).
-- Link with [[wikilinks]]; every knowledge page needs >= 2 outbound links.
+- Link with standard markdown links `[Title](folder/slug.md)` (OKF, ADR 0017) — NOT
+  Obsidian `[[wikilinks]]`; every knowledge page needs >= 2 outbound links.
 - Bump `updated` on every edit. Add every new page to index.md. Append every action to log.md.
-- Images: embed inline with ![[asset.ext]] on the owning page AND describe them there.
-  Binaries live in raw/assets/. No per-image sidecar files. Never base64.
+- Images: embed inline with `![](../raw/assets/asset.ext)` markdown image syntax on the
+  owning page AND describe them there. Binaries live in raw/assets/. No per-image sidecar
+  files. Never base64. (Excalidraw `.excalidraw` / Bases `.base` embeds stay `![[...]]`.)
 - Provenance: on pages synthesising 3+ sources, append ^[raw/articles/source.md] to
   paragraphs whose claims trace to one source.
 
@@ -786,10 +792,11 @@ aliases: [PMC]
 # Program Motion Controller (PMC)
 
 Central coordinator in the motor-control stack: the PMC issues setpoints to the
-[[drive-control-module]] (DCM), which drives the physical [[motor-rail-api]]. It
-consumes **CS Demands** from the control system and exposes **CS Motor** state back.
+[drive control module](drive-control-module.md) (DCM), which drives the physical
+[motor rail api](motor-rail-api.md). It consumes **CS Demands** from the control system
+and exposes **CS Motor** state back.
 
-![[motor-control-diagram-e4a408.png]]
+![](../raw/assets/motor-control-diagram-e4a408.png)
 
 The hand-drawn architecture above shows data flow PMC -> DCM -> Motor Rail/API, with
 several components marked complete (red checkmarks) for progress tracking.
@@ -797,14 +804,14 @@ several components marked complete (red checkmarks) for progress tracking.
 
 ## Key facts
 - Role: central motion coordination.
-- Talks to: [[drive-control-module]], [[motor-rail-api]].
+- Talks to: [drive control module](drive-control-module.md), [motor rail api](motor-rail-api.md).
 - Inputs: CS Demands. Outputs: CS Motor state.
 
 ## Open questions
 - Confidence is `medium`: single hand-drawn source; corroborate against a written spec.
 
 ## Related
-- [[drive-control-module]] · [[ioc-network-architecture]]
+- [drive control module](drive-control-module.md) · [ioc network architecture](ioc-network-architecture.md)
 ```
 
 The binary lives at `raw/assets/motor-control-diagram-e4a408.png`; there is **no** separate `img_*.md` file.
@@ -840,7 +847,7 @@ boards + galvanised nails; refit before the next forecast wind.
 - [ ] Refit and treat
 
 ### Notes
-Linked to [[home-maintenance]].
+Linked to [home maintenance](home-maintenance.md).
 ```
 
 This page never needs an `index.md` entry — `_bases/actions.base` surfaces it under
@@ -874,8 +881,8 @@ Reference book on the architecture of data systems (replication, partitioning,
 consistency, batch/stream processing). Captured for the to-consume backlog.
 
 ### Why
-Background for the [[concepts/distributed-systems]] notes; covers the CAP
-trade-offs filed at [[cap-theorem]].
+Background for the [distributed systems](distributed-systems.md) notes; covers the CAP
+trade-offs filed at [cap theorem](cap-theorem.md).
 ```
 
 ### Spine templates — index.md / log.md
@@ -1137,8 +1144,9 @@ the real note in their own Obsidian.
 4. Life-admin items (Actions/TODOs, media backlog, memories) are wiki pages with a
    frontmatter `type:` — never a rival folder tree. Set kind/status/due/priority on
    Actions from natural language.
-5. Embed images inline with Obsidian wiki-embeds; the curated page describes AND
-   embeds the asset. Never store base64. Never write a separate descriptive sidecar.
+5. Embed images inline with standard markdown image embeds `![](relative/path)`; the
+   curated page describes AND embeds the asset. Never store base64. Never write a
+   separate descriptive sidecar.
 6. Auto-tag and cross-link. Never ask the user to file or tag.
 7. Retain the page into Hindsight, attaching its vault path as a `rel` **tag** (the
    primary provenance channel, which survives LLM fact-extraction) with a
@@ -1678,8 +1686,8 @@ job.
 
 | # | Check | Action |
 |---|---|---|
-| 1 | **Orphan pages** | Knowledge pages with zero inbound `[[wikilinks]]` (life-admin pages exempt — Bases surface them). Suggest a link or archive. |
-| 2 | **Broken wikilinks** | `[[link]]` targets that resolve to no file (respect `aliases`). Highest severity. |
+| 1 | **Orphan pages** | Knowledge pages with zero inbound links (life-admin pages exempt — Bases surface them). Suggest a link or archive. |
+| 2 | **Broken links** | `[text](path.md)` (or residual `[[link]]`) targets that resolve to no file (respect `aliases`). Highest severity. |
 | 3 | **Summary gloss** | Every content page (all four types, including `action`; ADR-0013) carries a non-empty one-line `summary:` frontmatter gloss (the canonical, rebuildable per-page gloss; ADR-0008). Flag any missing it. |
 | 4 | **Frontmatter validation** | Required fields present (content pages incl. `personal`, inbox holds their machinery set); `type` valid; type-specific required fields present (`action` has `status` + `kind`); `personal` a real boolean; values match the vault vocabularies. |
 | 5 | **Stale content** | Knowledge `updated` > 90 days older than the newest source touching the same entities; **life-admin**: `action` past `due_date` and not done/cancelled; `kind: media` still `todo` > 180 days. |
@@ -1688,9 +1696,10 @@ job.
 | 8 | **Quality signals** | List `confidence: low` and single-source pages with no `confidence` — corroborate or demote. |
 | 9 | **Page size** | Knowledge pages > 200 lines ⇒ split candidates. |
 | 10 | **Tag audit** | Every tag in use must exist in SCHEMA.md taxonomy; flag strays. |
-| 11 | **Image hygiene** | Assets in `raw/assets/` with no `![[…]]` embed anywhere = orphan binaries; pages embedding a missing asset = broken embed; any surviving per-image sidecar `.md` (legacy pattern) flagged for merge-into-owner-page. |
+| 11 | **Image hygiene** | Assets in `raw/assets/` embedded by no page = orphan binaries; pages embedding a missing asset = broken embed; any surviving per-image sidecar `.md` (legacy pattern) flagged for merge-into-owner-page. |
 | 12 | **Log rotation** | If `log.md` > 500 entries, rotate to `log-YYYY.md`. |
 | 13 | **Report + log** | Group by severity (broken links/embeds > orphans > source drift > contested > stale/overdue > style). Append `## [YYYY-MM-DD] lint | N issues found`. |
+| 14 | **OKF link style** | Flag legacy Obsidian `[[wikilink]]` links and wiki *image* embeds (`![[photo.png]]`) in content pages — OKF wants `[text](path.md)` / `![alt](path)` (ADR 0017). Bases `.base` and Excalidraw `.excalidraw` embeds are exempt. `Severity.STYLE`. |
 
 ### Migration
 

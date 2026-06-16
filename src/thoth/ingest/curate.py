@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import posixpath
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 from thoth.analyse import Analysis
 from thoth.llm import (
@@ -83,16 +85,14 @@ _SUBMIT_FILE_PLAN_TOOL: dict[str, Any] = {
                         },
                         "body": {
                             "type": "string",
-                            "description": "markdown body with >= 2 [[wikilinks]]",
+                            "description": (
+                                "markdown body with >= 2 standard links "
+                                "[text](folder/slug.md)"
+                            ),
                         },
                         "summary": {
                             "type": "string",
                             "description": "one-line gloss (every page)",
-                        },
-                        "wikilinks": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "minItems": 2,
                         },
                     },
                     "required": ["action", "folder", "slug", "frontmatter", "body"],
@@ -166,7 +166,7 @@ class _CuratePass(_IngestorBase):
         When ``analysis`` is supplied (a binary capture, issue #42), the OCR'd/extracted
         text + description are given to the model so the curated page **body holds the
         real meaning** of the asset (and cross-links it), instead of a blind stub around
-        the ``![[asset]]`` embed.
+        the asset embed.
 
         ``extracted_body`` plays the same role for a *text-bearing* capture whose body
         was extracted before classify -- an audio transcript or a URL article's markdown
@@ -293,7 +293,7 @@ class _CuratePass(_IngestorBase):
                 f"as-is import: classification type {cls.page_type!r} has no content "
                 "folder"
             )
-        body = self._as_is_body(capture, raw, extracted_body)
+        body = self._as_is_body(capture, raw, extracted_body, folder=folder)
         frontmatter: dict[str, Any] = {
             "title": cls.title,
             "type": cls.page_type,
@@ -324,13 +324,15 @@ class _CuratePass(_IngestorBase):
         capture: Capture,
         raw: RawCaptureResult,
         extracted_body: str | None,
+        *,
+        folder: str,
     ) -> str:
         """Build the verbatim page body for an as-is import (no model reshaping).
 
         Prefers the inline ``text`` (the Markdown/text upload case -- the body IS the
         file), then a pre-extracted body (URL article / audio transcript), then a stub
         naming the kept asset for a binary with no text. The saved-asset embeds are
-        appended so the binary renders in Obsidian.
+        appended (relative to ``folder``) so the binary renders in Obsidian.
         """
         if capture.text is not None:
             body = capture.text
@@ -340,7 +342,7 @@ class _CuratePass(_IngestorBase):
             body = ""
         else:
             body = "_Imported with no extractable text._"
-        return self._append_embeds(body, {}, raw)
+        return self._append_embeds(body, raw, folder=folder)
 
     def _parse_and_validate_plan(self, response: Any) -> dict[str, Any]:
         """Read the curate tool-use plan and validate it against the file-plan contract.
@@ -439,7 +441,7 @@ class _CuratePass(_IngestorBase):
         frontmatter.setdefault("source", source)
         self._apply_summary(frontmatter, page)
         body = page["body"]
-        body = self._append_embeds(body, page, raw)
+        body = self._append_embeds(body, raw, folder=folder)
         body = self._ensure_analysis_text(body, raw, analysis)
         # Page reuse vs create (issue #125): a plan ``action`` of "update", or a slug
         # already on disk, means this capture merges into an existing page rather than
@@ -501,30 +503,38 @@ class _CuratePass(_IngestorBase):
         return body.rstrip("\n") + "\n\n## Extracted text\n\n" + ocr
 
     @staticmethod
-    def _append_embeds(body: str, page: dict[str, Any], raw: RawCaptureResult) -> str:
-        """Append Obsidian ``![[asset]]`` embeds for saved assets not already in body.
+    def _append_embeds(body: str, raw: RawCaptureResult, *, folder: str) -> str:
+        """Append standard markdown image embeds for saved assets not already in body.
 
-        Uses the asset filename (Obsidian resolves embeds vault-wide), never a base64
-        blob. Embeds already present in the model's body are left as-is -- except one
-        the curate model wrote by an asset's *on-disk* filename, which is rewritten to
-        its render form: for an Excalidraw drawing the model often emits
-        ``![[<slug>.excalidraw.md]]`` (which renders as the raw JSON note), so it is
-        normalised to ``![[<slug>.excalidraw]]`` (issue #68 live-verify). The rewrite
-        runs before the de-dupe, so the harness never appends a second, redundant embed.
+        Each saved asset is embedded with the OKF ``![](relative/path)`` form (issue
+        #189), the path computed relative to the page's ``folder`` (a ``memories/`` page
+        embeds ``../raw/assets/photo.png``) and URL-escaped. An Excalidraw drawing
+        (``<slug>.excalidraw.md`` on disk) is the one exception: only the Obsidian
+        ``![[<slug>.excalidraw]]`` wiki embed renders the drawing (the plugin keys on
+        that basename, issue #68) and there is no standard-markdown equivalent, so it
+        keeps the wiki form -- a model-written ``![[<slug>.excalidraw.md]]`` is
+        normalised to it first. An embed already in the model's body is not duplicated.
         """
-        embeds: list[str] = []
+        additions: list[str] = []
         for asset_rel in raw.asset_paths:
             name = PurePosixPath(asset_rel).name
             embed_name = _embed_name(name)
             if embed_name != name:
+                # Excalidraw drawing: keep the Obsidian wiki embed (only form that
+                # renders the drawing); normalise a model-written .md variant first.
                 body = body.replace(f"![[{name}]]", f"![[{embed_name}]]")
-            embed = f"![[{embed_name}]]"
-            if embed not in body and embed not in embeds:
-                embeds.append(embed)
-        if not embeds:
+                embed = f"![[{embed_name}]]"
+                present = embed in body
+            else:
+                href = _relative_asset_href(asset_rel, folder)
+                embed = f"![]({href})"
+                present = name in body or href in body
+            if present or embed in additions:
+                continue
+            additions.append(embed)
+        if not additions:
             return body
-        suffix = "\n\n" + "\n".join(embeds)
-        return body.rstrip("\n") + suffix
+        return body.rstrip("\n") + "\n\n" + "\n".join(additions)
 
     def _curate_prompt(
         self,
@@ -567,7 +577,8 @@ class _CuratePass(_IngestorBase):
             f"{file_plan_contract_text()}\n\n"
             f"Classification: type={cls.page_type} slug={cls.slug} title={cls.title}\n"
             f"Raw source page: {raw_block}\n"
-            f"Saved assets (embed with ![[name]]): {asset_block}\n"
+            "Saved assets (embed each inline with a markdown image, e.g. "
+            f"![](../raw/assets/NAME)): {asset_block}\n"
             f"Existing candidate pages to maybe update:\n{candidate_block}\n\n"
             f"Captured item:\n{summary}"
         )
@@ -586,6 +597,17 @@ def _embed_name(asset_filename: str) -> str:
     if asset_filename.endswith(".excalidraw.md"):
         return asset_filename[: -len(".md")]
     return asset_filename
+
+
+def _relative_asset_href(asset_rel: str, folder: str) -> str:
+    """Build a page-relative, URL-escaped href for a vault-relative asset path (#189).
+
+    Content folders are one level deep, so an asset at ``raw/assets/photo.png`` becomes
+    ``../raw/assets/photo.png`` from any content page. Spaces and other unsafe chars are
+    percent-encoded so the markdown ``![](...)`` link is well-formed.
+    """
+    rel = posixpath.relpath(asset_rel, folder) if folder else asset_rel
+    return quote(rel, safe="/")
 
 
 def _curate_repair_prompt(problems: str) -> str:

@@ -15,7 +15,9 @@ from thoth.vault import (
 _VALID_LOG_ACTIONS: frozenset[str] = frozenset(
     {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
 )
-_MIN_WIKILINKS: int = 2
+# Minimum outbound links every curated page should carry. Enforced by the prompt and the
+# lint orphan/broken-link checks, not the file-plan validator (issue #189).
+_MIN_LINKS: int = 2
 
 
 def file_plan_contract_text() -> str:
@@ -25,14 +27,14 @@ def file_plan_contract_text() -> str:
     a one-line "return a file plan (see the file-plan schema)" instruction with the
     schema never actually shown -- so the model guessed the envelope and **every**
     capture was rejected by :func:`validate_file_plan` (empty ``folder``, missing
-    ``slug``/``updated``/``wikilinks``, a file path mistaken for ``source``, a malformed
+    ``slug``/``updated``, a file path mistaken for ``source``, a malformed
     ``log`` block). This spells out the exact JSON shape and the enums.
 
     It is rendered from the **same canonical constants the validator enforces**
     (:data:`~thoth.vault.FOLDER_TYPE_CONTRACT`, :data:`~thoth.vault.VALID_SOURCES`,
     :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, the actionable ``status`` and
     ``priority``/``media_type`` vocabularies, :data:`_VALID_LOG_ACTIONS`,
-    :data:`_MIN_WIKILINKS`), so the instructions and :func:`validate_file_plan` cannot
+    :data:`_MIN_LINKS`), so the instructions and :func:`validate_file_plan` cannot
     drift -- a new folder/type/source/vocab-value/log-action flows into the prompt
     automatically. The internal ``inbox`` holding folder is excluded: it is the durable
     pre-LLM hold, never a curate target.
@@ -66,15 +68,17 @@ def file_plan_contract_text() -> str:
         f'      "source": one of [{sources}], "tags": ["..."], '
         '"personal": true|false\n'
         "    },\n"
-        f'    "body": "markdown containing at least {_MIN_WIKILINKS} [[wikilinks]]",\n'
-        '    "summary": "one crisp line: what this page is about",   // see below\n'
-        '    "wikilinks": ["[[a-related-page]]", "[[another-page]]"]   // >= '
-        f"{_MIN_WIKILINKS}\n"
+        f'    "body": "markdown with >= {_MIN_LINKS} standard links '
+        '[text](folder/slug.md)",\n'
+        '    "summary": "one crisp line: what this page is about"   // see below\n'
         "  } ],\n"
         f'  "log": {{"action": one of [{log_actions}], "subject": "...", '
         '"files": ["folder/slug.md"]}   // optional\n'
         "}\n"
         f"Folder -> required type: {folder_types}.\n"
+        f"Link to related pages with at least {_MIN_LINKS} standard markdown links "
+        "`[Title](folder/slug.md)` using the target page's vault-relative path -- NOT "
+        "Obsidian `[[wikilinks]]`. Embed an image with `![](relative/path)`.\n"
         "A note carries a tag for its sub-kind (concept/comparison/query).\n"
         '"personal" keys off the SUBJECT, not whether it is a chore: true when the '
         "item concerns the owner's private life (home, family, friends, hobbies, "
@@ -107,6 +111,6 @@ def file_plan_contract_text() -> str:
         "an empty heading, never a placeholder or 'expand later' comment, and never an "
         "HTML comment (<!-- ... -->) standing in for missing content. If the captured "
         "material is thin, a short body with just a one-paragraph summary (plus the "
-        "[[wikilinks]]) is correct and complete -- do not scaffold sections you cannot "
-        "fill."
+        "standard markdown links) is correct and complete -- do not scaffold sections "
+        "you cannot fill."
     )

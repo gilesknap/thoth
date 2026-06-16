@@ -448,10 +448,11 @@ def _good_page(slug: str = "program-motion-controller") -> dict[str, Any]:
             "tags": ["controls"],
             "personal": False,
         },
-        "body": "PMC coordinates motion. See [[drive-control-module]].",
+        "body": (
+            "PMC coordinates motion. See [drive control module]"
+            "(drive-control-module.md) and [motor rail api](motor-rail-api.md)."
+        ),
         "summary": "central coordinator in the motor-control stack",
-        "wikilinks": ["drive-control-module", "motor-rail-api"],
-        "embeds": [],
     }
 
 
@@ -583,12 +584,16 @@ def test_validate_file_plan_rejects_bad_slug() -> None:
         validate_file_plan({"pages": [page]})
 
 
-def test_validate_file_plan_rejects_too_few_wikilinks() -> None:
-    """Fewer than two outbound wikilinks is reported."""
+def test_validate_file_plan_ignores_retired_wikilinks_field() -> None:
+    """The retired ``wikilinks`` plan array no longer gates a plan (OKF, #189).
+
+    Links now live in the markdown body (``[text](path.md)``); the validator no longer
+    requires a separate link array, so a plan carrying none -- or a stray legacy one --
+    still validates.
+    """
     page = _good_page()
-    page["wikilinks"] = ["only-one"]
-    with pytest.raises(SchemaValidationError, match="wikilinks"):
-        validate_file_plan({"pages": [page]})
+    page["wikilinks"] = ["only-one"]  # legacy field is tolerated and ignored
+    validate_file_plan({"pages": [page]})  # does not raise
 
 
 def test_validate_file_plan_rejects_missing_required_field() -> None:
@@ -639,13 +644,13 @@ def test_validate_file_plan_collects_multiple_problems() -> None:
     """Every violation is surfaced at once, not just the first."""
     page = _good_page()
     page["action"] = "nope"
-    page["wikilinks"] = []
+    page["frontmatter"]["source"] = "carrier-pigeon"
     del page["frontmatter"]["title"]
     with pytest.raises(SchemaValidationError) as exc:
         validate_file_plan({"pages": [page]})
     message = str(exc.value)
     assert "action" in message
-    assert "wikilinks" in message
+    assert "source" in message
     assert "title" in message
 
 
@@ -703,7 +708,9 @@ def test_file_plan_contract_text_covers_validator_contract() -> None:
     for field in REQUIRED_COMMON_FIELDS:
         assert field in text, f"required field {field!r} missing from contract"
     assert "create" in text and "update" in text
-    assert "wikilinks" in text
+    # The contract instructs OKF standard markdown links, not Obsidian wikilinks (#189).
+    assert "[Title](folder/slug.md)" in text
+    assert "standard markdown links" in text
     # The per-page summary instruction is present and now covers EVERY page
     # including actions and media (ADR 0013/0015); the removed catalog vocab is gone.
     assert "summary" in text

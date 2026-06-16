@@ -1131,7 +1131,7 @@ def test_image_capture_saves_asset_and_embeds(
     classify = _classify_json(
         page_type="memory", slug="beach-day", title="Beach Day", concepts=[]
     )
-    # No model embeds -> the harness derives the ![[asset]] embed itself.
+    # No model embeds -> the harness derives the markdown image embed itself.
     plan = _file_plan_json(
         folder="memories",
         slug="beach-day",
@@ -1157,7 +1157,7 @@ def test_image_capture_saves_asset_and_embeds(
     raw_bytes = asset.read_bytes()
     assert raw_bytes.startswith(b"\x89PNG")
     page_text = (harness.work / "memories/beach-day.md").read_text(encoding="utf-8")
-    assert "![[beach-day.png]]" in page_text
+    assert "![](../raw/assets/beach-day.png)" in page_text
     # No base64 blob anywhere in the written page.
     assert "base64" not in page_text.lower()
 
@@ -1727,9 +1727,9 @@ def test_multi_image_batch_is_one_page_with_all_images(
         assert (harness.work / rel).is_file()
     # All three images are embedded in the one page.
     page_text = (harness.work / "memories/whiteboard.md").read_text(encoding="utf-8")
-    assert "![[whiteboard.png]]" in page_text
-    assert "![[whiteboard-2.png]]" in page_text
-    assert "![[whiteboard-3.jpg]]" in page_text
+    assert "![](../raw/assets/whiteboard.png)" in page_text
+    assert "![](../raw/assets/whiteboard-2.png)" in page_text
+    assert "![](../raw/assets/whiteboard-3.jpg)" in page_text
     assert "base64" not in page_text.lower()
 
 
@@ -1867,7 +1867,7 @@ def test_analyse_image_cap_skips_extras_beyond_max_but_still_saves_them(
     ]
     page_text = (harness.work / "memories/batch.md").read_text(encoding="utf-8")
     for embed in ("batch.png", "batch-2.png", "batch-3.png", "batch-4.png"):
-        assert f"![[{embed}]]" in page_text
+        assert f"![](../raw/assets/{embed})" in page_text
 
 
 def test_capture_summary_augments_caption_with_image_analysis() -> None:
@@ -3021,9 +3021,18 @@ def test_fetch_candidates_dedupes_terms(harness: IngestHarness) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_curate_rejects_too_few_wikilinks(harness: IngestHarness) -> None:
-    """A page with <2 wikilinks fails validate_file_plan -> IngestError, no write."""
-    plan = _file_plan_json(wikilinks=["[[only-one]]"])
+def test_curate_writes_page_without_legacy_wikilinks_array(
+    harness: IngestHarness,
+) -> None:
+    """The retired wikilinks-count gate is gone: a plan with no link array still writes.
+
+    Links now live in the markdown body (OKF, #189); validate_file_plan no longer needs
+    a separate >=2 ``wikilinks`` array, so a plan omitting it is accepted and written.
+    """
+    plan = _file_plan_json(
+        body="See [attention](attention.md) and [neural nets](neural-networks.md).",
+        wikilinks=[],
+    )
     ingestor = _build_ingestor(
         harness,
         client=_ScriptedClient(plan),
@@ -3032,9 +3041,8 @@ def test_curate_rejects_too_few_wikilinks(harness: IngestHarness) -> None:
     )
     cls = Classification(page_type="note", slug="transformer-models", title="T")
     raw = RawCaptureResult(raw_path=None, disposition="none")
-    with pytest.raises(IngestError, match="file plan rejected"):
-        ingestor.curate(Capture(text="x"), cls, raw, [])
-    assert not harness.vault.page_exists("notes/transformer-models.md")
+    ingestor.curate(Capture(text="x"), cls, raw, [])
+    assert harness.vault.page_exists("notes/transformer-models.md")
 
 
 def test_curate_no_tool_call_raises_and_re_asks(harness: IngestHarness) -> None:
@@ -3082,7 +3090,7 @@ def test_curate_prompt_embeds_file_plan_contract(harness: IngestHarness) -> None
         "notes",
         "entities",
         "actions",
-        "wikilinks",
+        "standard markdown links",
         "created",
         "updated",
         "slack",
@@ -3592,7 +3600,7 @@ def test_image_analysis_routes_whiteboard_to_notes_with_ocr_in_body(
     page_text = (harness.work / "notes/sprint-whiteboard.md").read_text(
         encoding="utf-8"
     )
-    assert "![[sprint-whiteboard.png]]" in page_text
+    assert "![](../raw/assets/sprint-whiteboard.png)" in page_text
     # The OCR'd text is in the body -- the page is searchable on real content.
     assert "ship vision pass" in page_text
     assert "write ADR 0006" in page_text
@@ -3878,7 +3886,7 @@ def test_url_image_analyse_fetches_binary_once_and_leaks_no_temp(
     page_text = (harness.work / "notes/sprint-whiteboard.md").read_text(
         encoding="utf-8"
     )
-    assert "![[sprint-whiteboard.png]]" in page_text
+    assert "![](../raw/assets/sprint-whiteboard.png)" in page_text
     assert "ship vision pass" in page_text  # OCR'd text landed in the body
     # No leaked temp file: the staged download was consumed by the asset store.
     assert not staged.exists()
@@ -4072,7 +4080,10 @@ def test_diagram_image_saves_excalidraw_asset_and_embeds_it(
     # embed drops the ``.md`` so Obsidian renders the DRAWING, not the raw scene JSON
     # (issue #68 live-verify fix).
     page_text = (harness.work / "notes/flow-sketch.md").read_text(encoding="utf-8")
-    assert "![[flow-sketch.png]]" in page_text
+    # The image embed is OKF markdown; the Excalidraw drawing keeps the Obsidian wiki
+    # embed (drops .md so the plugin renders the drawing, issue #68) -- no markdown
+    # equivalent renders an Excalidraw scene (#189).
+    assert "![](../raw/assets/flow-sketch.png)" in page_text
     assert "![[flow-sketch.excalidraw]]" in page_text
     assert "![[flow-sketch.excalidraw.md]]" not in page_text
 
@@ -4147,7 +4158,7 @@ def test_document_image_derives_no_extra_asset(
     # A document is NOT a diagram: the reconstruction call is never made.
     assert analyser.excalidraw_calls == []
     page_text = (harness.work / "actions/widget-invoice.md").read_text(encoding="utf-8")
-    assert "![[widget-invoice.png]]" in page_text
+    assert "![](../raw/assets/widget-invoice.png)" in page_text
 
 
 def test_diagram_reconstruction_none_files_original_cleanly(
