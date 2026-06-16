@@ -161,7 +161,7 @@ Single language end-to-end (appliance + MCP + reindex) keeps the surface tiny. *
 | `slack_app.py` | Bolt Socket-Mode daemon: `message.im`, `file_shared`, allow-list, mrkdwn rendering | 260 | 2 |
 | `mcp_server.py` | FastMCP stdio: `pkm_ingest`/`pkm_search`/`pkm_todos`/`pkm_recent` (+ low-level `pkm_write_page`) | 140 | 3 |
 | `summary.py` | daily/weekly digest composed from vault frontmatter + `chat.postMessage` (§9) | 200 | 3 |
-| `lint.py` | the 13 maintenance checks (§11; Appendix → Lint checks) | 250 | 4 |
+| `lint.py` | the 14 maintenance checks (§11; Appendix → Lint checks) | 250 | 4 |
 | `bin/config-backup.sh` | push-only backup of the **app config** repo (carried fwd — Appendix → Backup/recovery) | 40 | 3 |
 | `pkm-slack.service` + crontab | one systemd unit (daemon) + system cron lines | — | 3 |
 
@@ -1698,7 +1698,7 @@ job.
 | 10 | **Tag audit** | Every tag in use must exist in SCHEMA.md taxonomy; flag strays. |
 | 11 | **Image hygiene** | Assets in `raw/assets/` embedded by no page = orphan binaries; pages embedding a missing asset = broken embed; any surviving per-image sidecar `.md` (legacy pattern) flagged for merge-into-owner-page. |
 | 12 | **Log rotation** | If `log.md` > 500 entries, rotate to `log-YYYY.md`. |
-| 13 | **Report + log** | Group by severity (broken links/embeds > orphans > source drift > contested > stale/overdue > style). Append `## [YYYY-MM-DD] lint | N issues found`. |
+| 13 | **Report + log** | Group by severity (broken links/embeds > orphans > source drift > contested > stale/overdue > style). Append `## [YYYY-MM-DD] lint \| N issues found`. |
 | 14 | **OKF link style** | Flag legacy Obsidian `[[wikilink]]` links and wiki *image* embeds (`![[photo.png]]`) in content pages — OKF wants `[text](path.md)` / `![alt](path)` (ADR 0017). Bases `.base` and Excalidraw `.excalidraw` embeds are exempt. `Severity.STYLE`. |
 
 ### Migration
