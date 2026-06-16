@@ -64,7 +64,7 @@ def _grep(vault: Vault, term: str, *, limit: int = 20) -> list[str]:
 # ---- pass 2: graph navigation --------------------------------------------------------
 
 
-def _follow_wikilinks(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
+def _follow_links(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
     """Resolve a page body's inter-page links to existing vault paths.
 
     Recognises the OKF standard markdown form ``[text](path.md)`` and any residual

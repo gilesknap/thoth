@@ -4,8 +4,8 @@ This is the read side of the appliance (SPEC section 7). A query is answered by 
 two retrieval *sources* and letting both vote on the cited set (issue #143):
 
 1. a STRUCTURAL source -- a lexical scan (grep) over the curated knowledge folders
-   (:meth:`QueryEngine.grep`) followed by ``[[wikilink]]`` graph navigation from the
-   pages it found (:meth:`QueryEngine.follow_wikilinks`). grep scans the whole file
+   (:meth:`QueryEngine.grep`) followed by link-graph navigation from the
+   pages it found (:meth:`QueryEngine.follow_links`). grep scans the whole file
    including frontmatter, so a reference page's one-line ``summary:`` gloss (issue #72 /
    ADR 0008) is matched here -- transparently absorbing what the old ``index.md``
    catalog pass used to do.

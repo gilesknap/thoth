@@ -18,7 +18,7 @@ from thoth.llm import LLM
 from thoth.vault import Vault
 
 from ._compose import _build_citation, _compose
-from ._retrieval import _follow_wikilinks, _grep, _recall_paths
+from ._retrieval import _follow_links, _grep, _recall_paths
 from ._shared import (
     _METHOD_ORDER,
     METHOD_GREP,
@@ -190,7 +190,7 @@ def _structural_paths(
     for path in list(ordered):
         if len(ordered) >= max_pages:
             break
-        add(_follow_wikilinks(vault, path, limit=max_pages))
+        add(_follow_links(vault, path, limit=max_pages))
     return ordered, grep_hits
 
 
