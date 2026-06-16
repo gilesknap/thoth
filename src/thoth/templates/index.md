@@ -1,37 +1,15 @@
 ---
 title: Home
 type: summary
-cssclasses: dashboard-full-width
-updated: 2026-06-13
+updated: 2026-06-16
 ---
 
 # 🏠 PKM Vault — Home
 
-> [!danger]+ Work
-> ![[_bases/actions.base#7 Days]]
+The live attention and reference dashboards are on the
+[Dashboards](_bases/index.md) page. The frontmatter contract and tag taxonomy are
+in [SCHEMA](SCHEMA.md); the action log is in [Log](log.md).
 
-> [!tip]- Personal
-> ![[_bases/personal.base#7 Days]]
-
-> [!example]- Media
-> ![[_bases/media.base#All]]
-
-> [!warning]- Inbox
-> ![[_bases/inbox.base#Inbox]]
-
-> [!info]- Recent
-> ![[_bases/recent.base#7 Days]]
-
----
-## 📚 Reference Library
-
-> [!note]- Notes — browse by topic
-> ![[_bases/notes.base#By Topic]]
-
-> [!abstract]- Entities — people · orgs · products · devices
-> ![[_bases/entities.base#By Kind]]
-
-> [!quote]- Memories
-> ![[_bases/memories.base#Timeline]]
-
-Open full: [[_bases/notes.base|Notes]] · [[_bases/entities.base|Entities]] · [[_bases/memories.base|Memories]]
+> [!note]
+> This Home page is a thin placeholder. It will be replaced by an auto-generated,
+> OKF-compliant index of the vault — see issue #191.

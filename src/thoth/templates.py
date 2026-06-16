@@ -12,13 +12,16 @@ is the importable surface.
 Two kinds of template ship:
 
 * **Spine files** -- :data:`SPINE_NAMES` (``index.md``, ``SCHEMA.md``,
-  ``log.md``): frontmatter + Markdown. ``index.md`` is the Home landing page and
-  embeds the Bases dashboards; ``SCHEMA.md`` carries the frontmatter contract and
+  ``log.md``): frontmatter + Markdown. ``index.md`` is the Home landing page -- a
+  thin, OKF-compliant stub that links to the Dashboards page with a standard
+  markdown link (the dashboards themselves live in ``_bases/index.md``, see
+  :data:`BASE_DOC_NAMES`); ``SCHEMA.md`` carries the frontmatter contract and
   the ``## Tag Taxonomy`` section that :func:`thoth.lint.parse_taxonomy_tags`
   reads as its single source of truth; ``log.md`` is the append-only action log.
 * **Bases dashboards** -- :data:`BASE_NAMES` (``actions``, ``personal``,
   ``media``, ``inbox``, ``recent``, ``reference``): YAML ``.base`` files under
-  ``_bases/`` used by ``index.md``. Each base is one *class* of item and its views
+  ``_bases/`` embedded by the ``_bases/index.md`` Dashboards page. Each base is one
+  *class* of item and its views
   differ only by date window (ADR 0014): ``actions`` (open work todos) and
   ``personal`` (open personal todos) each ship ``7 Days`` / ``30 Days`` / ``All``;
   ``media`` is the consume queue (work + personal, with a personal column);
@@ -59,6 +62,7 @@ from importlib.resources.abc import Traversable
 
 __all__ = [
     "BASE_NAMES",
+    "BASE_DOC_NAMES",
     "SPINE_NAMES",
     "OBSIDIAN_NAMES",
     "ROOT_NAMES",
@@ -82,6 +86,15 @@ BASE_NAMES: tuple[str, ...] = (
     "entities",
     "memories",
 )
+
+#: Markdown landing pages shipped under ``_bases/`` (forward-slash paths under the
+#: templates root, alongside the ``.base`` files). ``_bases/index.md`` is the
+#: **Dashboards** page that embeds every ``.base`` view via Obsidian ``![[…#View]]``
+#: Bases embeds. It lives under ``_bases/`` -- machinery that lint and the capture
+#: walk both exempt -- so those Bases embeds are an allowed OKF exception *by
+#: location*, not by special-case. The root :data:`SPINE_NAMES` ``index.md`` is a thin
+#: OKF-compliant stub that links here with a standard markdown link (issue #191).
+BASE_DOC_NAMES: tuple[str, ...] = ("_bases/index.md",)
 
 #: The three vault-spine file names shipped as package data.
 SPINE_NAMES: tuple[str, ...] = ("index.md", "SCHEMA.md", "log.md")
@@ -209,8 +222,8 @@ def iter_templates() -> list[tuple[str, str]]:
     """Return ``(relative-name, text)`` for every packaged template.
 
     The result lists the three spine files, the ``_bases/*.base`` dashboards, the
-    ``.obsidian`` config files, and the vault-root dotfiles, each paired with its
-    UTF-8 text.
+    ``_bases/`` markdown landing pages (:data:`BASE_DOC_NAMES`), the ``.obsidian``
+    config files, and the vault-root dotfiles, each paired with its UTF-8 text.
     """
     items: list[tuple[str, str]] = []
     for spine in SPINE_NAMES:
@@ -218,6 +231,8 @@ def iter_templates() -> list[tuple[str, str]]:
     for base in BASE_NAMES:
         rel = f"_bases/{base}.base"
         items.append((rel, template_text(rel)))
+    for doc in BASE_DOC_NAMES:
+        items.append((doc, template_text(doc)))
     for obsidian in OBSIDIAN_NAMES:
         items.append((obsidian, template_text(obsidian)))
     for root in ROOT_NAMES:

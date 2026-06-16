@@ -58,7 +58,7 @@ existing vault to match.**
   embed in a scanned content page is a `STYLE` finding, so a regression back to wiki
   syntax is caught.
 - **Documented exceptions keep their Obsidian form** (they are not OKF artefacts and have
-  no portable markdown equivalent): Bases `.base` view embeds (the `index.md` dashboards),
+  no portable markdown equivalent): Bases `.base` view embeds (the `_bases/index.md` dashboards),
   Excalidraw `.excalidraw` drawing embeds, anything inside a fenced/inline code span, and
   the whole of `raw/` (immutable source clips the agent never edits, whose links point at
   a defunct prior-vault structure). Lint check 14 exempts `.base`/`.excalidraw` embeds and
