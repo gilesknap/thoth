@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>10. CLI capture: an as-is low-touch import mode and a transient budget override &#8212; thoth 0.9.1.dev35+ga91720033 documentation</title>
+    <title>17. Adopt the Open Knowledge Format: standard markdown links, not wikilinks &#8212; thoth 0.9.1.dev35+ga91720033 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=30646c52"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0010-capture-as-is-low-touch-import';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'explanations/decisions/0017-adopt-okf-standard-markdown-links';</script>
     <script>
         DOCUMENTATION_OPTIONS.theme_version = '0.18.0';
         DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://gilesknap.github.io/thoth/switcher.json';
@@ -59,8 +59,8 @@
     <link rel="icon" href="../../_static/dls-logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="11. MCP HTTP transport with tiered authentication" href="0011-mcp-http-transport-and-tiered-auth.html" />
-    <link rel="prev" title="9. Kind-aware advanced image handling: derived assets from one vision call" href="0009-advanced-image-handling-kind-aware-derived-assets.html" />
+    <link rel="next" title="Reference" href="../../reference.html" />
+    <link rel="prev" title="15. Media is a type, dashboards filter on type, folders go loose" href="0015-media-as-type-loose-folders-type-driven-dashboards.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="main" />
@@ -433,13 +433,13 @@
 <li class="toctree-l2"><a class="reference internal" href="0007-hindsight-as-semantic-recall-backend.html">7. Retain Hindsight as the semantic recall backend; use LLM comparison for structural analysis</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0008-page-summary-frontmatter-static-index.html">8. Page-frontmatter <code class="docutils literal notranslate"><span class="pre">summary</span></code> is the canonical gloss; index.md is static</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0009-advanced-image-handling-kind-aware-derived-assets.html">9. Kind-aware advanced image handling: derived assets from one vision call</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
+<li class="toctree-l2"><a class="reference internal" href="0010-capture-as-is-low-touch-import.html">10. CLI capture: an as-is low-touch import mode and a transient budget override</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0011-mcp-http-transport-and-tiered-auth.html">11. MCP HTTP transport with tiered authentication</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0012-blend-grep-and-semantic-retrieval-rrf.html">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0013-lean-universal-schema-properties-not-tags.html">13. Lean universal schema: view-critical facets are properties, not tags</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0014-split-action-dashboards-and-resolve-relative-due-dates.html">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</a></li>
 <li class="toctree-l2"><a class="reference internal" href="0015-media-as-type-loose-folders-type-driven-dashboards.html">15. Media is a type, dashboards filter on type, folders go loose</a></li>
-<li class="toctree-l2"><a class="reference internal" href="0017-adopt-okf-standard-markdown-links.html">17. Adopt the Open Knowledge Format: standard markdown links, not wikilinks</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">17. Adopt the Open Knowledge Format: standard markdown links, not wikilinks</a></li>
 </ul>
 </details></li>
 </ul>
@@ -488,7 +488,7 @@
     
     <li class="breadcrumb-item"><a href="../decisions.html" class="nav-link">Architectural Decision Records</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">10. CLI capture: an as-is low-touch import mode and a transient budget override</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">17. Adopt the Open Knowledge Format: standard markdown links, not wikilinks</span></li>
   </ul>
 </nav>
 </div>
@@ -505,84 +505,95 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="cli-capture-an-as-is-low-touch-import-mode-and-a-transient-budget-override">
-<h1>10. CLI capture: an as-is low-touch import mode and a transient budget override<a class="headerlink" href="#cli-capture-an-as-is-low-touch-import-mode-and-a-transient-budget-override" title="Link to this heading">#</a></h1>
-<p>Date: 2026-06-01</p>
+  <section id="adopt-the-open-knowledge-format-standard-markdown-links-not-wikilinks">
+<h1>17. Adopt the Open Knowledge Format: standard markdown links, not wikilinks<a class="headerlink" href="#adopt-the-open-knowledge-format-standard-markdown-links-not-wikilinks" title="Link to this heading">#</a></h1>
+<p>Date: 2026-06-16</p>
 <section id="status">
 <h2>Status<a class="headerlink" href="#status" title="Link to this heading">#</a></h2>
 <p>Accepted</p>
+<p>Refines the link convention assumed by
+<a class="reference internal" href="0008-page-summary-frontmatter-static-index.html"><span class="std std-doc">ADR 0008</span></a> (cross-linked pages) and
+<a class="reference internal" href="0012-blend-grep-and-semantic-retrieval-rrf.html"><span class="std std-doc">ADR 0012</span></a> (the wikilink graph-hop is one
+of the three retrieval sources). The vault page model of
+<a class="reference internal" href="0013-lean-universal-schema-properties-not-tags.html"><span class="std std-doc">ADR 0013</span></a> /
+<a class="reference internal" href="0015-media-as-type-loose-folders-type-driven-dashboards.html"><span class="std std-doc">ADR 0015</span></a> is unchanged.</p>
 </section>
 <section id="context">
 <h2>Context<a class="headerlink" href="#context" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span> <span class="pre">&lt;path&gt;...</span></code> (issue #80) backfills content that already lives on disk —
-most concretely an existing, already-clean Obsidian vault (a tree of Markdown plus
-image/PDF attachments) — by walking it and feeding each file through the <em>existing</em>
-<code class="docutils literal notranslate"><span class="pre">Ingestor.ingest</span></code> pipeline.</p>
-<p>Two design questions had to be resolved before that path could be built:</p>
-<ol class="arabic simple">
-<li><p><strong>Re-curate vs import-as-is.</strong> Running every existing note through the curate LLM
-gives thoth’s value-add (the 4-folder classification, a <code class="docutils literal notranslate"><span class="pre">summary:</span></code>, wikilinks,
-dedup-merge), but it costs an LLM call <em>per file</em> and may reshape notes that were
-already good. For an already-clean Markdown vault a low-touch mode that files and
-indexes the page without re-authoring it is often preferable.</p></li>
-<li><p><strong>The cost of a bulk import.</strong> A vault import is a real spend burst: with curate it is
-two LLM calls per file (classify + curate). The #16 daily budget guard would defer the
-tail of a large import to the next day — correct for unattended capture, but a
-foot-gun for a deliberate, supervised one-shot backfill the operator <em>wants</em> to run to
-completion now.</p></li>
-</ol>
+<p>Google Cloud published <a class="reference external" href="https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/">Open Knowledge Format (OKF) v0.1</a>
+on 2026-06-12 — a vendor-neutral spec for agent-consumable knowledge bases: a directory
+of markdown files with YAML frontmatter, <strong>standard markdown inter-links</strong>, and one
+mandatory frontmatter field (<code class="docutils literal notranslate"><span class="pre">type</span></code>). The thoth vault is already structurally
+OKF-compatible — plain markdown, git-backed, YAML frontmatter, every page already carries
+<code class="docutils literal notranslate"><span class="pre">type</span></code>. The one gap was <strong>link style</strong>: thoth wrote Obsidian <code class="docutils literal notranslate"><span class="pre">[[wiki</span> <span class="pre">links]]</span></code> and
+<code class="docutils literal notranslate"><span class="pre">![[embeds]]</span></code>, where OKF requires <code class="docutils literal notranslate"><span class="pre">[text](relative/path.md)</span></code> and <code class="docutils literal notranslate"><span class="pre">![alt](path)</span></code>.</p>
+<p>Obsidian follows standard markdown links and builds its graph from them identically to
+wiki links, so adopting the standard form costs nothing in the Obsidian UX (issue #189).
+Two Obsidian features have <strong>no</strong> standard-markdown equivalent, though: a Bases view
+embed (<code class="docutils literal notranslate"><span class="pre">![[file.base#View]]</span></code>, where <code class="docutils literal notranslate"><span class="pre">#View</span></code> selects a named view, not a heading) and an
+Excalidraw drawing embed (<code class="docutils literal notranslate"><span class="pre">![[name.excalidraw]]</span></code>, where the plugin keys on that basename
+to render the drawing rather than the raw scene JSON). Neither is an OKF artefact — OKF
+governs only the markdown concept documents and the links between them — so neither can
+or should be rewritten.</p>
 </section>
 <section id="decision">
 <h2>Decision<a class="headerlink" href="#decision" title="Link to this heading">#</a></h2>
-<p><strong>Support both, default to curate.</strong> <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code> curates by default (the full
-value-add). <code class="docutils literal notranslate"><span class="pre">--as-is</span></code> selects a low-touch mode with these exact semantics:</p>
+<p><strong>Adopt OKF standard markdown links as the vault’s link convention, and migrate the
+existing vault to match.</strong></p>
 <ul class="simple">
-<li><p>The cheap <strong>classify</strong> call still runs (one routing call → <code class="docutils literal notranslate"><span class="pre">type</span></code>/<code class="docutils literal notranslate"><span class="pre">slug</span></code>/<code class="docutils literal notranslate"><span class="pre">title</span></code>,
-validated through <code class="docutils literal notranslate"><span class="pre">Vault</span></code>), so the page is routed into the flat 4-folder model.</p></li>
-<li><p>The expensive <strong>curate</strong> call is <strong>SKIPPED</strong>. Instead of a model-authored file-plan,
-the page is written <strong>once</strong> via <code class="docutils literal notranslate"><span class="pre">Vault.write_page</span></code> with the <strong>original file body
-verbatim</strong> as the body and a minimal derived frontmatter (<code class="docutils literal notranslate"><span class="pre">title</span></code> from classify,
-<code class="docutils literal notranslate"><span class="pre">type</span></code>/<code class="docutils literal notranslate"><span class="pre">source:</span> <span class="pre">import</span></code>/<code class="docutils literal notranslate"><span class="pre">tags:</span> <span class="pre">[]</span></code>), routed into the classify-chosen folder
-(<code class="docutils literal notranslate"><span class="pre">entities</span></code>/<code class="docutils literal notranslate"><span class="pre">notes</span></code>/<code class="docutils literal notranslate"><span class="pre">memories</span></code>/<code class="docutils literal notranslate"><span class="pre">actions</span></code>). A saved asset is still embedded and any
-analysed OCR text appended, so a binary import stays searchable.</p></li>
-<li><p>The durable <code class="docutils literal notranslate"><span class="pre">raw/</span></code> source page and the <code class="docutils literal notranslate"><span class="pre">inbox/</span></code> holding are written exactly as today
-(durability and idempotency unchanged), then the filed page is indexed through the
-<strong>same</strong> Hindsight retain pass. So “files + indexes, skips curate” is literally true:
-no curate call, no reshaping, no wikilink/dedup-merge pass, no summary synthesis.</p></li>
-<li><p>The <strong>flat-folder model is an invariant</strong> (ADR 0005): <code class="docutils literal notranslate"><span class="pre">--as-is</span></code> changes only <em>whether
-curate runs</em>, never the folder model. The source folder hierarchy is <strong>not</strong> preserved
-and a pre-existing non-vocabulary <code class="docutils literal notranslate"><span class="pre">type</span></code> in a note’s frontmatter is <strong>not</strong> honoured —
-the page is re-routed by classify.</p></li>
+<li><p><strong>Inter-page links</strong> become <code class="docutils literal notranslate"><span class="pre">[Title](folder/slug.md)</span></code>; <strong>image embeds</strong> become
+<code class="docutils literal notranslate"><span class="pre">![](../raw/assets/asset.ext)</span></code> (a page-relative, percent-encoded path). This is the
+form <code class="docutils literal notranslate"><span class="pre">useMarkdownLinks:</span> <span class="pre">true</span></code> + <code class="docutils literal notranslate"><span class="pre">newLinkFormat:</span> <span class="pre">&quot;relative&quot;</span></code> makes Obsidian itself emit,
+so both Obsidian and thoth now write the same OKF-conformant links.</p></li>
+<li><p><strong>The curate producer is switched to emit markdown links.</strong> The file-plan contract
+(<code class="docutils literal notranslate"><span class="pre">file_plan_contract_text</span></code>), the <code class="docutils literal notranslate"><span class="pre">submit_file_plan</span></code> tool schema, <code class="docutils literal notranslate"><span class="pre">SCHEMA.md</span></code> (a live
+curate system-prompt input), and the persona’s image-embed instruction all now ask for
+<code class="docutils literal notranslate"><span class="pre">[text](path.md)</span></code> / <code class="docutils literal notranslate"><span class="pre">![alt](path)</span></code>. The asset-embed harness (<code class="docutils literal notranslate"><span class="pre">_append_embeds</span></code>) emits a
+page-relative markdown image embed. The vestigial <code class="docutils literal notranslate"><span class="pre">wikilinks</span></code> plan array — a &gt;=2 count
+the validator enforced but never wrote to disk — is <strong>retired</strong>: links live in the body,
+the prompt still asks for &gt;=2, and lint enforces the graph after the fact.</p></li>
+<li><p><strong>The readers are made markdown-aware.</strong> The lint link-graph extractors
+(<code class="docutils literal notranslate"><span class="pre">extract_links</span></code> / <code class="docutils literal notranslate"><span class="pre">extract_embeds</span></code>) and the retrieval graph-hop (<code class="docutils literal notranslate"><span class="pre">_follow_wikilinks</span></code>)
+now parse the markdown form <em>and</em> still recognise a residual <code class="docutils literal notranslate"><span class="pre">[[wikilink]]</span></code>, reducing
+every target to its bare slug stem (vault slugs are unique). This dual-parse makes the
+code correct whether a page is migrated or not — there is no flag day between the code
+merge and the vault migration.</p></li>
+<li><p><strong>A new lint check (14) enforces the convention.</strong> Any <code class="docutils literal notranslate"><span class="pre">[[wikilink]]</span></code> or wiki <em>image</em>
+embed in a scanned content page is a <code class="docutils literal notranslate"><span class="pre">STYLE</span></code> finding, so a regression back to wiki
+syntax is caught.</p></li>
+<li><p><strong>Documented exceptions keep their Obsidian form</strong> (they are not OKF artefacts and have
+no portable markdown equivalent): Bases <code class="docutils literal notranslate"><span class="pre">.base</span></code> view embeds (the <code class="docutils literal notranslate"><span class="pre">_bases/index.md</span></code> dashboards),
+Excalidraw <code class="docutils literal notranslate"><span class="pre">.excalidraw</span></code> drawing embeds, anything inside a fenced/inline code span, and
+the whole of <code class="docutils literal notranslate"><span class="pre">raw/</span></code> (immutable source clips the agent never edits, whose links point at
+a defunct prior-vault structure). Lint check 14 exempts <code class="docutils literal notranslate"><span class="pre">.base</span></code>/<code class="docutils literal notranslate"><span class="pre">.excalidraw</span></code> embeds and
+never scans <code class="docutils literal notranslate"><span class="pre">raw/</span></code>, the spine files, or <code class="docutils literal notranslate"><span class="pre">_bases/</span></code>.</p></li>
 </ul>
-<p><strong>A transient <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">N</span></code> override.</strong> <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span> <span class="pre">--budget</span> <span class="pre">N</span></code> overrides
-<code class="docutils literal notranslate"><span class="pre">THOTH_DAILY_LLM_BUDGET</span></code> for <strong>this run only</strong>. It is threaded into <code class="docutils literal notranslate"><span class="pre">make_budget_guard</span></code>
-and never written back to the frozen <code class="docutils literal notranslate"><span class="pre">Config</span></code>. Per the existing <code class="docutils literal notranslate"><span class="pre">BudgetGuard</span></code> rule a
-non-positive limit disables the guard, so <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">0</span></code> is the “unlimited for this import”
-escape hatch and <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">50</span></code> caps the run at 50 combined calls. With no flag the
-configured daily budget applies unchanged. The guard still covers the analyse + classify
-(and, in the default mode, curate) calls and the retain pass.</p>
-<p><strong>Batched commits.</strong> <code class="docutils literal notranslate"><span class="pre">Ingestor.ingest</span></code> grew a <code class="docutils literal notranslate"><span class="pre">commit:</span> <span class="pre">bool</span></code> seam: <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code> pulls
-the vault once up front, ingests each file with <code class="docutils literal notranslate"><span class="pre">commit=False</span></code>, and commits+pushes via
-<code class="docutils literal notranslate"><span class="pre">GitSync.commit</span></code> every <code class="docutils literal notranslate"><span class="pre">--batch-size</span></code> files plus a final flush — instead of one commit
-per file — to keep history sane. A <code class="docutils literal notranslate"><span class="pre">VaultConflictError</span></code> on a batch commit stops the run
-loudly (content is filed locally; never <code class="docutils literal notranslate"><span class="pre">--force</span></code>).</p>
 </section>
 <section id="consequences">
 <h2>Consequences<a class="headerlink" href="#consequences" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>A vault import is <strong>one cheap classify call per file</strong> in <code class="docutils literal notranslate"><span class="pre">--as-is</span></code> (still
-budget-guarded) instead of two; pages keep their original prose; they are searchable
-immediately via the retain pass.</p></li>
-<li><p>A later <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">slack</span></code> / reindex never re-curates an as-is page — it is a normal
-curated-folder page, not an inbox hold — so the import is stable.</p></li>
-<li><p>Re-running <code class="docutils literal notranslate"><span class="pre">thoth</span> <span class="pre">capture</span></code> over an unchanged tree is a no-op: the existing <code class="docutils literal notranslate"><span class="pre">raw/</span></code> and
-<code class="docutils literal notranslate"><span class="pre">inbox/</span></code> SHA-256 skip means no page is duplicated; only the analyse/classify calls are
-re-spent (and <code class="docutils literal notranslate"><span class="pre">--budget</span> <span class="pre">0</span></code> can lift the cap for a deliberate re-run).</p></li>
-<li><p>A crash or Ctrl-C mid-run leaves an uncommitted (dirty) working tree, but the durable
-<code class="docutils literal notranslate"><span class="pre">inbox/</span></code>/<code class="docutils literal notranslate"><span class="pre">raw/</span></code> writes are on disk and a re-run is idempotent, so nothing is lost — the
-vault is simply uncommitted until the next run or a manual commit.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">import</span></code> is added to the legal frontmatter <code class="docutils literal notranslate"><span class="pre">source</span></code> vocabulary (<code class="docutils literal notranslate"><span class="pre">VALID_SOURCES</span></code>) so an
-imported page is writable and distinguishable by provenance.</p></li>
+<li><p><strong>The vault is now an OKF bundle.</strong> Every <code class="docutils literal notranslate"><span class="pre">.md</span></code>↔<code class="docutils literal notranslate"><span class="pre">.md</span></code> link and image embed in the
+curated layer is standard markdown; every page has <code class="docutils literal notranslate"><span class="pre">type</span></code>. An OKF-aware agent can
+traverse the graph directly.</p></li>
+<li><p><strong>The migration is a pure syntax transform, verified to preserve the graph.</strong> Linting
+the same vault before and after migration with the new code: image-hygiene findings are
+identical (131→131), orphans and broken-links <em>drop slightly</em> (72→69, 418→386) because
+the migration’s slugify resolved case-mismatched dangling links (e.g.
+<code class="docutils literal notranslate"><span class="pre">[[Diamond</span> <span class="pre">Light</span> <span class="pre">Source]]</span></code> → <code class="docutils literal notranslate"><span class="pre">[…](diamond-light-source.md)</span></code>) to real pages, and the
+link-style check goes 1239→0. No orphan-flood, no silent loss of the retrieval
+graph-hop — the failure modes a naive write-only change would have caused.</p></li>
+<li><p><strong>Obsidian writes OKF links going forward too.</strong> <code class="docutils literal notranslate"><span class="pre">.obsidian/app.json</span></code> sets
+<code class="docutils literal notranslate"><span class="pre">useMarkdownLinks:</span> <span class="pre">true</span></code> + <code class="docutils literal notranslate"><span class="pre">newLinkFormat:</span> <span class="pre">&quot;relative&quot;</span></code>, so links the owner adds by hand
+match what thoth emits. (Per the clean-slate stance, the live vault was migrated on a
+branch as a one-off; nothing here is a committed migration shim.)</p></li>
+<li><p><strong>OKF tolerates broken links</strong> (“a link whose target does not exist is not malformed”),
+which matches thoth’s existing behaviour: dangling concept-stub links survive the
+migration as broken markdown links and are still surfaced by lint check 2 — exactly as
+they were as broken wikilinks.</p></li>
+<li><p><strong>Deferred:</strong> the MCP/Slack <em>citation handles</em> (the <code class="docutils literal notranslate"><span class="pre">[[slug]]</span></code> shown beside an
+<code class="docutils literal notranslate"><span class="pre">obsidian://</span></code> link in tool output) still emit wiki syntax. They are chat-output handles,
+not vault content, so they do not affect OKF compliance; converting them safely needs
+the Slack <code class="docutils literal notranslate"><span class="pre">mrkdwn</span></code> rendering layer and is left as a follow-up.</p></li>
 </ul>
 </section>
 </section>
@@ -598,20 +609,20 @@ imported page is writable and distinguishable by provenance.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="0009-advanced-image-handling-kind-aware-derived-assets.html"
+       href="0015-media-as-type-loose-folders-type-driven-dashboards.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">9. Kind-aware advanced image handling: derived assets from one vision call</p>
+        <p class="prev-next-title">15. Media is a type, dashboards filter on type, folders go loose</p>
       </div>
     </a>
     <a class="right-next"
-       href="0011-mcp-http-transport-and-tiered-auth.html"
+       href="../../reference.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">11. MCP HTTP transport with tiered authentication</p>
+        <p class="prev-next-title">Reference</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -645,7 +656,7 @@ imported page is writable and distinguishable by provenance.</p></li>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0010-capture-as-is-low-touch-import.md">
+    <a href="https://github.com/gilesknap/thoth/edit/main/docs/explanations/decisions/0017-adopt-okf-standard-markdown-links.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -660,7 +671,7 @@ imported page is writable and distinguishable by provenance.</p></li>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/explanations/decisions/0010-capture-as-is-low-touch-import.md.txt">
+    <a href="../../_sources/explanations/decisions/0017-adopt-okf-standard-markdown-links.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

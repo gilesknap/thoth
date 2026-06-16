@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Architecture overview &#8212; thoth 0.9.1.dev27+gb000b2092 documentation</title>
+    <title>Architecture overview &#8212; thoth 0.9.1.dev35+ga91720033 documentation</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=0790524f97105ba85085" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=0790524f97105ba85085" />
 
-    <script src="../_static/documentation_options.js?v=bffd2e34"></script>
+    <script src="../_static/documentation_options.js?v=3c59df0e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -875,6 +875,7 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0013-lean-universal-schema-properties-not-tags.html">13. Lean universal schema: view-critical facets are properties, not tags</a></li>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0014-split-action-dashboards-and-resolve-relative-due-dates.html">14. Split action dashboards by personal, surface undated actions, resolve relative due dates</a></li>
 <li class="toctree-l2"><a class="reference internal" href="decisions/0015-media-as-type-loose-folders-type-driven-dashboards.html">15. Media is a type, dashboards filter on type, folders go loose</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decisions/0017-adopt-okf-standard-markdown-links.html">17. Adopt the Open Knowledge Format: standard markdown links, not wikilinks</a></li>
 </ul>
 </details></li>
 </ul>
@@ -1058,8 +1059,9 @@ that surfaced it; the top <code class="docutils literal notranslate"><span class
 failure degrades gracefully to structural-only. grep scans the whole file
 including frontmatter, so a page’s one-line <code class="docutils literal notranslate"><span class="pre">summary:</span></code> gloss is matched there,
 and a caller can pass <code class="docutils literal notranslate"><span class="pre">search_keywords</span></code> to seed the whole-word grep with
-de-pluralised/synonym terms; <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a static set of Bases dashboards that
-retrieval never reads. See ADR
+de-pluralised/synonym terms; <code class="docutils literal notranslate"><span class="pre">_bases/index.md</span></code> is a static set of Bases dashboards
+that retrieval never reads (the root <code class="docutils literal notranslate"><span class="pre">index.md</span></code> is a thin OKF stub linking to it).
+See ADR
 <a class="reference internal" href="decisions/0012-blend-grep-and-semantic-retrieval-rrf.html"><span class="doc">12. Blend grep and semantic retrieval with Reciprocal Rank Fusion</span></a>.</p>
 </section>
 <section id="code-layout">
