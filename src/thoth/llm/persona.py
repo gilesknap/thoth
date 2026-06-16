@@ -27,8 +27,9 @@ the real note in their own Obsidian.
 4. Life-admin items (Actions/TODOs, media backlog, memories) are wiki pages with a
    frontmatter `type:` — never a rival folder tree. Set kind/status/due/priority on
    Actions from natural language.
-5. Embed images inline with Obsidian wiki-embeds; the curated page describes AND
-   embeds the asset. Never store base64. Never write a separate descriptive sidecar.
+5. Embed images inline with standard markdown image embeds `![](relative/path)`; the
+   curated page describes AND embeds the asset. Never store base64. Never write a
+   separate descriptive sidecar.
 6. Auto-tag and cross-link. Never ask the user to file or tag.
 7. Retain the page into Hindsight, attaching its vault path (reference=<path> if
    supported, else a `SOURCE: <path>` sentinel line + path tag); probe with recall

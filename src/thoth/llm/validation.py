@@ -16,7 +16,7 @@ from thoth.vault import (
 )
 
 from .client import SchemaValidationError
-from .contract import _MIN_WIKILINKS, _VALID_LOG_ACTIONS
+from .contract import _VALID_LOG_ACTIONS
 
 # Optional enum-valued frontmatter fields the repair loop can self-correct on
 # (ADR 0013). ``personal``/``summary`` are deliberately NOT hard-required here:
@@ -101,13 +101,10 @@ def _check_page(page: object, idx: int, problems: list[str]) -> None:
     if summary is not None and not isinstance(summary, str):
         problems.append(f"{where}: 'summary' must be a string")
 
-    wikilinks = page.get("wikilinks")
-    if not isinstance(wikilinks, list):
-        problems.append(f"{where}: 'wikilinks' must be a list")
-    elif len(wikilinks) < _MIN_WIKILINKS:
-        problems.append(
-            f"{where}: needs >= {_MIN_WIKILINKS} wikilinks, got {len(wikilinks)}"
-        )
+    # No link-count gate here: the OKF links live in the ``body`` (standard markdown
+    # ``[text](path.md)``, issue #189), the prompt asks for >= 2, and the lint
+    # orphan/broken-link checks enforce the graph after the fact. The retired
+    # ``wikilinks`` plan array was never written to disk.
 
     _check_frontmatter(page.get("frontmatter"), folder, where, problems)
 
@@ -121,8 +118,9 @@ def validate_file_plan(obj: dict[str, Any]) -> None:
     common frontmatter fields (plus ``status`` on action and media pages, with
     ``status``/``priority``/``media_type`` values enum-checked against the
     vault vocabularies -- the repair loop self-corrects on the listed values), a valid
-    ``source``, a string ``summary`` when present, and ``>= 2`` ``wikilinks``. Any
-    ``log`` block is shape-checked too.
+    ``source`` and a string ``summary`` when present. Any ``log`` block is shape-checked
+    too. (The page body carries the OKF ``[text](path.md)`` links; their count is not
+    gated here -- the prompt asks for >= 2 and lint enforces the link graph.)
 
     Args:
         obj: The decoded file-plan object.

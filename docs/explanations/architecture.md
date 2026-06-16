@@ -107,8 +107,9 @@ that surfaced it; the top `max_pages` are cited, each tagged with its
 failure degrades gracefully to structural-only. grep scans the whole file
 including frontmatter, so a page's one-line `summary:` gloss is matched there,
 and a caller can pass `search_keywords` to seed the whole-word grep with
-de-pluralised/synonym terms; `index.md` is a static set of Bases dashboards that
-retrieval never reads. See ADR
+de-pluralised/synonym terms; `_bases/index.md` is a static set of Bases dashboards
+that retrieval never reads (the root `index.md` is a thin OKF stub linking to it).
+See ADR
 {doc}`decisions/0012-blend-grep-and-semantic-retrieval-rrf`.
 
 ## Code layout

@@ -15,7 +15,7 @@ from thoth.vault import REFERENCE_TYPES, Vault
 
 from ._blend import _answer
 from ._compose import _build_citation
-from ._retrieval import _follow_wikilinks, _grep, _recall_paths
+from ._retrieval import _follow_links, _grep, _recall_paths
 from ._shared import Citation, QueryResult
 
 
@@ -65,7 +65,7 @@ class QueryEngine:
         Two retrieval *sources* both vote on the cited set:
 
         * the STRUCTURAL source -- a grep hit list (grep scans frontmatter too, so a
-          page's ``summary:`` gloss is matched there) followed by ``[[wikilink]]``
+          page's ``summary:`` gloss is matched there) followed by link-graph
           navigation from those hits, deduped and existence-checked into one ordered
           list;
         * the RECALL source -- semantic Hindsight recall, which **always** gets a vote
@@ -165,14 +165,15 @@ class QueryEngine:
 
     # ---- pass 2: graph navigation -----------------------------------------------
 
-    def follow_wikilinks(self, path: str, *, limit: int = 20) -> list[str]:
-        """Resolve the ``[[wikilinks]]`` in a page body to existing vault paths.
+    def follow_links(self, path: str, *, limit: int = 20) -> list[str]:
+        """Resolve a page body's inter-page links to existing vault paths.
 
-        Reads the page at ``path`` (confined by the vault), extracts every
-        ``[[target]]`` (alias and ``#anchor`` suffixes stripped), resolves each target
-        to a real page (probing each searched folder for a bare slug), and returns the
-        unique, existing targets in body order. Dangling links (no such page) are
-        silently skipped, so the result only ever contains real, confined paths.
+        Reads the page at ``path`` (confined by the vault), extracts every link -- the
+        OKF standard ``[text](path.md)`` form and any residual ``[[target]]`` wikilink
+        (alias and ``#anchor`` suffixes stripped), resolves each target to a real page
+        (probing each searched folder for a bare slug), and returns the unique, existing
+        targets in body order. Dangling links (no such page) are silently skipped, so
+        the result only ever contains real, confined paths.
 
         Args:
             path: The vault-relative path of the page whose links to follow.
@@ -182,7 +183,7 @@ class QueryEngine:
             Resolved, existing vault-relative paths, ordered and capped. An empty list
             if ``path`` does not exist or has no resolvable links.
         """
-        return _follow_wikilinks(self._vault, path, limit=limit)
+        return _follow_links(self._vault, path, limit=limit)
 
     # ---- pass 3: semantic recall ------------------------------------------------
 

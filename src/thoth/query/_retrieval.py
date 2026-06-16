@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote
 
 from thoth.hindsight import Hindsight
 from thoth.vault import REFERENCE_TYPES, Vault, VaultError
 
 from ._shared import _HIGH_WEIGHT, _LOW_WEIGHT, _MAX_GREP_BYTES, SEARCHED_DIRS
 
+_MD_LINK_RE: re.Pattern[str] = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)]+)\)")
+"""Capture a standard markdown ``[text](path.md)`` link target (the OKF form, #189)."""
+
 _WIKILINK_RE: re.Pattern[str] = re.compile(r"\[\[([^\]|#]+)")
-"""Capture an Obsidian ``[[wikilink]]`` target (ignoring ``|alias`` / ``#anchor``)."""
+"""Capture a legacy ``[[wikilink]]`` target (ignoring ``|alias`` / ``#anchor``)."""
 
 
 # ---- pass 1: lexical scan over the curated folders ----------------------------------
@@ -60,8 +64,15 @@ def _grep(vault: Vault, term: str, *, limit: int = 20) -> list[str]:
 # ---- pass 2: graph navigation --------------------------------------------------------
 
 
-def _follow_wikilinks(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
-    """Resolve the ``[[wikilinks]]`` in a page body to existing vault paths."""
+def _follow_links(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
+    """Resolve a page body's inter-page links to existing vault paths.
+
+    Recognises the OKF standard markdown form ``[text](path.md)`` and any residual
+    wikilink (issue #189). Every target is reduced to its bare slug stem
+    (directory / ``.md`` / ``%20``-escapes / ``|alias`` / ``#anchor`` stripped) and
+    resolved against the searched folders; vault slugs are unique, so the stem alone
+    locates the page.
+    """
     if limit < 1:
         return []
     try:
@@ -70,10 +81,7 @@ def _follow_wikilinks(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
         return []
     resolved: list[str] = []
     seen: set[str] = set()
-    for match in _WIKILINK_RE.finditer(page.body):
-        target = match.group(1).strip()
-        if not target:
-            continue
+    for target in _link_stems(page.body):
         candidate = _target_to_path(vault, target)
         if candidate is None or candidate in seen or candidate == path:
             continue
@@ -82,6 +90,27 @@ def _follow_wikilinks(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
         if len(resolved) >= limit:
             break
     return resolved
+
+
+def _link_stems(body: str) -> list[str]:
+    """Yield the bare slug stem of every internal inter-page link in ``body``.
+
+    Unions the standard markdown ``[text](path.md)`` and legacy ``[[wikilink]]`` forms.
+    External URLs (``https://``, ``mailto:``) are dropped; each surviving target has its
+    ``|alias`` / ``#anchor`` / directory / ``.md`` / URL-escapes stripped to the stem.
+    """
+    raw: list[str] = [match.group(1) for match in _WIKILINK_RE.finditer(body)]
+    for match in _MD_LINK_RE.finditer(body):
+        target = match.group(1).strip()
+        if target and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+            raw.append(target)
+    stems: list[str] = []
+    for target in raw:
+        head = target.split("|", 1)[0].split("#", 1)[0]
+        stem = PurePosixPath(unquote(head.strip())).stem
+        if stem:
+            stems.append(stem)
+    return stems
 
 
 # ---- pass 3: semantic recall ---------------------------------------------------------

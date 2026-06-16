@@ -525,30 +525,30 @@ def test_grep_summary_frontmatter_match_outranks_body_only(
     assert hits[0] == "memories/gloss-page.md"
 
 
-# --- follow_wikilinks --------------------------------------------------------------
+# --- follow_links --------------------------------------------------------------
 
 
-def test_follow_wikilinks_resolves_existing_targets(engine: QueryEngine) -> None:
+def test_follow_links_resolves_existing_targets(engine: QueryEngine) -> None:
     """[[slug]] links in a body resolve to existing pages in the searched dirs."""
-    resolved = engine.follow_wikilinks("entities/program-motion-controller.md")
+    resolved = engine.follow_links("entities/program-motion-controller.md")
     assert "entities/drive-control-module.md" in resolved
     assert "notes/distributed-systems.md" in resolved
 
 
-def test_follow_wikilinks_skips_dangling_links(engine: QueryEngine) -> None:
+def test_follow_links_skips_dangling_links(engine: QueryEngine) -> None:
     """A [[motor-rail-api]] link with no page is skipped (not fabricated)."""
-    resolved = engine.follow_wikilinks("entities/program-motion-controller.md")
+    resolved = engine.follow_links("entities/program-motion-controller.md")
     assert all("motor-rail-api" not in path for path in resolved)
 
 
-def test_follow_wikilinks_missing_page_returns_empty(engine: QueryEngine) -> None:
+def test_follow_links_missing_page_returns_empty(engine: QueryEngine) -> None:
     """Following links from a non-existent page returns an empty list, never raises."""
-    assert engine.follow_wikilinks("entities/nope.md") == []
+    assert engine.follow_links("entities/nope.md") == []
 
 
-def test_follow_wikilinks_respects_limit(engine: QueryEngine) -> None:
+def test_follow_links_respects_limit(engine: QueryEngine) -> None:
     """The limit caps the resolved-link count."""
-    resolved = engine.follow_wikilinks("entities/program-motion-controller.md", limit=1)
+    resolved = engine.follow_links("entities/program-motion-controller.md", limit=1)
     assert len(resolved) == 1
 
 

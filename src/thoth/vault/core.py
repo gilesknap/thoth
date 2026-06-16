@@ -100,8 +100,9 @@ class Vault:
     def seed(self, *, force: bool = False) -> SeedResult:
         """Write the packaged vault spine + dashboards into this vault (idempotent).
 
-        Writes every packaged template (``index.md``, ``SCHEMA.md``, ``log.md``, and
-        ``_bases/*.base``) to its path under the vault root and creates the canonical
+        Writes every packaged template (``index.md``, ``SCHEMA.md``, ``log.md``,
+        ``_bases/*.base``, and the ``_bases/index.md`` Dashboards page) to its path
+        under the vault root and creates the canonical
         empty content folders (:data:`~thoth.vault.SEED_DIRS`: ``entities/``,
         ``notes/``, ``memories/``, ``actions/``, ``inbox/`` and the ``raw/`` subdirs)
         so the structure exists for Obsidian browsing. Existing spine files are left

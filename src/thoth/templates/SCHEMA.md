@@ -25,10 +25,13 @@ folders never hides it. `inbox/` and `raw/` stay folder-strict machinery.
 ## Conventions
 - File names: lowercase, hyphens, no spaces, no dates (dates live in frontmatter).
 - Every page starts with YAML frontmatter (see Frontmatter).
-- Link with [[wikilinks]]; every reference page needs >= 2 outbound links.
+- Link with standard markdown links `[Title](folder/slug.md)` (OKF, ADR 0017) — NOT
+  Obsidian `[[wikilinks]]`; every reference page needs >= 2 outbound links.
 - Bump `updated` on every edit. Append every action to log.md. (index.md is static — never edit it.)
-- Images: embed inline with ![[asset.ext]] on the owning page AND describe them there.
-  Binaries live in raw/assets/. No per-image sidecar files. Never base64.
+- Images: embed inline with `![](../raw/assets/asset.ext)` markdown image syntax on the
+  owning page AND describe them there. Binaries live in raw/assets/. No per-image sidecar
+  files. Never base64. (Excalidraw `.excalidraw` drawings and Bases `.base` views have no
+  markdown equivalent — keep those as Obsidian `![[...]]` embeds.)
 - Provenance: on pages synthesising 3+ sources, append ^[raw/articles/source.md] to
   paragraphs whose claims trace to one source.
 

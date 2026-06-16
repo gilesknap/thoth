@@ -21,6 +21,7 @@ import pytest
 import yaml
 
 from thoth.templates import (
+    BASE_DOC_NAMES,
     BASE_NAMES,
     OBSIDIAN_NAMES,
     ROOT_NAMES,
@@ -172,13 +173,16 @@ def test_bases_never_filter_on_tags() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_index_is_a_callout_dashboard() -> None:
-    """``index.md`` is the attention dashboard (issue #62 / ADR 0014).
+def test_dashboards_page_is_a_callout_dashboard() -> None:
+    """``_bases/index.md`` is the attention dashboard (issue #62 / ADR 0014).
 
-    One callout per item-class base, embedding a default date window. The work todo
-    list leads expanded ('+'); personal / media / inbox / recent are collapsed.
+    The dashboards moved off the root ``index.md`` spine into the lint/capture-exempt
+    ``_bases/`` directory (issue #191), so their Obsidian ``![[…]]`` Bases embeds are
+    an allowed OKF exception by location. One callout per item-class base, embedding a
+    default date window. The work todo list leads expanded ('+'); personal / media /
+    inbox / recent are collapsed.
     """
-    text = template_text("index.md")
+    text = template_text("_bases/index.md")
     assert "> [!danger]+" in text  # Work todos lead in an expanded red callout.
     # Every remaining section is a collapsed ('-') colour-coded callout.
     for marker in ("> [!tip]-", "> [!example]-", "> [!warning]-", "> [!info]-"):
@@ -204,7 +208,7 @@ def test_index_dashboard_embeds_resolve_to_real_base_views() -> None:
     """Every ``![[_bases/x.base#View]]`` embed names a view that exists (issue #62)."""
     import re
 
-    text = template_text("index.md")
+    text = template_text("_bases/index.md")
     embeds = re.findall(r"!\[\[_bases/([^#\]]+\.base)#([^\]]+)\]\]", text)
     assert embeds, "the dashboard must embed at least one named Base view"
     for base_name, view_name in embeds:
@@ -214,25 +218,36 @@ def test_index_dashboard_embeds_resolve_to_real_base_views() -> None:
         assert view_name in view_names, f"{base_name}#{view_name}"
 
 
-def test_index_is_static_no_catalog_or_page_count() -> None:
-    """index.md is static (ADR 0008): just the title + dashboards, no catalog/count."""
-    text = template_text("index.md")
+def test_dashboards_page_is_static_no_catalog_or_page_count() -> None:
+    """``_bases/index.md`` is static (ADR 0008): title + dashboards, no catalog."""
+    text = template_text("_bases/index.md")
     # The agent-maintained catalog and its machinery are gone: the per-page gloss now
-    # lives in each page's own summary: frontmatter, so no code reads/writes index.md.
+    # lives in each page's own summary: frontmatter, so no code reads/writes it.
     assert "## Knowledge catalog" not in text
     assert "Total pages:" not in text
     assert "### Entities" not in text
     assert "Agents: read SCHEMA.md" not in text
-    # What remains is the Home title and the live Bases dashboard embeds.
-    assert "PKM Vault — Home" in text
+    # What remains is the Dashboards title and the live Bases dashboard embeds.
+    assert "PKM Vault — Dashboards" in text
     assert "![[_bases/" in text
 
 
-def test_index_md_frontmatter_is_summary_type() -> None:
-    """``index.md`` is the Home page: frontmatter ``type`` is ``summary``."""
-    post = frontmatter.loads(template_text("index.md"))
+def test_index_md_is_okf_compliant_stub() -> None:
+    """The root ``index.md`` Home page is a thin OKF stub, not the dashboards (#191).
+
+    It carries ``type``/``title`` frontmatter, links to the Dashboards page with a
+    *standard markdown* link (not a wiki link / Bases embed), and holds none of the
+    Obsidian ``![[…]]`` embeds -- those moved into ``_bases/index.md``.
+    """
+    text = template_text("index.md")
+    post = frontmatter.loads(text)
     assert post.metadata.get("type") == "summary"
     assert post.metadata.get("title") == "Home"
+    assert "PKM Vault — Home" in text
+    # A standard markdown link to the dashboards page -- no wiki links / Bases embeds.
+    assert "[Dashboards](_bases/index.md)" in text
+    assert "[[" not in text
+    assert "![[" not in text
 
 
 def test_schema_md_has_tag_taxonomy_section() -> None:
@@ -263,7 +278,9 @@ def test_names_match_shipped_files() -> None:
     top = {p.name for p in root.iterdir() if p.is_file()}
     bases = {p.name for p in root.joinpath("_bases").iterdir() if p.is_file()}
     assert top == set(SPINE_NAMES) | set(ROOT_NAMES)
-    assert bases == {f"{n}.base" for n in BASE_NAMES}
+    # ``_bases/`` holds the ``.base`` dashboards plus the markdown landing pages.
+    base_doc_leaves = {name.removeprefix("_bases/") for name in BASE_DOC_NAMES}
+    assert bases == {f"{n}.base" for n in BASE_NAMES} | base_doc_leaves
     # The public accessors echo the constants.
     assert base_names() == BASE_NAMES
     assert spine_names() == SPINE_NAMES
@@ -318,6 +335,7 @@ def test_iter_templates_returns_all_templates_non_empty() -> None:
         "_bases/notes.base",
         "_bases/entities.base",
         "_bases/memories.base",
+        *BASE_DOC_NAMES,
         *OBSIDIAN_NAMES,
         *ROOT_NAMES,
     ]
@@ -338,8 +356,8 @@ def test_iter_templates_returns_independent_list() -> None:
     first = iter_templates()
     first.clear()
     assert len(iter_templates()) == len(SPINE_NAMES) + len(BASE_NAMES) + len(
-        OBSIDIAN_NAMES
-    ) + len(ROOT_NAMES)
+        BASE_DOC_NAMES
+    ) + len(OBSIDIAN_NAMES) + len(ROOT_NAMES)
 
 
 # --------------------------------------------------------------------------- #

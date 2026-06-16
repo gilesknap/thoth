@@ -70,7 +70,13 @@ from .checks_metadata import (
 )
 from .engine import EXCLUDED_DIRS, SPINE_FILES, LintEngine
 from .model import Finding, LintError, LintReport, Severity
-from .parse import extract_embeds, extract_wikilinks, parse_taxonomy_tags
+from .parse import (
+    extract_embeds,
+    extract_links,
+    extract_wiki_embeds,
+    extract_wiki_links,
+    parse_taxonomy_tags,
+)
 
 __all__ = [
     "LONDON",
@@ -92,8 +98,10 @@ __all__ = [
     "LintError",
     "LintEngine",
     "parse_taxonomy_tags",
-    "extract_wikilinks",
+    "extract_links",
     "extract_embeds",
+    "extract_wiki_links",
+    "extract_wiki_embeds",
 ]
 
 # CURATED_DIRS / ACTIONABLE_DIRS are the canonical folder vocabulary owned by
