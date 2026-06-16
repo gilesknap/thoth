@@ -7,9 +7,9 @@
 
 **A personal, single-user "second brain" appliance.** Capture anything — a URL, a PDF,
 an image, a voice memo, or a quick note — by dropping it into one private Slack channel,
-and thoth files it into a git-backed [Obsidian](https://obsidian.md) vault: classified,
-curated into clean Markdown, cross-linked to your existing pages, and indexed for semantic
-recall. Ask a question in the same channel and it answers **from your vault** (and,
+and thoth files it into a git-backed, [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/)-compliant
+[Obsidian](https://obsidian.md) vault: classified, curated into clean Markdown, cross-linked
+to your existing pages, and indexed for semantic recall. Ask a question in the same channel and it answers **from your vault** (and,
 optionally, the web), citing the pages it actually used. The same knowledge is exposed to
 AI assistants over [MCP](https://modelcontextprotocol.io).
 
