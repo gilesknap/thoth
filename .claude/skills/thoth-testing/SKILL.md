@@ -42,7 +42,10 @@ inner loop: `uv run pytest`, `uv run ruff check src/ tests/`, `uv run pyright`.
   `VIRTUAL_ENV="$(uv run python -c 'import sys;print(sys.prefix)')"` (or run
   `uv run pyright --pythonpath ... src tests` directly).
 - Where the helm plugin is missing, run pre-commit (and `git commit`, which triggers the
-  hook) with `SKIP=helm-schema` — skip that one hook, never delete it.
+  hook) with `SKIP=helm-schema` — skip that one hook, never delete it. The git hook also
+  invokes a bare `pre-commit`, so a sandbox shell where it is off PATH aborts the commit
+  with "`pre-commit` not found. Did you forget to activate your virtualenv?" — prefix the
+  commit with the project venv bin: `SKIP=helm-schema PATH="$PWD/.venv/bin:$PATH" git commit …`.
 - **Parallel agents in linked git worktrees** share more than they appear to: the
   `git stash` stack is repo-wide (a bare `stash pop` can grab a sibling's work — avoid
   stash entirely in parallel runs), and a pinned `UV_PROJECT_ENVIRONMENT` means every
