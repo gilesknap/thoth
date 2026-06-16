@@ -403,7 +403,6 @@ def _file_plan_json(
             "personal": False,
         },
         "body": body,
-        "wikilinks": wikilinks or ["[[attention]]", "[[neural-networks]]"],
     }
     if page_type in ("action", "media"):
         # Action and media pages require status (validate_file_plan, ADR 0013/0015).
@@ -412,6 +411,8 @@ def _file_plan_json(
         page["summary"] = summary
     if embeds is not None:
         page["embeds"] = embeds
+    if wikilinks is not None:
+        page["wikilinks"] = wikilinks or ["[[attention]]", "[[neural-networks]]"]
     pages: list[dict[str, Any]] = [page, *(extra_pages or [])]
     plan: dict[str, Any] = {"pages": pages}
     return json.dumps(plan)
@@ -3031,7 +3032,6 @@ def test_curate_writes_page_without_legacy_wikilinks_array(
     """
     plan = _file_plan_json(
         body="See [attention](attention.md) and [neural nets](neural-networks.md).",
-        wikilinks=[],
     )
     ingestor = _build_ingestor(
         harness,
