@@ -141,7 +141,14 @@ file rather than scraping stdout/returncode.
 **Smoke without the live pipeline:**
 - `thoth init` into a throwaway `PKM_VAULT=/tmp/...`, then inspect the seeded
   `index.md` / `SCHEMA.md` — verifies template/spine changes.
-- `thoth lint` over a vault — exercises the maintenance invariants.
+- `thoth lint` over a vault — exercises the maintenance invariants. **Run it with the
+  project venv binary, not `uv run --no-project thoth lint`**: the latter resolves `thoth`
+  off PATH/the *vault's* `.venv` and can die with `Failed to spawn: thoth` — and if you
+  piped `2>/dev/null` you get **empty output that miscounts as "0 findings"**. Use
+  `PKM_VAULT=<vault> ./.venv/bin/thoth lint --no-log` (the env var is `PKM_VAULT`;
+  `--no-log` skips appending a `log.md` entry so repeated scans don't spam the action log).
+  Count findings with `grep -cE '^  check '` and bucket them with
+  `grep -oE 'check [0-9]+ [a-z-]+' | sort | uniq -c`.
 - There is **no CLI capture path** (ingest runs only through Slack) and **no `query`
   CLI** (MCP or Slack only). To drive `QueryEngine.answer` live, run a snippet on the
   appliance with the env sourced and the systemd vars set:

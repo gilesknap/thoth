@@ -76,6 +76,18 @@ error and skip the page (`engine.py` does `except yaml.YAMLError: continue`), so
 mis-merged page quietly drops out of the Hindsight index rather than raising. The cheap,
 reliable safeguard is the pull-first habit, not tooling.
 
+## Asset filenames must be slug-cased or lint silently can't see them
+
+A binary in `raw/assets/` is only counted as an asset if its name matches `ASSET_SLUG_RE`
+(`vault/contract.py`): lowercase slug + one-or-more lowercase extensions, no spaces, no
+capitals (compound `.excalidraw.md` is allowed). A file named `Pasted image 2025…png` or
+`IMG_2026…jpg` is **physically present and even embedded on a page, yet `thoth lint`
+reports it as a broken-embed** ("missing asset") *and* the file is invisible to the
+orphan-binary check — purely because of the name. So when recovering/adding images,
+**slugify the filename** (`pasted-image-20250928…png`) and rewrite the embed path to
+match; an OKF embed is `![alt](../raw/assets/<slug>.<ext>)`. The same naming trap is why
+recovered images with spaces look "lost" to lint even after you copy them in.
+
 ## Live config/code is the source of truth — not a stale issue body or plan
 
 Issue bodies and saved plans capture intent *when written* and go stale as the code
