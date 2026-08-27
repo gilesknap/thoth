@@ -11,3 +11,11 @@ jobs:
     uses: ./.github/workflows/_tox.yml
     with:
       tox: docs -- -b linkcheck
+
+  # Re-scan on a schedule as well as per-PR, so newly published registry rules
+  # are applied to code that has not changed since it last passed CI.
+  semgrep:
+    uses: ./.github/workflows/_semgrep.yml
+    permissions:
+      contents: read
+      security-events: write
