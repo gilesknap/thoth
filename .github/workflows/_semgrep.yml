@@ -15,6 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Checkout runs as the runner user but the container runs as root, so git
+      # refuses the workspace as dubiously owned and upload-sarif cannot read
+      # the commit SHA from it.
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       # p/python is the pack that earns its keep here (Python is Semgrep's
       # most mature language). p/jwt is included deliberately: thoth.mcp_auth
       # verifies a Cloudflare-Access RS256 assertion against a JWKS, and that
@@ -30,8 +36,8 @@ jobs:
       # --metrics=off: no scan telemetry leaves the runner. No SEMGREP_APP_TOKEN,
       # so this is Semgrep OSS with registry rules and no semgrep.dev account.
       #
-      # --error=false: findings are reported as code scanning alerts rather than
-      # failing CI. Drop the flag once the initial batch has been triaged.
+      # `semgrep scan` exits 0 even when it has findings, so this reports into
+      # code scanning without gating the PR. Add `--error` to make it blocking.
       - name: Semgrep scan
         run: |
           semgrep scan \
@@ -43,11 +49,10 @@ jobs:
             --exclude 'Charts/' \
             --exclude '.obsidian/plugins/' \
             --sarif --output semgrep.sarif \
-            --metrics=off \
-            --error=false
+            --metrics=off
 
       - name: Upload SARIF to code scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep.sarif
