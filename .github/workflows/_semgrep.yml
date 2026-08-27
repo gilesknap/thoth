@@ -1,0 +1,54 @@
+on:
+  workflow_call:
+
+jobs:
+  scan:
+    runs-on: "ubuntu-latest"
+
+    # Semgrep runs from its own published image rather than the uv environment,
+    # so it never lands in pyproject.toml / uv.lock and never shows up as
+    # renovate churn on a tool that is not an application dependency.
+    container:
+      image: semgrep/semgrep
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # p/python is the pack that earns its keep here (Python is Semgrep's
+      # most mature language). p/jwt is included deliberately: thoth.mcp_auth
+      # verifies a Cloudflare-Access RS256 assertion against a JWKS, and that
+      # pack covers the alg-confusion / unverified-decode family.
+      #
+      # Excludes:
+      #   Charts/  - Go-templated YAML, which no YAML parser can read (the
+      #              check-yaml pre-commit hook excludes it for the same reason).
+      #   .obsidian/plugins/ - ~9 MB of vendored, minified community-plugin JS.
+      #              Scanning it is slow and p/secrets false-positives on
+      #              high-entropy strings in minified bundles.
+      #
+      # --metrics=off: no scan telemetry leaves the runner. No SEMGREP_APP_TOKEN,
+      # so this is Semgrep OSS with registry rules and no semgrep.dev account.
+      #
+      # --error=false: findings are reported as code scanning alerts rather than
+      # failing CI. Drop the flag once the initial batch has been triaged.
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/jwt \
+            --config p/secrets \
+            --config p/github-actions \
+            --config p/dockerfile \
+            --exclude 'Charts/' \
+            --exclude '.obsidian/plugins/' \
+            --sarif --output semgrep.sarif \
+            --metrics=off \
+            --error=false
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

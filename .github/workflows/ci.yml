@@ -15,6 +15,13 @@ jobs:
     # _precommit.yml installs them (the generic _tox runner does not have helm).
     uses: ./.github/workflows/_precommit.yml
 
+  semgrep:
+    uses: ./.github/workflows/_semgrep.yml
+    permissions:
+      contents: read
+      # Required to publish findings to the code scanning dashboard.
+      security-events: write
+
   type-checking:
     uses: ./.github/workflows/_tox.yml
     with:
