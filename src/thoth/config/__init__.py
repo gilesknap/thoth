@@ -19,31 +19,35 @@ unresolved, as during doctest collection on a bare checkout.
 Documented defaults (the single source of truth):
 
 * ``OBSIDIAN_VAULT_NAME`` defaults to :data:`DEFAULT_OBSIDIAN_VAULT_NAME`
-  (``pkm-vault``). * ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME`
-  (``~/.thoth``). * ``THOTH_TIMEZONE`` defaults to :data:`DEFAULT_TIMEZONE`
-  (``Europe/London``), the IANA timezone for every calendar-date computation: the day
-  boundary, schedules, lint freshness and the curate relative-date resolution. A bogus
-  name fails fast. * ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
-  (``claude-sonnet-4-6``). * ``THOTH_ANALYSE_MODEL`` defaults to ``None``, so the folded
-  analyse, kind and transcription vision call (issue #68) resolves to
-  :data:`DEFAULT_ANTHROPIC_MODEL` through the LLM. Set it to drop that call to a cheaper
-  Haiku for document A/B work without changing the default model used everywhere else. *
-  ``THOTH_DIAGRAM_MODEL`` defaults to ``None``, so the Excalidraw reconstruction call
+  (``pkm-vault``).
+* ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME` (``~/.thoth``).
+* ``THOTH_TIMEZONE`` defaults to :data:`DEFAULT_TIMEZONE` (``Europe/London``), the IANA
+  timezone for every calendar-date computation: the day boundary, schedules, lint
+  freshness and the curate relative-date resolution. A bogus name fails fast.
+* ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
+  (``claude-sonnet-4-6``).
+* ``THOTH_ANALYSE_MODEL`` defaults to ``None``, so the folded analyse, kind and
+  transcription vision call (issue #68) resolves to :data:`DEFAULT_ANTHROPIC_MODEL`
+  through the LLM. Set it to drop that call to a cheaper Haiku for document A/B work
+  without changing the default model used everywhere else.
+* ``THOTH_DIAGRAM_MODEL`` defaults to ``None``, so the Excalidraw reconstruction call
   (issue #68, a hand-drawn diagram into an editable scene) resolves to
   :data:`DEFAULT_ANTHROPIC_MODEL` through the LLM. That call needs spatial reasoning and
-  valid JSON, so pinning it independently to a stronger Sonnet or Opus is worthwhile. *
-  ``THOTH_INTENT_MODEL`` defaults to ``None``, so the free-text intent gate (issue #5)
+  valid JSON, so pinning it independently to a stronger Sonnet or Opus is worthwhile.
+* ``THOTH_INTENT_MODEL`` defaults to ``None``, so the free-text intent gate (issue #5)
   falls back to :data:`thoth.intent.DEFAULT_INTENT_MODEL`, a cheap Haiku. The gate is a
   one-shot routing call, so a cheap model is the point, and this override re-tiers it
-  without a redeploy. * ``THOTH_HINDSIGHT_BASE_URL`` defaults to
-  :data:`DEFAULT_HINDSIGHT_BASE_URL` (``http://127.0.0.1:8888``), the standalone
-  ``hindsight-api`` server the :mod:`thoth.hindsight` HTTP client talks to. *
-  ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``), and the daemon
+  without a redeploy.
+* ``THOTH_HINDSIGHT_BASE_URL`` defaults to :data:`DEFAULT_HINDSIGHT_BASE_URL`
+  (``http://127.0.0.1:8888``), the standalone ``hindsight-api`` server the
+  :mod:`thoth.hindsight` HTTP client talks to.
+* ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``), and the daemon
   entrypoint passes it to :func:`logging.basicConfig`, so the appliance is no longer
-  silent on the happy path (issue #52). * ``SLACK_ALERT_CHANNEL`` is the unattended
-  error and heartbeat alert target (issue #15). When unset, :meth:`Config.alert_target`
-  falls back to the first ``SLACK_ALLOWED_USERS`` id as a DM target. *
-  ``SLACK_CAPTURE_CHANNEL`` is the dedicated private channel the Slack daemon listens
+  silent on the happy path (issue #52).
+* ``SLACK_ALERT_CHANNEL`` is the unattended error and heartbeat alert target (issue
+  #15). When unset, :meth:`Config.alert_target` falls back to the first
+  ``SLACK_ALLOWED_USERS`` id as a DM target.
+* ``SLACK_CAPTURE_CHANNEL`` is the dedicated private channel the Slack daemon listens
   and replies in (issue #61). ``thoth slack`` requires it, a pure cutover from the old
   ``message.im`` DM flow with no DM fallback, and
   :meth:`Config.require_slack_capture_channel` reads it.
