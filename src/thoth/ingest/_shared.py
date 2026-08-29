@@ -1,9 +1,9 @@
 """Shared types, vocabulary, and the collaborator base of the ingest passes.
 
-The capture/classification/report dataclasses, the errors, the kind vocabulary, and
-:class:`_IngestorBase` (the ``__init__`` and small helpers every pass class shares)
-live here so the pass submodules of :mod:`thoth.ingest` stay cycle-free. Only the
-standard library plus ``thoth.*`` are imported, preserving the package's
+The capture, classification and report dataclasses, the errors, the kind vocabulary and
+:class:`_IngestorBase`, holding the ``__init__`` and the small helpers every pass class
+shares, live here so the pass submodules of :mod:`thoth.ingest` stay cycle-free. Only
+the standard library and ``thoth.*`` are imported, preserving the package's
 import-purity contract.
 """
 
@@ -68,15 +68,15 @@ class IngestError(Exception):
 
 
 class LLMUnavailableError(IngestError):
-    """Raised when an LLM *client call* (classify/curate) itself fails.
+    """Raised when an LLM *client call*, classify or curate, itself fails.
 
-    A subclass of :class:`IngestError` so existing ``except IngestError`` / test
-    ``pytest.raises(IngestError)`` sites are unaffected, but distinguishable so
-    :meth:`Ingestor.ingest` can treat a transport/availability failure as a *deferred
-    curation* (the inbound item is already persisted durably to ``inbox/`` before any
-    LLM call, per issue #14) rather than a lost capture. A *validation* failure (an
-    out-of-vocabulary type, a bad slug, an unparseable or schema-invalid plan) stays a
-    plain :class:`IngestError` and still aborts -- the validation gate is preserved.
+    A subclass of :class:`IngestError`, so an existing ``except IngestError`` site, or a
+    test's ``pytest.raises(IngestError)``, is unaffected. It stays distinguishable so
+    :meth:`Ingestor.ingest` can treat a transport or availability failure as a *deferred
+    curation* rather than a lost capture, the inbound item having been persisted durably
+    to ``inbox/`` before any LLM call, per issue #14. A *validation* failure stays a
+    plain :class:`IngestError` and still aborts, preserving the validation gate, whether
+    an out-of-vocabulary type, a bad slug, or an unparseable or schema-invalid plan.
     """
 
 
@@ -94,37 +94,35 @@ class CaptureKind(StrEnum):
 class Capture:
     """One inbound item to ingest: raw text, a URL, or a server-resolvable path.
 
-    Binary bytes never travel as base64 **as their stored/canonical form** (SPEC section
-    6): an image/PDF/audio capture carries a ``path`` the *server* can read (downloaded
-    by the Slack/MCP layer to a tmp file) or a ``url`` the server fetches itself, and
-    the bytes are saved as a real binary under ``raw/assets/`` (never as base64 into
-    the vault). The analyse pass (:mod:`thoth.analyse`, issue #42) may **transiently**
-    base64-encode those same bytes to send them to the vision/document API *for
-    analysis* -- a deliberate amendment to the storage rule recorded in ADR 0006: the
-    base64 lives only inside one request and is never persisted or treated as the source
-    of truth.
+    Binary bytes never travel as base64 **as their stored, canonical form** (SPEC
+    section 6). An image, PDF or audio capture carries a ``path`` the *server* can read,
+    which the Slack or MCP layer downloaded to a tmp file, or a ``url`` the server
+    fetches itself, and the bytes are saved as a real binary under ``raw/assets/``,
+    never as base64 into the vault. The analyse pass (:mod:`thoth.analyse`, issue #42)
+    may **transiently** base64-encode those same bytes to send them to the vision API
+    *for analysis*, a deliberate amendment to the storage rule recorded in ADR 0006,
+    since that base64 lives only inside one request and is never persisted nor treated
+    as the source of truth.
 
-    A Slack message that attaches **several images at once** is the natural unit of
-    intent -- the user meant them as *one* thing (three photos of the same whiteboard, a
-    figure plus its caption) -- so it is captured as ONE :class:`Capture`, not N
-    independent ones (issue #84). The first image is the primary ``path`` (it drives the
-    analyse/classify routing); the rest ride on ``extra_paths`` and are saved as extra
-    assets under the *same* slug and embedded in the *same* curated page, so the batch
-    gets one shared summary + one tag set with every image inline. ``extra_paths`` is
-    only populated for an all-image batch (the homogeneous, embed-in-one-page case); a
-    single-file message leaves it empty and is unchanged, and a heterogeneous batch
-    (mixed images/PDFs/text) is still ingested per file by the Slack layer.
+    A Slack message attaching **several images at once** is the natural unit of intent,
+    the user meaning them as *one* thing, so it is captured as ONE :class:`Capture`
+    rather than N independent ones (issue #84). The first image is the primary ``path``
+    that drives the analyse and classify routing, and the rest ride on ``extra_paths``,
+    saved as extra assets under the *same* slug and embedded in the *same* curated page,
+    so the batch gets one shared summary and one tag set with every image inline.
+    ``extra_paths`` is populated only for an all-image batch, and the Slack layer still
+    ingests a heterogeneous batch of mixed images, PDFs and text per file.
 
     Attributes:
-        text: Inline text/markdown to capture, if any.
+        text: Inline text or markdown to capture, if any.
         url: A URL to fetch server-side, if any.
-        path: A server-resolvable local file (image/pdf/audio), if any. For a
+        path: A server-resolvable local image, PDF or audio file, if any. For a
             multi-image batch this is the *primary* image.
-        source: The frontmatter ``source`` value (one of
-            :data:`thoth.vault.VALID_SOURCES`).
+        source: The frontmatter ``source`` value, one of
+            :data:`thoth.vault.VALID_SOURCES`.
         filename: The original upload name, used for slug and extension hints.
         extra_paths: Additional server-resolvable image files for a multi-image batch
-            (issue #84), saved as extra assets alongside the primary in upload order.
+            (issue #84), saved as extra assets beside the primary in upload order.
     """
 
     text: str | None = None
@@ -137,15 +135,15 @@ class Capture:
 
 @dataclass(frozen=True, slots=True)
 class Classification:
-    """Validated output of the cheap classify call (the routing table, SPEC Appendix).
+    """Validated output of the cheap classify call: the routing table, SPEC Appendix.
 
     Attributes:
         page_type: The frontmatter ``type``; validated to be in
             :data:`thoth.vault.VALID_TYPES`.
         slug: The page slug; validated by :meth:`thoth.vault.Vault.validate_slug`.
         title: The human-readable title.
-        entities: Named entities mentioned (drive candidate fetch).
-        concepts: Named concepts mentioned (drive candidate fetch).
+        entities: Named entities mentioned, which drive the candidate fetch.
+        concepts: Named concepts mentioned, which drive the candidate fetch.
     """
 
     page_type: str
@@ -177,8 +175,8 @@ class _Prefetched:
     """Extracted text captured before classify, reused by :meth:`Ingestor.capture_raw`.
 
     Attributes:
-        body: The extracted raw body text (URL markdown / plain text / transcript).
-        source_url: The provenance URL, if any (a web-extracted article carries one).
+        body: The extracted raw body text: URL markdown, plain text or a transcript.
+        source_url: The provenance URL, if any, as a web-extracted article carries.
     """
 
     body: str
@@ -191,8 +189,8 @@ class _Holding:
 
     Attributes:
         result: The :class:`RawCaptureResult` for the ``inbox/`` holding page.
-        prefetched: The extracted text reused by :meth:`Ingestor.capture_raw` so the
-            source is not fetched twice, or ``None`` for a binary capture (no text yet).
+        prefetched: The extracted text :meth:`Ingestor.capture_raw` reuses so the source
+            is not fetched twice, or ``None`` for a binary capture with no text yet.
     """
 
     result: RawCaptureResult
@@ -204,17 +202,17 @@ class _Analysed:
     """The analyse pass's output plus any URL binary it fetched, for one-fetch reuse.
 
     Attributes:
-        analysis: The :class:`~thoth.analyse.Analysis` (or ``None`` for a non-binary
-            kind, or an unparseable analysis filed blind).
+        analysis: The :class:`~thoth.analyse.Analysis`, or ``None`` for a non-binary
+            kind or an unparseable analysis filed blind.
         fetched: The :class:`~thoth.extract.FetchedBinary` the analyse pass downloaded
-            for a URL image/PDF, threaded into :meth:`Ingestor.capture_raw` so the same
-            bytes are reused for the asset write -- no second network download and no
-            leaked temp file. ``None`` for a local-``path`` capture (no fetch happened)
-            or a non-binary kind.
-        excalidraw_md: The reconstructed ``.excalidraw.md`` markdown for a ``diagram``
-            -kind image (issue #68), or ``None``. A best-effort *enhancement* -- it is
-            saved as an extra asset alongside the original, never replacing it, and
-            never defers or loses the capture.
+            for a URL image or PDF, threaded into :meth:`Ingestor.capture_raw` so the
+            asset write reuses the same bytes, with no second network download and no
+            leaked temp file. ``None`` for a local-``path`` capture, where no fetch
+            happened, or for a non-binary kind.
+        excalidraw_md: The reconstructed ``.excalidraw.md`` markdown for a
+            ``diagram``-kind image (issue #68), or ``None``. A best-effort
+            *enhancement*, saved as an extra asset beside the original and never
+            replacing it, which never defers nor loses the capture.
     """
 
     analysis: Analysis | None
@@ -224,27 +222,28 @@ class _Analysed:
 
 @dataclass(frozen=True, slots=True)
 class IngestReport:
-    """Structured outcome the Slack/MCP layer renders (SPEC step 8).
+    """Structured outcome the Slack and MCP layers render (SPEC step 8).
 
     Attributes:
         page_paths: Curated page paths written/updated.
-        raw_paths: Raw source page paths written (may be empty). On a deferred capture
+        raw_paths: Raw source page paths written, possibly empty. On a deferred capture
             this is the durable ``inbox/`` holding page.
-        asset_paths: Binary asset paths saved (may be empty).
-        obsidian_links: ``obsidian://`` deep links built by the harness via
-            :meth:`thoth.vault.Vault.obsidian_uri` (one per curated page; unfabricable).
+        asset_paths: Binary asset paths saved, possibly empty.
+        obsidian_links: ``obsidian://`` deep links the harness built through
+            :meth:`thoth.vault.Vault.obsidian_uri`, one per curated page and
+            unfabricable.
         wikilinks: ``[[slug]]`` handles for the curated pages.
-        titles: Human-readable page titles, one per curated page (parallel to
-            ``page_paths`` / ``obsidian_links``), so the Slack renderer can label each
-            link; falls back to the slug-derived title when frontmatter has none.
+        titles: Human-readable page titles, one per curated page and parallel to
+            ``page_paths`` and ``obsidian_links``, so the Slack renderer can label each
+            link. Falls back to the slug-derived title when frontmatter has none.
         committed: Whether :meth:`thoth.git_sync.GitSync.commit` made a commit.
-        conflict: Whether a :class:`~thoth.git_sync.VaultConflictError` was surfaced.
-        deferred: ``True`` when the inbound item was persisted durably but the
-            classify/curate pass was skipped because the LLM was unavailable; a later
-            reindex/sweep re-curates the held raw item (SPEC section 6).
-        unchanged: ``True`` when this was a no-op re-run -- the raw source was
-            byte-identical to an existing one *and* a curated page already exists, so
-            the curate/navigation/retain passes were skipped (issue #95, task D). No
+        conflict: Whether a :class:`~thoth.git_sync.VaultConflictError` surfaced.
+        deferred: ``True`` when the inbound item was persisted durably but the classify
+            and curate pass was skipped because the LLM was unavailable. A later reindex
+            or sweep re-curates the held raw item (SPEC section 6).
+        unchanged: ``True`` on a no-op re-run, where the raw source was byte-identical
+            to an existing one *and* a curated page already exists, so the curate,
+            navigation and retain passes were skipped (issue #95, task D). No
             ``updated:`` date was bumped and no LLM curate call was spent.
         message: A short human-readable status line.
     """
@@ -435,7 +434,7 @@ def _ext_kind(name: str, *, default: None) -> CaptureKind | None: ...
 
 
 def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
-    """Classify a filename/URL by its extension into a capture kind.
+    """Classify a filename or URL by its extension into a capture kind.
 
     Args:
         name: A lowercase filename or URL path.
