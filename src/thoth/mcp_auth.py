@@ -1,44 +1,29 @@
 """Request authentication for the MCP HTTP transport (issue #103).
 
-The ``thoth mcp --transport http`` server is a network socket, so unlike the stdio
-transport (where the parent process is the trust boundary) it must authenticate every
-request itself. Two tiers stack here, both enforced *before* any ``pkm_*`` tool is
-dispatched:
+The HTTP server is a network socket, so unlike the stdio transport, where the parent
+process is the trust boundary, it must authenticate every request itself. Two tiers
+stack, both enforced before any tool is dispatched.
 
-* **Tier 1 -- static bearer (always on for HTTP).** Every request must carry
-  ``Authorization: Bearer <key>``. ``<key>`` is accepted when it is either one of the
-  comma-separated keys in ``THOTH_MCP_API_KEYS`` (rotation-friendly; the static-key
-  match is constant-time via :func:`hmac.compare_digest` so a wrong key leaks no timing
-  signal) **or** -- when OAuth 2.1 is configured (:meth:`Config.oauth_enabled`) -- a
-  valid thoth-issued OAuth access-token JWT (HS256, unexpired, verified by
-  :func:`thoth.mcp_oauth.verify_oauth_jwt`). The two are additive: a static key still
-  works after OAuth is turned on. This is the tier Claude Code uses (a remote MCP
-  client that sends a user-pasted bearer header); claude.ai obtains the JWT via the
-  OAuth dance.
+* **Tier 1, a static bearer, always on for HTTP.** A key is accepted when it is one of
+  the comma-separated keys in ``THOTH_MCP_API_KEYS``, matched in constant time so a
+  wrong key leaks no timing signal, or, when OAuth is configured, a valid thoth-issued
+  access token. The two are additive, so a static key still works after OAuth is turned
+  on: Claude Code uses the bearer while claude.ai obtains a token through the dance.
+  With OAuth enabled the discovery routes are allow-listed so an unauthenticated client
+  can reach them, and a 401 carries a ``resource_metadata`` hint pointing at the RFC
+  9728 metadata.
+* **Tier 2, a Cloudflare-Access JWT, opt-in defence in depth.** With both Cf settings
+  present the request must also carry a valid assertion header, signed by the team JWKS,
+  whose audience matches and whose expiry is in the future. The algorithm is pinned to
+  RS256 to reject the none algorithm and RS/HS confusion. claude.ai's connectors
+  authenticate through Access OAuth rather than a pasted bearer (ADR 0011), so the JWT
+  is how that path proves the request really transited Access.
 
-  When OAuth is enabled, the OAuth/discovery routes themselves
-  (:data:`thoth.mcp_oauth.OAUTH_PUBLIC_PATHS`) are allow-listed so an unauthenticated
-  client can reach them to *get* a token, and a 401 carries a
-  ``WWW-Authenticate: Bearer resource_metadata="..."`` hint pointing at the RFC 9728
-  protected-resource metadata so MCP clients can discover the authorization server.
-* **Tier 2 -- Cloudflare-Access JWT (opt-in defense-in-depth).** When BOTH
-  ``THOTH_MCP_CF_ACCESS_TEAM_DOMAIN`` and ``THOTH_MCP_CF_ACCESS_AUD`` are set, the
-  request must ALSO carry a valid ``Cf-Access-Jwt-Assertion`` header: a JWT signed by
-  the team's JWKS (``https://<team-domain>/cdn-cgi/access/certs``) whose ``aud`` matches
-  the configured tag and whose ``exp`` is in the future. The algorithm is pinned to
-  ``RS256`` to reject the ``none`` algorithm and RS/HS confusion. claude.ai's web/mobile
-  connectors authenticate through Cloudflare-Access OAuth (a user-pasted static bearer
-  is not supported by those connectors -- see ADR 0011), so the JWT is how that path
-  proves the request really transited Access.
-
-The closed-surface model (SPEC section 3) still governs *what* a caller may do once past
-the door; this module only governs *who* gets through it.
-
-The validation primitives (:func:`bearer_key_accepted`,
-:func:`verify_cf_access_jwt`) are pure and unit-tested with a throwaway RSA keypair and
-a stubbed JWKS. The ASGI middleware (:func:`build_auth_middleware`) wires them onto the
-FastMCP app; ``pyjwt`` / ``starlette`` are imported lazily inside it so importing this
-module stays CI-safe (only the standard library is needed at module top level).
+The closed-surface model (SPEC section 3) still governs what a caller may do once past
+the door. This module only governs who gets through it. The validation primitives are
+pure and unit-tested with a throwaway keypair and a stubbed JWKS, and ``pyjwt`` and
+``starlette`` are imported lazily inside the middleware, so importing this module stays
+CI-safe.
 """
 
 from __future__ import annotations
@@ -58,12 +43,13 @@ __all__ = [
     "build_auth_middleware",
 ]
 
-# The Cloudflare-Access assertion header and the JWKS path suffix (Cf publishes the
-# team signing certs at this fixed path under the team domain).
+# The Cf-Access assertion header and the JWKS path suffix. Cloudflare publishes the team
+# signing certs at this fixed path under the team domain
 CF_ACCESS_HEADER: str = "cf-access-jwt-assertion"
 CF_ACCESS_CERTS_PATH: str = "/cdn-cgi/access/certs"
-# Cf-Access tokens are RS256; pinning the algorithm rejects the ``none`` algorithm and
-# the RS/HS key-confusion attack (a forged HS256 token signed with the public key).
+# Cf-Access tokens are RS256. Pinning the algorithm rejects the none algorithm and the
+# RS/HS key-confusion attack, where a token is forged by signing HS256 with the public
+# key
 CF_ACCESS_ALGORITHMS: tuple[str, ...] = ("RS256",)
 
 
@@ -72,16 +58,16 @@ class AuthError(Exception):
 
 
 def extract_bearer_token(authorization_header: str | None) -> str | None:
-    """Pull the token out of an ``Authorization: Bearer <token>`` header value.
+    """Pulls the token out of an ``Authorization: Bearer`` header value.
 
-    Returns ``None`` when the header is absent, not a ``Bearer`` scheme, or carries no
-    token. The scheme match is case-insensitive (RFC 7235), the rest is byte-exact.
+    The scheme match is case-insensitive per RFC 7235, and the rest is byte-exact.
 
     Args:
-        authorization_header: The raw ``Authorization`` header value, or ``None``.
+        authorization_header: The raw header value, or None.
 
     Returns:
-        The bearer token string, or ``None`` when there is no usable bearer token.
+        The bearer token, or None when the header is absent, not a bearer scheme, or
+        carries no token.
     """
     if not authorization_header:
         return None
@@ -93,26 +79,25 @@ def extract_bearer_token(authorization_header: str | None) -> str | None:
 
 
 def bearer_key_accepted(token: str | None, accepted_keys: Iterable[str]) -> bool:
-    """Return ``True`` when ``token`` constant-time-matches one of ``accepted_keys``.
+    """Reports whether a token constant-time-matches one of the accepted keys.
 
-    Every candidate is compared with :func:`hmac.compare_digest` so a near-miss key
-    cannot be discovered by timing. A ``None``/empty token never matches. The full set
-    is always scanned (no early ``return True``) so the work is independent of *which*
-    key matched -- only the boolean result varies.
+    Every candidate is compared with :func:`hmac.compare_digest`, so a near-miss key
+    cannot be found by timing. The full set is always scanned, with no early return, so
+    the work is independent of which key matched and only the result varies.
 
     Args:
-        token: The presented bearer token (``None`` when the header was missing).
-        accepted_keys: The configured key set (``Config.mcp_api_key_set()``).
+        token: The presented bearer token, or None when the header was missing.
+        accepted_keys: The configured key set.
 
     Returns:
-        ``True`` if the token matches an accepted key, else ``False``.
+        True when the token matches an accepted key, otherwise False. An empty token
+        never matches.
     """
     if not token:
         return False
-    # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII *str* input,
-    # and the token is fully attacker-controlled (the Authorization header). Encoding
-    # both sides turns a malformed/non-ASCII token into a clean non-match (-> 401)
-    # instead of an unhandled error (-> 500), while staying constant-time.
+    # Compare as bytes. compare_digest raises TypeError on non-ASCII str input and the
+    # token is fully attacker-controlled, so encoding both sides turns a malformed token
+    # into a clean 401 rather than an unhandled 500, while staying constant-time
     token_bytes = token.encode("utf-8")
     matched = False
     for key in accepted_keys:
@@ -128,23 +113,21 @@ def verify_cf_access_jwt(
     audience: str,
     jwks_fetcher: Any | None = None,
 ) -> dict[str, Any]:
-    """Validate a Cloudflare-Access ``Cf-Access-Jwt-Assertion`` JWT (issue #103).
+    """Validates a Cloudflare-Access assertion JWT (issue #103).
 
-    Verifies the signature against the team JWKS, pins the algorithm to ``RS256`` (so
-    the ``none`` algorithm and RS/HS confusion are rejected), and checks the ``aud`` and
-    ``exp`` claims. ``pyjwt`` is imported lazily so this module stays import-safe in CI.
+    Verifies the signature against the team JWKS, pins the algorithm to RS256 so the
+    none algorithm and RS/HS confusion are rejected, and checks the audience and expiry.
+    ``pyjwt`` is imported lazily so this module stays import-safe in CI.
 
     Args:
-        token: The raw assertion header value (``None`` when missing).
-        team_domain: The Cloudflare-One team domain
-            (e.g. ``myteam.cloudflareaccess.com``); ``https://`` is added if absent.
-        audience: The Access application's Audience (``aud``) tag.
-        jwks_fetcher: Test seam -- a callable ``url -> PyJWK-compatible client`` (or a
-            client exposing ``get_signing_key_from_jwt``). When ``None`` a real
-            ``jwt.PyJWKClient`` is built for the team certs URL.
+        token: The raw assertion header value, or None when missing.
+        team_domain: The Cloudflare-One team domain, with the scheme added if absent.
+        audience: The Access application's audience tag.
+        jwks_fetcher: Test seam taking the certs URL and returning a client exposing
+            ``get_signing_key_from_jwt``. None builds a real client.
 
     Returns:
-        The decoded, validated claims dict.
+        The decoded, validated claims.
 
     Raises:
         AuthError: when the token is missing, malformed, or fails any check.
@@ -181,25 +164,26 @@ def verify_cf_access_jwt(
 
 
 def build_auth_middleware(config: Config) -> Any:
-    """Build a Starlette ``BaseHTTPMiddleware`` class enforcing the two auth tiers.
+    """Builds the Starlette middleware class enforcing the two auth tiers.
 
-    The returned class rejects (HTTP 401, no tool dispatch) any request whose bearer is
-    neither an accepted static ``THOTH_MCP_API_KEYS`` key nor -- when OAuth is
-    configured (:meth:`Config.oauth_enabled`) -- a valid thoth-issued OAuth access-token
-    JWT, and
-    -- when Cf-Access is configured -- additionally rejects a request without a valid
-    ``Cf-Access-Jwt-Assertion``. When OAuth is enabled the OAuth/discovery routes
-    (:data:`thoth.mcp_oauth.OAUTH_PUBLIC_PATHS`) are allow-listed (they must be
-    reachable without a token so a client can obtain one), and the 401 carries a
-    ``resource_metadata`` discovery hint. ``starlette`` is imported here, not at module
-    top level, so importing this module never needs the optional web stack.
+    The returned class rejects with a 401, and no tool dispatch, any request whose
+    bearer is neither an accepted static key nor, when OAuth is configured, a valid
+    thoth-issued token. With Cf-Access configured it additionally rejects a request
+    without a valid assertion.
+
+    With OAuth enabled the discovery routes are allow-listed, since they must be
+    reachable without a token for a client to obtain one, and the 401 carries a
+    discovery hint.
+
+    ``starlette`` is imported here rather than at module level, so importing this module
+    never needs the optional web stack.
 
     Args:
-        config: The frozen runtime config (provides the bearer key set, the optional
-            OAuth essentials, and the optional Cf-Access team domain / audience).
+        config: Frozen runtime config, supplying the bearer keys and the optional
+            OAuth and Cf-Access settings.
 
     Returns:
-        A ``BaseHTTPMiddleware`` subclass ready to add to the FastMCP ASGI app.
+        A middleware subclass ready to add to the FastMCP app.
     """
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
@@ -209,11 +193,9 @@ def build_auth_middleware(config: Config) -> Any:
     cf_team_domain = config.mcp_cf_access_team_domain
     cf_aud = config.mcp_cf_access_aud
 
-    # OAuth is additive and opt-in: only when the four required vars are set does the
-    # gate also accept a thoth-issued JWT, allow-list the OAuth/discovery routes, and
-    # emit the RFC 9728 resource_metadata discovery hint on a 401. ``verify_oauth_jwt``
-    # and the allow-list set are imported lazily so this module stays import-safe in CI
-    # (mcp_oauth's top level is stdlib-only too).
+    # OAuth is additive and opt-in. Only with all four vars set does the gate also
+    # accept a thoth-issued JWT, allow-list the discovery routes, and emit the RFC 9728
+    # hint on a 401. The imports are lazy so this module stays import-safe in CI
     oauth_enabled = config.oauth_enabled()
     oauth_public_paths: frozenset[str] = frozenset()
     challenge = "Bearer"
@@ -223,7 +205,7 @@ def build_auth_middleware(config: Config) -> Any:
 
         oauth_public_paths = OAUTH_PUBLIC_PATHS
         # The hint points the client at the protected-resource metadata so it can find
-        # the authorization server. server_url is guaranteed non-None by oauth_enabled.
+        # the authorization server. oauth_enabled guarantees server_url is set
         assert config.oauth_server_url is not None
         metadata_url = (
             config.oauth_server_url.rstrip("/")
@@ -232,7 +214,7 @@ def build_auth_middleware(config: Config) -> Any:
         challenge = f'Bearer resource_metadata="{metadata_url}"'
 
     def _unauthorised(detail: str) -> Any:
-        """A 401 carrying the (OAuth-aware) WWW-Authenticate discovery hint."""
+        """Builds a 401 carrying the OAuth-aware discovery hint."""
         return JSONResponse(
             {"error": "invalid_token", "detail": detail},
             status_code=401,
@@ -240,19 +222,19 @@ def build_auth_middleware(config: Config) -> Any:
         )
 
     class _ThothMcpAuthMiddleware(BaseHTTPMiddleware):
-        """Reject unauthenticated requests with 401 before any tool is dispatched."""
+        """Rejects unauthenticated requests with a 401 before any tool is dispatched."""
 
         async def dispatch(self, request: Any, call_next: Any) -> Any:
-            # The OAuth/discovery routes must be reachable WITHOUT a bearer so a client
-            # can complete the dance and obtain a token; let them straight through.
+            # The discovery routes must be reachable without a bearer so a client can
+            # complete the dance and obtain a token, so let them straight through
             if oauth_enabled and request.url.path in oauth_public_paths:
                 return await call_next(request)
 
             token = extract_bearer_token(request.headers.get("authorization"))
-            # Tier 1a: a static THOTH_MCP_API_KEYS bearer (constant-time match).
+            # Tier 1a, a static bearer key matched in constant time
             allowed = bearer_key_accepted(token, accepted_keys)
-            # Tier 1b: else a valid thoth-issued OAuth JWT (additive, opt-in). The
-            # decoded ``sub`` is attached to request.state for downstream logging.
+            # Tier 1b, else a valid thoth-issued OAuth JWT, which is additive and
+            # opt-in. The decoded sub rides on request.state for downstream logging
             if not allowed and verify_oauth_jwt is not None:
                 try:
                     claims = verify_oauth_jwt(token, config)

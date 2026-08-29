@@ -1,10 +1,8 @@
 """Shared types, vocabulary, and the collaborator base of the ingest passes.
 
-The capture/classification/report dataclasses, the errors, the kind vocabulary, and
-:class:`_IngestorBase` (the ``__init__`` and small helpers every pass class shares)
-live here so the pass submodules of :mod:`thoth.ingest` stay cycle-free. Only the
-standard library plus ``thoth.*`` are imported, preserving the package's
-import-purity contract.
+The dataclasses, errors, kind vocabulary and :class:`_IngestorBase` live here so the
+pass submodules of :mod:`thoth.ingest` stay cycle-free. Only the standard library and
+``thoth.*`` are imported, which preserves the package's import-purity contract.
 """
 
 from __future__ import annotations
@@ -30,21 +28,19 @@ from thoth.vault import FOLDER_TYPE_CONTRACT, Vault
 
 logger = logging.getLogger("thoth.ingest")
 
-# The two intended-curation modes stamped into a hold's ``mode:`` frontmatter (issue
-# #95, task E) so a later inbox sweep honours the ORIGINAL intent instead of guessing: a
-# capture deferred under ``--as-is`` re-files low-touch, a normal capture re-curates.
-# The values are kept here (the single place the hold mode vocabulary is expressed) and
-# read back by :mod:`thoth.inbox_drain`.
+# The two curation modes stamped into a hold's mode: frontmatter (issue #95) so a later
+# inbox sweep honours the original intent instead of guessing. A capture deferred under
+# --as-is re-files low-touch, a normal one re-curates. This is the single place the hold
+# mode vocabulary is expressed, and inbox_drain reads it back
 HOLD_MODE_CURATE: str = "curate"
 HOLD_MODE_AS_IS: str = "as-is"
 HOLD_MODES: frozenset[str] = frozenset({HOLD_MODE_CURATE, HOLD_MODE_AS_IS})
 
-# The single content folder each page ``type`` is written to (the inverse of the
-# folder->types :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`). Each content type maps to
-# exactly one folder, so the as-is import path (issue #80, ADR 0010) can route a
-# classify-chosen type to its folder without a curate-authored file-plan. Derived from
-# the same canonical contract rather than restated, so adding a folder is a one-place
-# edit. The ``inbox`` holding type is excluded -- as-is files into a content folder.
+# The single content folder each page type is written to, inverting
+# FOLDER_TYPE_CONTRACT. Each content type maps to exactly one folder, so the as-is
+# import path (issue #80, ADR 0010) can route a classify-chosen type without a
+# curate-authored plan. Derived from the canonical contract rather than restated, so
+# adding a folder is a one-place edit. Inbox is excluded, as-is files into content
 _TYPE_FOLDER: dict[str, str] = {
     page_type: folder
     for folder, types in FOLDER_TYPE_CONTRACT.items()
@@ -52,14 +48,12 @@ _TYPE_FOLDER: dict[str, str] = {
     for page_type in types
 }
 
-# Head-truncation cap (chars, ~750 tokens) for the extracted URL/transcript body folded
-# into the classify AND curate prompts via ``_capture_summary``. The vault is canonical
-# and the full text already lives at ``raw/articles/<slug>.md``; the curated page is a
-# distilled view, so a lead excerpt carries the gist while capping token cost on large
-# articles (issue #75). The SAME bounded excerpt feeds classify so routing is
-# content-aware -- a personal URL routes differently from a technical one rather than
-# being decided from the link + title alone (issue #123); classify stays on Sonnet (the
-# Haiku move is issue #79).
+# Head-truncation cap in chars, about 750 tokens, for the extracted body folded into
+# the classify and curate prompts. The full text already lives at raw/articles/<slug>.md
+# and the curated page is a distilled view, so a lead excerpt carries the gist while
+# capping token cost on large articles (issue #75). The same excerpt feeds classify so
+# routing is content-aware: a personal URL routes differently from a technical one
+# rather than being decided from the link and title alone (issue #123)
 _URL_EXCERPT_CHARS: int = 3000
 
 
@@ -68,15 +62,13 @@ class IngestError(Exception):
 
 
 class LLMUnavailableError(IngestError):
-    """Raised when an LLM *client call* (classify/curate) itself fails.
+    """Raised when an LLM client call in classify or curate itself fails.
 
-    A subclass of :class:`IngestError` so existing ``except IngestError`` / test
-    ``pytest.raises(IngestError)`` sites are unaffected, but distinguishable so
-    :meth:`Ingestor.ingest` can treat a transport/availability failure as a *deferred
-    curation* (the inbound item is already persisted durably to ``inbox/`` before any
-    LLM call, per issue #14) rather than a lost capture. A *validation* failure (an
-    out-of-vocabulary type, a bad slug, an unparseable or schema-invalid plan) stays a
-    plain :class:`IngestError` and still aborts -- the validation gate is preserved.
+    A subclass of :class:`IngestError`, so existing handlers are unaffected, but
+    distinguishable so :meth:`Ingestor.ingest` can treat a transport failure as a
+    deferred curation rather than a lost capture. The item is already persisted durably
+    to ``inbox/`` before any LLM call (issue #14). A validation failure stays a plain
+    :class:`IngestError` and still aborts, so the validation gate is preserved.
     """
 
 
@@ -94,26 +86,21 @@ class CaptureKind(StrEnum):
 class Capture:
     """One inbound item to ingest: raw text, a URL, or a server-resolvable path.
 
-    Binary bytes never travel as base64 **as their stored/canonical form** (SPEC section
-    6): an image/PDF/audio capture carries a ``path`` the *server* can read (downloaded
-    by the Slack/MCP layer to a tmp file) or a ``url`` the server fetches itself, and
-    the bytes are saved as a real binary under ``raw/assets/`` (never as base64 into
-    the vault). The analyse pass (:mod:`thoth.analyse`, issue #42) may **transiently**
-    base64-encode those same bytes to send them to the vision/document API *for
-    analysis* -- a deliberate amendment to the storage rule recorded in ADR 0006: the
-    base64 lives only inside one request and is never persisted or treated as the source
-    of truth.
+    Binary bytes never travel as base64 in their stored form (SPEC section 6). A binary
+    capture carries a path the server can read, or a URL it fetches itself, and the
+    bytes are saved as a real binary under ``raw/assets/``.
 
-    A Slack message that attaches **several images at once** is the natural unit of
-    intent -- the user meant them as *one* thing (three photos of the same whiteboard, a
-    figure plus its caption) -- so it is captured as ONE :class:`Capture`, not N
-    independent ones (issue #84). The first image is the primary ``path`` (it drives the
-    analyse/classify routing); the rest ride on ``extra_paths`` and are saved as extra
-    assets under the *same* slug and embedded in the *same* curated page, so the batch
-    gets one shared summary + one tag set with every image inline. ``extra_paths`` is
-    only populated for an all-image batch (the homogeneous, embed-in-one-page case); a
-    single-file message leaves it empty and is unchanged, and a heterogeneous batch
-    (mixed images/PDFs/text) is still ingested per file by the Slack layer.
+    The analyse pass may transiently base64 those bytes to send them to the vision API,
+    which ADR 0006 records as a deliberate amendment. That base64 lives inside one
+    request and is never persisted.
+
+    A Slack message attaching several images at once is one unit of intent, so it
+    becomes one capture rather than N (issue #84). The first image is the primary path
+    and drives routing, and the rest ride on ``extra_paths`` under the same slug and
+    page, so the batch gets one summary and one tag set with every image inline.
+
+    ``extra_paths`` is populated only for an all-image batch. A heterogeneous batch is
+    still ingested per file by the Slack layer.
 
     Attributes:
         text: Inline text/markdown to capture, if any.
@@ -279,31 +266,26 @@ class _IngestorBase:
         analyser: Analyser | None = None,
         today: date | None = None,
     ) -> None:
-        """Store the injected collaborators.
+        """Stores the injected collaborators.
 
         Args:
             config: The frozen runtime configuration.
-            vault: The path-confined read/write vault facade (the only disk surface).
-            llm: The injectable Anthropic wrapper (classify + curate calls).
-            extractor: The SSRF-guarded URL/PDF/image/STT extractor.
-            hindsight: The subprocess wrapper over the semantic index.
+            vault: Path-confined vault facade, the only disk surface.
+            llm: Injectable Anthropic wrapper for classify and curate.
+            extractor: SSRF-guarded URL, PDF, image and speech extractor.
+            hindsight: Wrapper over the semantic index.
             git: The deterministic git sync wrapper.
-            schema_md: Optional SCHEMA.md text passed as ``system_extra`` to the curate
-                call so the model files to the live schema.
-            markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired, a
-                successful ingest records a ``capture`` marker and a successful push
-                records a ``push`` marker so the daily heartbeat can report them
-                (issue #15). ``None`` (the default) disables marker recording, so
-                existing callers and tests are unaffected.
-            analyser: Optional :class:`~thoth.analyse.Analyser` for the vision/PDF
-                content-analysis pass (issue #42). When ``None`` (the default) one is
-                built lazily from the injected ``llm`` -- so it shares the same daily
-                budget guard -- and configured with the ``analyse_model`` /
-                ``diagram_model`` knobs (issue #68); a test can inject a fake to drive
-                analysis with no real model call.
-            today: Optional fixed date used to anchor the curate prompt's relative-date
-                resolution (so "monday" becomes a concrete ``due_date``); ``None`` (the
-                default) reads the live date in the configured timezone.
+            schema_md: Optional SCHEMA.md text passed to curate as ``system_extra``,
+                so the model files to the live schema.
+            markers: Optional liveness store. When wired, a successful ingest and a
+                successful push each record a marker for the daily heartbeat
+                (issue #15). None disables recording.
+            analyser: Optional analyser for the vision and PDF pass (issue #42). When
+                None one is built from the injected llm, so it shares the same daily
+                budget guard, using the ``analyse_model`` and ``diagram_model``
+                knobs (issue #68). Tests inject a fake to avoid a real model call.
+            today: Optional fixed date anchoring the curate prompt's relative-date
+                resolution. None reads the live date in the configured timezone.
         """
         self._config = config
         self._vault = vault
@@ -325,11 +307,11 @@ class _IngestorBase:
         )
 
     def _record_marker(self, name: str) -> None:
-        """Record a liveness marker (best-effort; never lets bookkeeping break ingest).
+        """Records a liveness marker, best-effort, so bookkeeping cannot break ingest.
 
-        A failure to write the disposable marker DB must not fail or abort a capture
-        that otherwise succeeded, so any error is swallowed (the heartbeat's job is to
-        make *silence* diagnostic, not to gate the pipeline).
+        A failure writing the disposable marker DB must not abort a capture that
+        otherwise succeeded, so any error is swallowed. The heartbeat exists to make
+        silence diagnostic, not to gate the pipeline.
         """
         if self._markers is None:
             return
@@ -339,15 +321,14 @@ class _IngestorBase:
             pass
 
     def _capture_kind(self, capture: Capture) -> CaptureKind:
-        """Decide the capture kind from the populated fields and any extension hint.
+        """Decides the capture kind from the populated fields and any extension hint.
 
-        A server-resolvable ``path`` is read by its extension: a text upload
-        (``.md``/``.txt``/... per :data:`_TEXT_EXTS`, issue #57) is a TEXT capture whose
-        bytes are read as the body, audio is transcribed, and anything else -- including
-        a path with no recognised extension -- is treated as an image binary (the common
-        phone-upload case). A ``url`` is web-extracted unless its own extension or the
-        ``filename`` hint marks it as a PDF or image (a direct binary the server
-        downloads). Plain ``text`` is the fallback.
+        A path is read by its extension. A text upload is read as the body (issue #57),
+        audio is transcribed, and anything else including an unrecognised extension is
+        treated as an image binary, which is the common phone-upload case.
+
+        A URL is web-extracted unless its extension or the filename hint marks it as a
+        PDF or image. Plain text is the fallback.
         """
         hint = (capture.filename or "").lower()
         if capture.path is not None:
@@ -364,14 +345,11 @@ class _IngestorBase:
         return CaptureKind.TEXT
 
     def _today_iso(self) -> str:
-        """Return the date that anchors relative-date resolution, as ``YYYY-MM-DD``.
+        """Returns the date anchoring relative-date resolution, as ``YYYY-MM-DD``.
 
-        The injected ``today`` when a test pins one, else the live date in the
-        configured timezone (``THOTH_TIMEZONE``). Fed into the curate prompt so the
-        model can turn a relative deadline ("monday", "tomorrow") in the captured text
-        into a concrete ``due_date`` -- the model is never otherwise told what day it
-        is, which left such deadlines unset (e.g. an "urgent todo monday" filed with no
-        date).
+        The injected date when a test pins one, otherwise the live date in
+        ``THOTH_TIMEZONE``. The model is never otherwise told what day it is, which left
+        deadlines like "urgent todo monday" filed with no date.
         """
         today = self._today or datetime.now(self._config.timezone).date()
         return today.isoformat()
@@ -384,23 +362,19 @@ class _IngestorBase:
         extracted_body: str | None = None,
         is_transcript: bool = False,
     ) -> str:
-        """Render a compact textual summary of the capture for a prompt.
+        """Renders a compact textual summary of the capture for a prompt.
 
-        For a binary capture the analysis (issue #42) is appended so the model sees the
-        asset's OCR'd/extracted content, description, and routing hints -- the load-
-        bearing fix: previously a binary reached the model as a bare ``File: name`` line
-        and was filed blind. ``extracted_body`` (an audio transcript / URL article body
-        extracted before curate) is appended for the same reason.
+        A binary's analysis is appended so the model sees the OCR text, description and
+        routing hints (issue #42). Before that a binary reached the model as a bare
+        ``File: name`` line and was filed blind.
 
-        For a text-bearing capture the body excerpt is appended only when the capture
-        has no inline ``text`` -- which is already shown verbatim -- so a plain text
-        capture is never duplicated. The exception is ``is_transcript`` (an audio
-        capture, issue #129): a voice memo's spoken content is the *canonical* content,
-        but Slack stamps the message with generic fallback text ("Listen to voice note")
-        that lands in ``capture.text`` and would otherwise suppress the transcript --
-        leaving classify to title/route the note blind off the placeholder. So an audio
-        transcript is always folded in, regardless of the (noise) caption, so the note
-        is titled and routed by what was actually said.
+        A body excerpt is appended only when there is no inline text, which is already
+        shown verbatim, so a plain text capture is never duplicated.
+
+        An audio transcript is the exception and is always folded in (issue #129). Slack
+        stamps a voice note with generic fallback text that lands in ``capture.text``
+        and would otherwise suppress the transcript, leaving classify to route off the
+        placeholder rather than what was said.
         """
         parts: list[str] = []
         if capture.url is not None:
@@ -418,9 +392,9 @@ class _IngestorBase:
             and extracted_body.strip()
         ):
             label = "Extracted text (transcript / article body)"
-            # Head-truncate to a bounded lead excerpt so a large article cannot blow up
-            # the curate prompt's token cost (issue #75). The full text stays canonical
-            # in raw/articles/<slug>.md; the opening reliably carries the gist.
+            # Head-truncate so a large article cannot blow up the prompt's token cost
+            # (issue #75). The full text stays canonical in raw/articles/<slug>.md and
+            # the opening reliably carries the gist
             excerpt = extracted_body.strip()[:_URL_EXCERPT_CHARS]
             summary += f"\n\n{label}:\n{excerpt}"
         return summary
@@ -435,15 +409,14 @@ def _ext_kind(name: str, *, default: None) -> CaptureKind | None: ...
 
 
 def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
-    """Classify a filename/URL by its extension into a capture kind.
+    """Classifies a filename or URL by its extension into a capture kind.
 
     Args:
         name: A lowercase filename or URL path.
-        default: The kind to return when the extension is unrecognised.
+        default: Kind to return when the extension is unrecognised.
 
     Returns:
-        :attr:`CaptureKind.PDF`/``IMAGE``/``AUDIO``/``TEXT`` for a known extension,
-        else ``default``.
+        The matching kind, otherwise ``default``.
     """
     if name.endswith(".pdf"):
         return CaptureKind.PDF
@@ -458,7 +431,7 @@ def _ext_kind(name: str, *, default: CaptureKind | None) -> CaptureKind | None:
 
 
 def _analysis_summary(analysis: Analysis) -> str:
-    """Render a binary's analysis as a prompt block (content + routing hints)."""
+    """Renders a binary's analysis as a prompt block of content and routing hints."""
     lines: list[str] = ["Content analysis of the attached binary:"]
     if analysis.summary.strip():
         lines.append(f"Summary: {analysis.summary.strip()}")
@@ -476,7 +449,7 @@ def _analysis_summary(analysis: Analysis) -> str:
 
 
 def _require(value: Any, field_name: str) -> Any:
-    """Return ``value`` or raise :class:`IngestError` naming the missing field."""
+    """Returns ``value``, raising when it is absent."""
     if value is None:
         raise IngestError(f"capture is missing required field {field_name!r}")
     return value

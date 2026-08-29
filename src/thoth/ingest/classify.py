@@ -31,45 +31,36 @@ class _ClassifyPass(_IngestorBase):
         analysis: Analysis | None = None,
         extracted_body: str | None = None,
     ) -> Classification:
-        """Run the cheap classify call and validate its routing output.
+        """Runs the cheap classify call and validates its routing output.
 
-        One LLM call returns a JSON object with ``type``/``slug``/``title`` plus any
-        named entities/concepts. The ``type`` and ``slug`` are validated through
-        :class:`~thoth.vault.Vault` here, so a bad routing decision is rejected before
-        any disk is touched.
+        One call returns the type, slug and title plus any named entities and concepts.
+        The type and slug are validated through the vault here, so a bad routing
+        decision is rejected before any disk is touched.
 
-        When ``analysis`` is supplied (a binary capture the analyse pass enriched, issue
-        #42), the OCR'd/extracted content is folded into the prompt **and** the model's
-        named entities/concepts are unioned with the analysis hints, so the item is
-        routed *by its content* -- a whiteboard photo lands in ``notes/``, not the
-        ``memories/`` default -- and the candidate fetch sees the analysed terms.
+        A binary capture's analysis (issue #42) folds its extracted content into the
+        prompt and unions its hints with the model's terms, so the item routes by
+        content rather than landing in the default folder, and the candidate fetch sees
+        the analysed terms. A pre-extracted body does the same for a text-bearing
+        capture.
 
-        ``extracted_body`` does the same for a *text-bearing* capture whose body was
-        extracted before classify (a URL article's markdown / an audio transcript): the
-        same bounded lead excerpt that already feeds curate (head-truncated to
-        :data:`_URL_EXCERPT_CHARS`) is folded into the classify prompt too, so routing
-        is **content-aware** -- a clearly-personal URL routes differently from a
-        technical one, instead of being decided from the link + title alone (issue
-        #123). classify stays on Sonnet here (the Haiku move is issue #79).
-
-        For an **audio** capture the transcript is folded in even when a (noise)
-        Slack voice-memo caption sits in ``capture.text`` -- otherwise classify would
-        title and route the note blind off the "Listen to voice note" placeholder
-        (issue #129); see :meth:`_capture_summary`'s ``is_transcript`` bypass, mirrored
-        from curate.
+        The same bounded excerpt that feeds curate is folded in here, so a clearly
+        personal URL routes differently from a technical one rather than being decided
+        from the link and title alone (issue #123). An audio transcript is folded in
+        even past a noise voice-memo caption, otherwise classify would title and route
+        the note blind off the placeholder (issue #129).
 
         Args:
             capture: The inbound item to classify.
-            analysis: Optional content analysis of a binary capture (image/PDF).
-            extracted_body: Optional pre-extracted text body (URL article markdown /
-                audio transcript) folded in -- bounded -- so routing is content-aware.
+            analysis: Optional analysis of a binary capture.
+            extracted_body: Optional pre-extracted body, folded in bounded so routing
+                is content-aware.
 
         Returns:
-            The validated :class:`Classification`.
+            The validated classification.
 
         Raises:
-            IngestError: if the model output is unparseable or names an
-                out-of-vocabulary type or an invalid slug.
+            IngestError: if the output is unparseable, or names an out-of-vocabulary
+                type or an invalid slug.
         """
         prompt = self._classify_prompt(
             capture, analysis=analysis, extracted_body=extracted_body
@@ -77,8 +68,8 @@ class _ClassifyPass(_IngestorBase):
         try:
             response = self._llm.complete([Message(role="user", content=prompt)])
         except Exception as exc:  # noqa: BLE001 - any client failure aborts classify
-            # A transport/availability failure -> deferrable (raw is already durable);
-            # validation failures below stay a plain IngestError (abort, gate kept).
+            # A transport failure is deferrable, since the raw is already durable. The
+            # validation failures below stay a plain IngestError, keeping the gate
             raise LLMUnavailableError(f"classify LLM call failed: {exc}") from exc
         obj = self._parse_block(response, "classification")
 
@@ -127,15 +118,14 @@ class _ClassifyPass(_IngestorBase):
 
     @staticmethod
     def _route_by_analysis(page_type: str, analysis: Analysis | None) -> str:
-        """Promote a generic ``memory`` routing to the analysed content type.
+        """Promotes a generic memory routing to the analysed content type.
 
-        The blind classifier defaults a binary capture to ``memory`` (the only thing it
-        can guess from a filename). When the analyse pass extracted real content and
-        suggested a knowledge type (``entity``/``note``/``action``), honour that hint so
-        the capture is routed by its content rather than landing in ``memories/`` by
-        default (issue #42). A model that already chose a non-``memory`` type is
-        trusted; an analysis suggesting ``memory`` (a personal snapshot) never overrides
-        a more specific model choice.
+        The blind classifier defaults a binary capture to memory, the only thing it can
+        guess from a filename. When the analyse pass extracted real content and
+        suggested a knowledge type, honour that hint so the capture routes by its
+        content rather than landing in the default folder (issue #42). A model that
+        already chose a more specific type is trusted, and an analysis suggesting memory
+        never overrides it.
         """
         if analysis is None:
             return page_type
@@ -158,18 +148,14 @@ class _ClassifyPass(_IngestorBase):
         analysis: Analysis | None = None,
         extracted_body: str | None = None,
     ) -> str:
-        """Build the cheap classify-call prompt from the capture.
+        """Builds the cheap classify prompt from the capture.
 
-        The legal ``type`` enumeration is derived from
-        :data:`thoth.vault.TYPE_ENUMERATION` (the canonical vocabulary, issue #19),
-        not restated here, so a type added to the vault contract is offered to the
-        classifier automatically and the two cannot diverge. A binary capture's analysis
-        (issue #42) is folded in so the model classifies by the asset's real content;
-        ``extracted_body`` folds in the same bounded URL/transcript excerpt that feeds
-        curate so routing is content-aware (issue #123); for an audio capture the
-        transcript is folded in even past a Slack voice-memo caption (``is_transcript``
-        bypass), so a voice note is titled/routed by the spoken content (issue #129),
-        symmetric with curate.
+        The legal type enumeration is derived from the canonical vocabulary (issue #19)
+        rather than restated, so a type added to the vault contract reaches the
+        classifier automatically and the two cannot diverge. A binary capture's
+        analysis, a bounded URL or transcript excerpt, and an audio transcript past any
+        voice-memo caption are all folded in, so routing is content-aware and symmetric
+        with curate.
         """
         what = self._capture_summary(
             capture,
@@ -193,7 +179,7 @@ class _ClassifyPass(_IngestorBase):
 
     @staticmethod
     def _parse_block(response: Any, what: str) -> dict[str, Any]:
-        """Extract text from a response and parse its first JSON object.
+        """Extracts text from a response and parses its first JSON object.
 
         Raises:
             IngestError: if no parseable JSON object is found.
@@ -208,17 +194,17 @@ class _ClassifyPass(_IngestorBase):
 
 
 def _str_list(value: object) -> list[str]:
-    """Return ``value`` as a list of non-empty strings (empty list otherwise)."""
+    """Returns a value as a list of non-empty strings."""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
 
 
 def _merge_terms(primary: list[str], extra: list[str]) -> list[str]:
-    """Union two term lists, order-preserving and case-insensitively de-duplicated.
+    """Unions two term lists, preserving order and de-duplicating case-insensitively.
 
-    The model's own classify terms come first (so they drive the candidate fetch order),
-    then any analysed entities/concepts not already present (issue #42).
+    The model's own terms come first, so they drive the candidate fetch order, then any
+    analysed terms not already present (issue #42).
     """
     seen = {term.lower() for term in primary}
     merged = list(primary)

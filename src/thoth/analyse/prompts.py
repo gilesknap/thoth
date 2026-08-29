@@ -37,9 +37,8 @@ _PDF_PROMPT = (
     "and suggest how to file it.\n\n" + _RESULT_SHAPE
 )
 
-# The Excalidraw reconstruction prompt (issue #68). The model returns ONLY the element
-# list -- thoth assembles the file envelope deterministically (it is never trusted with
-# the wrapper), so the prompt asks only for {"elements": [...]}.
+# The Excalidraw reconstruction prompt (issue #68). thoth assembles the envelope
+# deterministically, so the model is asked only for {"elements": [...]}
 _EXCALIDRAW_PROMPT = (
     "This image is a hand-drawn diagram (a whiteboard, sketch, flowchart, mindmap, or "
     "box-and-arrow drawing). Reconstruct it as an idealised, editable Excalidraw "

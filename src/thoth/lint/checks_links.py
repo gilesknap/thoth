@@ -1,9 +1,8 @@
-"""Link-graph checks: orphan pages (1), broken links (2), image hygiene (11), OKF
-link style (14).
+"""Link-graph checks 1 (orphans), 2 (broken links), 11 (images), 14 (link style).
 
 Each check is a pure function over the parsed pages handed to it by
-:class:`thoth.lint.LintEngine`; the engine's thin ``check_*`` methods gather the
-pages (and asset filename sets) and delegate here.
+:class:`thoth.lint.LintEngine`, whose thin ``check_*`` methods gather the pages and the
+asset filename sets and delegate here.
 """
 
 from __future__ import annotations
@@ -18,17 +17,16 @@ from .parse import (
     extract_wiki_links,
 )
 
-# The raw subdirectory holding binary assets (image-hygiene check 11).
+# The raw subdirectory holding binary assets (check 11)
 _ASSETS_DIR: str = "raw/assets"
 
-# Wiki embeds that legitimately stay in ``![[...]]`` form: Obsidian Bases views and
-# Excalidraw drawings have no standard-markdown equivalent (issue #189), so the OKF
-# link-style check (14) exempts them.
+# Bases views and Excalidraw drawings have no standard-markdown equivalent, so they
+# legitimately stay in ![[...]] form and check 14 exempts them (issue #189)
 _EXEMPT_EMBED_SUFFIXES: tuple[str, ...] = (".base", ".excalidraw")
 
 
 def _check_orphans(pages: list[_Page]) -> list[Finding]:
-    """Flag curated reference pages with zero inbound links (check 1)."""
+    """Flags a curated reference page with zero inbound links (check 1)."""
     inbound = _inbound_targets(pages)
     findings: list[Finding] = []
     for page in pages:
@@ -48,11 +46,11 @@ def _check_orphans(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_broken_links(pages: list[_Page]) -> list[Finding]:
-    """Flag ``[text](path.md)`` links resolving to no page, honouring aliases (check 2).
+    """Flags a link resolving to no page, honouring aliases (check 2).
 
-    Recognises both the OKF standard markdown link form and any residual
-    ``[[wikilink]]`` (the extractor unions both). A target resolves if its bare stem
-    matches a page's slug, full path or one of its aliases.
+    Recognises the OKF standard markdown form and any residual ``[[wikilink]]``, since
+    the extractor unions both. A target resolves when its bare stem matches a page's
+    slug, its full path, or one of its aliases.
     """
     resolvable = _resolvable_targets(pages)
     findings: list[Finding] = []
@@ -73,13 +71,12 @@ def _check_broken_links(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_link_style(pages: list[_Page]) -> list[Finding]:
-    """Flag legacy Obsidian wiki links/embeds; OKF wants standard markdown (check 14).
+    """Flags a legacy Obsidian wiki link or embed, since OKF wants markdown (check 14).
 
     A ``[[wikilink]]`` is non-portable and not the ``[text](path.md)`` form OKF requires
-    (issue #189), so each is flagged ``Severity.STYLE``. Wiki *image* embeds
-    (``![[photo.png]]``) are likewise flagged in favour of ``![alt](path)``, but Bases
-    (``.base``) and Excalidraw (``.excalidraw``) embeds -- which have no markdown
-    equivalent -- are exempt.
+    (issue #189), so each is flagged as style. A wiki image embed is flagged in favour
+    of ``![alt](path)``, but Bases and Excalidraw embeds, which have no markdown
+    equivalent, are exempt.
     """
     findings: list[Finding] = []
     for page in pages:
@@ -113,7 +110,7 @@ def _check_link_style(pages: list[_Page]) -> list[Finding]:
 def _check_image_hygiene(
     pages: list[_Page], *, assets: set[str], sidecars: set[str]
 ) -> list[Finding]:
-    """Flag orphan assets, broken embeds and surviving sidecars (check 11)."""
+    """Flags orphan assets, broken embeds and surviving sidecars (check 11)."""
     embedded: set[str] = set()
     findings: list[Finding] = []
     for page in pages:
@@ -154,10 +151,9 @@ def _check_image_hygiene(
 
 
 def _inbound_targets(pages: list[_Page]) -> set[str]:
-    """Return the set of normalised link targets across ``pages``.
+    """Returns the set of normalised link targets across ``pages``.
 
-    Self-links (a page linking to its own slug) are excluded so a page cannot rescue
-    itself from the orphan check.
+    A self-link is excluded, so a page cannot rescue itself from the orphan check.
     """
     inbound: set[str] = set()
     for page in pages:
@@ -170,7 +166,7 @@ def _inbound_targets(pages: list[_Page]) -> set[str]:
 
 
 def _resolvable_targets(pages: list[_Page]) -> set[str]:
-    """Return every handle a link may resolve to: slug, path, and aliases."""
+    """Returns every handle a link may resolve to: slug, path and aliases."""
     resolvable: set[str] = set()
     for page in pages:
         resolvable.add(page.slug)

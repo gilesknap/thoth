@@ -56,11 +56,10 @@ def _render(
     *,
     footer: str | None = None,
 ) -> str:
-    """Assemble the title line, sections, and an optional footer into the body.
+    """Assembles the title line, sections and an optional footer into the body.
 
-    The ``footer`` (the liveness heartbeat) is appended whether or not the digest is
-    empty, so the "still alive -- last ... at T" line is present even on a quiet day
-    (issue #15).
+    The footer is the liveness heartbeat, appended whether or not the digest is empty,
+    so the "still alive" line is present even on a quiet day (issue #15).
     """
     if is_empty:
         parts = [f"{title}\n\nNothing to report today."]

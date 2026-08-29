@@ -1,9 +1,9 @@
 """The :class:`LintEngine`: the vault walk plus thin ``check_*`` delegations.
 
-The engine owns the only disk surface of the scan -- parsing pages out of the
-vault folders and reading spine files -- and hands the parsed pages to the pure
-check functions in the ``checks_*`` modules. Check 13 (:meth:`LintEngine.record`)
-appends the single ``log.md`` entry.
+The engine owns the only disk surface of the scan, parsing pages out of the vault
+folders and reading spine files, then hands them to the pure check functions in the
+``checks_*`` modules. Check 13, :meth:`LintEngine.record`, appends the single ``log.md``
+entry.
 """
 
 from __future__ import annotations
@@ -57,30 +57,29 @@ SPINE_FILES: frozenset[str] = frozenset({"index.md", "SCHEMA.md", "log.md"})
 EXCLUDED_DIRS: frozenset[str] = frozenset({"_bases", "_meta", "_archive", ".obsidian"})
 """Structural directories excluded from the orphan / index / size scans (SPEC 5)."""
 
-# Immutable raw source subdirs whose sha256 frontmatter is drift-checked (check 7).
+# Immutable raw source subdirs whose sha256 frontmatter is drift-checked (check 7)
 _RAW_DIRS: tuple[str, ...] = ("articles", "papers", "transcripts")
 
 
 class LintEngine:
-    """Pure, deterministic vault linter built from a frozen Config + Vault.
+    """Pure, deterministic vault linter built from a frozen config and vault.
 
-    All retrieval is a pure read over the vault folders; no LLM and no network are used.
-    The single non-deterministic input -- the current calendar date -- is injected as
-    ``today`` so the stale / overdue / media-cold windows are reproducible under a
-    frozen clock in tests.
+    All retrieval is a pure read over the vault folders, with no LLM and no network. The
+    one non-deterministic input, the current calendar date, is injected as ``today``, so
+    the stale, overdue and media-cold windows are reproducible under a frozen clock.
     """
 
     def __init__(
         self, config: Config, vault: Vault, *, today: date | None = None
     ) -> None:
-        """Store collaborators and resolve the injected clock to a London date.
+        """Stores collaborators and resolves the injected clock to a London date.
 
         Args:
-            config: The frozen runtime config (carried for symmetry with
-                :class:`~thoth.summary.SummaryEngine`; lint reads no new field).
-            vault: The path-confined vault facade (the only disk surface used).
-            today: The calendar date used for every stale / overdue window; when
-                ``None``, the current Europe/London date is used.
+            config: Frozen runtime config, carried for symmetry with the summary
+                engine. Lint reads no new field from it.
+            vault: The path-confined vault facade, the only disk surface used.
+            today: Date used for every stale and overdue window. None uses the
+                current Europe/London date.
         """
         self._config = config
         self._vault = vault
@@ -88,25 +87,24 @@ class LintEngine:
 
     @property
     def today(self) -> date:
-        """The calendar date used for the stale / overdue / media-cold windows."""
+        """The calendar date used for the stale, overdue and media-cold windows."""
         return self._today
 
     # ---- aggregate -------------------------------------------------------------------
 
     def run(self) -> LintReport:
-        """Run checks 1-12 + 14 and aggregate into a sorted
-        :class:`~thoth.lint.LintReport`.
+        """Runs every check and aggregates them into a sorted report.
 
-        Findings are concatenated across the checks and sorted by
-        ``(severity, check, path)`` so the report is deterministic. Check 13
-        (:meth:`record`) is *not* run here -- the caller decides whether to log.
+        Findings are concatenated and sorted by severity, check and path, so the report
+        is deterministic. Check 13 is not run here, because the caller decides whether
+        to log.
 
         Returns:
-            The aggregated :class:`~thoth.lint.LintReport`.
+            The aggregated report.
 
         Raises:
-            thoth.lint.LintError: if a check cannot run (for example a missing vault
-                root or a missing ``SCHEMA.md`` for the tag audit).
+            thoth.lint.LintError: if a check cannot run, such as a missing vault root
+                or a missing ``SCHEMA.md`` for the tag audit.
         """
         checks = (
             self.check_orphans,
@@ -130,15 +128,14 @@ class LintEngine:
         return LintReport(findings=tuple(findings))
 
     def record(self, report: LintReport) -> None:
-        """Append exactly one ``log.md`` entry for ``report`` (SPEC check 13).
+        """Appends exactly one ``log.md`` entry for a report (SPEC check 13).
 
-        Delegates to :meth:`thoth.vault.Vault.append_log` with the ``lint`` action and a
-        ``"<N> issues found"`` subject, so a single ``## [YYYY-MM-DD] lint | N issues
-        found`` block is appended (``files`` is empty -- the grouped findings are in the
-        rendered report, not the log). A clean report still logs ``0 issues found``.
+        One dated ``lint`` block is appended carrying the issue count. The file list is
+        empty, because the grouped findings live in the rendered report rather than the
+        log. A clean report still logs zero issues.
 
         Args:
-            report: The report whose ``total`` is logged.
+            report: The report whose total is logged.
 
         Raises:
             thoth.vault.VaultError: if ``log.md`` is missing.
@@ -148,43 +145,37 @@ class LintEngine:
     # ---- checks 1-12 (thin delegations to the pure check functions) ------------------
 
     def check_orphans(self) -> list[Finding]:
-        """Flag curated reference pages with zero inbound wikilinks (check 1).
+        """Flags curated reference pages with zero inbound links (check 1).
 
-        Actionable (``actions/``) pages are exempt (Bases dashboards surface them). A
-        page is reachable if any *other* page links to its slug or to one of its
-        ``aliases``; a page linking only to itself does not count as inbound.
+        Actionable pages are exempt, because the Bases dashboards surface them. A page
+        is reachable when some other page links to its slug or an alias, so a page
+        linking only to itself does not count.
 
         Returns:
-            One :class:`~thoth.lint.Finding` (``Severity.ORPHAN``) per orphaned
-            reference page.
+            One finding per orphaned reference page.
         """
         return _check_orphans(self._curated_pages())
 
     def check_broken_links(self) -> list[Finding]:
-        """Flag ``[text](path.md)`` links resolving to no page, honouring aliases (2).
+        """Flags links resolving to no page, honouring aliases (check 2).
 
-        Recognises the OKF standard markdown link form and any residual wikilink. A
-        target resolves if its bare stem matches any page's slug, its full
-        vault-relative path (with or without the ``.md`` suffix), or one of its
-        ``aliases``. The alias / anchor portions of a link are stripped before
-        resolution. Highest severity (``Severity.BROKEN``).
+        Recognises the OKF standard markdown form and any residual wikilink. A target
+        resolves when its bare stem matches a page's slug, its full vault path with or
+        without the suffix, or an alias. Alias and anchor portions are stripped first.
 
         Returns:
-            One :class:`~thoth.lint.Finding` per unresolved link occurrence.
+            One finding per unresolved link occurrence.
         """
         return _check_broken_links(self._all_scanned_pages())
 
     def check_summaries(self) -> list[Finding]:
-        """Flag content pages missing a one-line ``summary:`` gloss (check 3).
+        """Flags content pages missing a one-line ``summary:`` gloss (check 3).
 
-        Every content page (:data:`~thoth.vault.SUMMARY_TYPES`: all four content
-        types, including ``action`` since ADR 0013) must carry a non-empty one-line
-        ``summary:`` frontmatter field -- the canonical, rebuildable per-page gloss
-        that replaced the old agent-maintained ``index.md`` catalog (issue #72 /
-        ADR 0008) and feeds the Summary column on the Bases dashboards. A page whose
-        ``summary`` is absent or blank is flagged ``Severity.STYLE`` (the tier the old
-        catalog-completeness check used). ``index.md`` is now a static set of Bases
-        dashboards and is not scanned.
+        Every content type must carry a non-empty summary, including ``action`` since
+        ADR 0013. It is the canonical, rebuildable gloss that replaced the old
+        agent-maintained ``index.md`` catalog (issue #72, ADR 0008) and feeds the
+        Summary column on the dashboards. ``index.md`` is now a static set of dashboards
+        and is not scanned.
 
         Returns:
             The summary-gloss findings.
@@ -192,15 +183,12 @@ class LintEngine:
         return _check_summaries([*self._curated_pages(), *self._actionable_pages()])
 
     def check_frontmatter(self) -> list[Finding]:
-        """Validate frontmatter on every curated and life-admin page (check 4).
+        """Validates frontmatter on every scanned page (check 4).
 
-        Checks the required fields (content pages against
-        :data:`~thoth.vault.CONTENT_COMMON_FIELDS`, inbox holds against
-        :data:`~thoth.vault.INBOX_REQUIRED_FIELDS`), that ``type`` and ``source`` are
-        in the vault vocabularies, that type-specific required fields
-        (:data:`~thoth.lint.TYPE_REQUIRED_FIELDS`) are present, that ``personal`` is a
-        real boolean, and that ``status`` / ``kind`` / ``priority`` / ``media_type``
-        values are in the vault vocabularies. All findings are ``Severity.STYLE``.
+        Checks the required fields, which differ between content pages and inbox holds,
+        that ``type`` and ``source`` are in the vault vocabularies, that the
+        type-specific required fields are present, that ``personal`` is a real boolean,
+        and that the remaining enumerated values are in vocabulary.
 
         Returns:
             The frontmatter findings.
@@ -208,14 +196,11 @@ class LintEngine:
         return _check_frontmatter(self._all_scanned_pages())
 
     def check_stale(self) -> list[Finding]:
-        """Flag stale reference pages and overdue / cold actionable pages (check 5).
+        """Flags stale reference pages and overdue or cold actionable pages (5).
 
-        A curated reference page whose ``updated`` is more than
-        :data:`~thoth.lint.STALE_DAYS` before :attr:`today` is flagged; an open
-        ``action`` past its ``due_date`` is flagged (done/cancelled exempt); an
-        ``action`` with ``kind: media`` still in the ``todo`` backlog whose
-        ``created`` is more than :data:`~thoth.lint.MEDIA_STALE_DAYS` ago is flagged.
-        All findings are ``Severity.STALE``.
+        A reference page not updated within the stale window is flagged. So is an open
+        action past its due date, where done and cancelled are exempt, and a media
+        action still in the backlog past the media window.
 
         Returns:
             The stale-content findings.
@@ -225,10 +210,7 @@ class LintEngine:
         )
 
     def check_contradictions(self) -> list[Finding]:
-        """Flag pages marked ``contested`` or carrying ``contradictions`` (check 6).
-
-        A page whose frontmatter has a truthy ``contested`` value, or a non-empty
-        ``contradictions:`` list, is surfaced (``Severity.CONTESTED``).
+        """Flags pages marked ``contested`` or carrying ``contradictions`` (6).
 
         Returns:
             The contradiction findings.
@@ -236,13 +218,11 @@ class LintEngine:
         return _check_contradictions(self._all_scanned_pages())
 
     def check_source_drift(self) -> list[Finding]:
-        """Flag ``raw/`` pages whose body sha256 differs from frontmatter (check 7).
+        """Flags ``raw/`` pages whose body digest differs from frontmatter (7).
 
-        For each ``raw/{articles,papers,transcripts}/*.md`` page with a ``sha256:``
-        frontmatter field, the body sha256 is recomputed (over the same body
-        ``python-frontmatter`` splits, matching :meth:`thoth.vault.Vault.write_raw`); a
-        mismatch is flagged ``Severity.DRIFT``. A raw page with no ``sha256`` is skipped
-        (not an error).
+        The digest is recomputed over the same body ``python-frontmatter`` splits, which
+        matches what :meth:`thoth.vault.Vault.write_raw` stamped. A raw page carrying no
+        digest is skipped rather than treated as an error.
 
         Returns:
             The source-drift findings.
@@ -250,11 +230,10 @@ class LintEngine:
         return _check_source_drift(self._raw_pages())
 
     def check_quality_signals(self) -> list[Finding]:
-        """Flag low-confidence and uncorroborated single-source pages (check 8).
+        """Flags low-confidence and uncorroborated single-source pages (8).
 
-        Every curated page with ``confidence: low`` is listed; so is every page with a
-        single-entry ``sources:`` list and no ``confidence`` field (corroborate or
-        demote). All findings are ``Severity.STYLE``.
+        Every page with low confidence is listed, as is every page with a single-entry
+        sources list and no confidence field, which should be corroborated or demoted.
 
         Returns:
             The quality-signal findings.
@@ -262,12 +241,10 @@ class LintEngine:
         return _check_quality_signals(self._curated_pages())
 
     def check_page_size(self) -> list[Finding]:
-        """Flag curated pages over :data:`~thoth.lint.PAGE_SIZE_LIMIT` body lines
-        (check 9).
+        """Flags curated pages over the body-line limit (check 9).
 
-        Only curated knowledge pages are sized (life-admin pages are exempt). A body of
-        exactly :data:`~thoth.lint.PAGE_SIZE_LIMIT` lines passes; one line more is
-        flagged ``Severity.STYLE``.
+        Only curated knowledge pages are sized, so actionable pages are exempt. A body
+        of exactly the limit passes and one line more is flagged.
 
         Returns:
             The page-size findings.
@@ -275,18 +252,17 @@ class LintEngine:
         return _check_page_size(self._curated_pages())
 
     def check_tag_audit(self) -> list[Finding]:
-        """Flag pages using a tag absent from ``SCHEMA.md``'s taxonomy (check 10).
+        """Flags pages using a tag absent from the ``SCHEMA.md`` taxonomy (10).
 
-        The taxonomy is parsed from ``SCHEMA.md``'s ``## Tag Taxonomy`` section
-        (:func:`~thoth.lint.parse_taxonomy_tags`); any ``tags:`` entry not in that set
-        is flagged ``Severity.STYLE``.
+        The taxonomy is parsed from the ``## Tag Taxonomy`` section, and any tag outside
+        that set is flagged.
 
         Returns:
             The tag-audit findings.
 
         Raises:
-            thoth.lint.LintError: if ``SCHEMA.md`` is missing (the audit has no source
-                of truth).
+            thoth.lint.LintError: if ``SCHEMA.md`` is missing, leaving the audit with
+                no source of truth.
         """
         try:
             schema_text = self._read_text("SCHEMA.md")
@@ -297,12 +273,11 @@ class LintEngine:
         return _check_tag_audit(schema_text, self._all_scanned_pages())
 
     def check_image_hygiene(self) -> list[Finding]:
-        """Flag orphan assets, broken embeds and surviving sidecars (check 11).
+        """Flags orphan assets, broken embeds and surviving sidecars (check 11).
 
-        Three sub-checks (all ``Severity.BROKEN``): a binary in ``raw/assets/`` embedded
-        by no page is an orphan binary; a page embedding an asset that does not exist is
-        a broken embed; any ``raw/assets/*.md`` (a legacy per-image sidecar) is flagged
-        for merge into its owning page.
+        Three sub-checks. A binary embedded by no page is an orphan, a page embedding a
+        missing asset is a broken embed, and a legacy per-image sidecar is flagged for
+        merge into its owning page.
 
         Returns:
             The image-hygiene findings.
@@ -316,12 +291,11 @@ class LintEngine:
         )
 
     def check_log_rotation(self) -> list[Finding]:
-        """Flag a ``log.md`` with more than :data:`~thoth.lint.LOG_ROTATE_LIMIT`
-        entries (check 12).
+        """Flags a ``log.md`` carrying more than the rotation limit (check 12).
 
-        Entries are counted by the ``## [`` block markers. At or below the limit
-        passes; above it suggests rotating to ``log-YYYY.md`` (``Severity.STYLE``). A
-        missing ``log.md`` yields no finding (nothing to rotate).
+        Entries are counted by their block markers. At or below the limit passes, and
+        above it suggests rotating to ``log-YYYY.md``. A missing log yields no finding,
+        since there is nothing to rotate.
 
         Returns:
             The log-rotation findings.
@@ -333,45 +307,43 @@ class LintEngine:
         return _check_log_rotation(log_text)
 
     def check_link_style(self) -> list[Finding]:
-        """Flag legacy Obsidian wiki links/embeds; OKF wants markdown links (check 14).
+        """Flags legacy wiki links and embeds, since OKF wants markdown (14).
 
-        Every ``[[wikilink]]`` and every wiki *image* embed (``![[photo.png]]``) in a
-        scanned content page is flagged ``Severity.STYLE`` -- the vault adopts OKF
-        standard markdown links ``[text](path.md)`` / ``![alt](path)`` (issue #189).
-        Bases (``.base``) and Excalidraw (``.excalidraw``) embeds are exempt: they have
-        no markdown equivalent and stay in Obsidian ``![[...]]`` form. Spine files,
-        ``raw/`` and ``_bases/`` are out of scan scope so the dashboards are never
-        flagged.
+        Every wikilink and wiki image embed in a scanned page is flagged, because the
+        vault adopts OKF standard markdown links (issue #189). Bases and Excalidraw
+        embeds are exempt, because they have no markdown equivalent and must stay in
+        Obsidian form. Spine files, ``raw/`` and ``_bases/`` are out of scan scope, so
+        the dashboards are never flagged.
 
         Returns:
-            One :class:`~thoth.lint.Finding` per legacy wiki link / non-exempt embed.
+            One finding per legacy wiki link or non-exempt embed.
         """
         return _check_link_style(self._all_scanned_pages())
 
     # ---- internal page walks ---------------------------------------------------------
 
     def _curated_pages(self) -> list[_Page]:
-        """Return parsed pages in :data:`CURATED_DIRS` (spine files skipped).
+        """Returns parsed pages in the curated folders, skipping spine files.
 
-        The lifecycle-free reference folders (entities/notes/memories): the orphan,
-        index-completeness and stale checks scope to these.
+        These are the lifecycle-free reference folders, and the orphan, completeness and
+        stale checks scope to them.
         """
         return self._pages_in(CURATED_DIRS)
 
     def _actionable_pages(self) -> list[_Page]:
-        """Return parsed pages in :data:`ACTIONABLE_DIRS` (spine files skipped).
+        """Returns parsed pages in the actionable folders, skipping spine files.
 
-        The lifecycle-bearing folder(s) (actions/, which also holds the media queue as
-        actions with kind: media): the overdue / cold-media checks scope to these.
+        These are the lifecycle-bearing folders, which also hold the media queue, and
+        the overdue and cold-media checks scope to them.
         """
         return self._pages_in(ACTIONABLE_DIRS)
 
     def _all_scanned_pages(self) -> list[_Page]:
-        """Return reference + actionable + inbox pages (the set most checks scan).
+        """Returns reference, actionable and inbox pages, the set most checks scan.
 
-        ``inbox/`` holding pages are machinery (exempt from the orphan / index checks,
-        which scope to :data:`CURATED_DIRS`) but still carry the common frontmatter
-        contract, so they are scanned here for the frontmatter / broken-link checks.
+        Inbox holds are machinery and are exempt from the orphan and completeness
+        checks, but they still carry the common frontmatter contract, so they are
+        scanned here for the frontmatter and broken-link checks.
         """
         return [
             *self._curated_pages(),
@@ -380,22 +352,21 @@ class LintEngine:
         ]
 
     def _raw_pages(self) -> list[_Page]:
-        """Return parsed pages in ``raw/{articles,papers,transcripts}``."""
+        """Returns parsed pages in the immutable raw source subdirs."""
         return self._pages_in(tuple(f"raw/{sub}" for sub in _RAW_DIRS))
 
     def _pages_in(self, folders: Iterable[str]) -> list[_Page]:
-        """Parse every ``*.md`` in each folder, skipping spine + malformed pages.
+        """Parses every ``*.md`` in each folder, skipping spine and malformed pages.
 
-        Each folder is confined through the vault, then walked recursively. Spine files
-        (:data:`SPINE_FILES`) and anything under an :data:`EXCLUDED_DIRS` directory are
-        skipped. A page whose frontmatter cannot be parsed is skipped (mirrors
-        ``summary._iter_pages``) so a malformed page never wedges the whole run.
+        Each folder is walked recursively. Spine files and anything under an excluded
+        directory are skipped, and a page whose frontmatter will not parse is skipped
+        too, so one malformed page never wedges the whole run.
 
         Args:
             folders: Vault-relative folder names to walk.
 
         Returns:
-            The parsed :class:`_Page` list, sorted by path.
+            The parsed pages, sorted by path.
         """
         root = self._vault.root
         pages: list[_Page] = []
@@ -427,24 +398,24 @@ class LintEngine:
         return pages
 
     def _asset_names(self, keep: Callable[[Path], bool]) -> set[str]:
-        """Return the ``raw/assets/`` filenames whose path satisfies ``keep``."""
+        """Returns the ``raw/assets/`` filenames whose path satisfies a predicate."""
         base = self._vault.root / _ASSETS_DIR
         if not base.is_dir():
             return set()
         return {path.name for path in base.iterdir() if path.is_file() and keep(path)}
 
     def _read_text(self, vault_relative_path: str) -> str:
-        """Confine and read a spine file's full text, or raise :class:`LintError`.
+        """Confines and reads a spine file's full text.
 
         Args:
-            vault_relative_path: A vault-relative path (for example ``index.md``).
+            vault_relative_path: A vault-relative path such as ``index.md``.
 
         Returns:
             The file's UTF-8 text.
 
         Raises:
-            LintError: if the path escapes the vault, the file is missing, or it cannot
-                be read/decoded.
+            LintError: if the path escapes the vault, the file is missing, or it
+                cannot be read or decoded.
         """
         try:
             absolute = self._vault.resolve(vault_relative_path)
@@ -459,5 +430,5 @@ class LintEngine:
 
 
 def _under_excluded_dir(rel: str) -> bool:
-    """Return ``True`` if any path segment of ``rel`` is an excluded directory."""
+    """Reports whether any path segment names an excluded directory."""
     return any(segment in EXCLUDED_DIRS for segment in PurePosixPath(rel).parts)

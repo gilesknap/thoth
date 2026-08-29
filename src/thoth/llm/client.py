@@ -19,21 +19,21 @@ class LLMError(Exception):
 class SchemaValidationError(LLMError):
     """Raised when model JSON output fails schema validation.
 
-    The message lists every violation found so a caller (or a retry prompt) can see
-    all problems at once rather than one at a time.
+    The message lists every violation found, so a caller or a retry prompt sees all the
+    problems at once rather than one at a time.
     """
 
 
 class AnthropicLike(Protocol):
-    """Structural type for the slice of the Anthropic SDK this module uses.
+    """Structural type for the slice of the SDK this module uses.
 
-    Anything exposing a ``messages`` attribute whose ``.create(**kwargs)`` returns a
-    response satisfies it, so tests can inject a tiny fake without the real SDK.
+    Anything exposing a messages attribute whose create returns a response satisfies it,
+    so tests inject a small fake and need no real SDK.
     """
 
     @property
     def messages(self) -> Any:
-        """The messages namespace exposing ``create(**kwargs)``."""
+        """The messages namespace exposing ``create``."""
         ...
 
 
@@ -41,14 +41,12 @@ class AnthropicLike(Protocol):
 class Message:
     """One chat turn handed to the model.
 
-    ``content`` is either a plain string (an ordinary text turn) or a list of native
-    Anthropic content blocks (a ``text`` / ``tool_use`` / ``tool_result`` block list,
-    the last keyed by ``tool_use_id``). The structured form is what
-    a multi-turn tool-use conversation requires: the assistant turn after a
-    ``stop_reason='tool_use'`` response must echo the model's ``tool_use`` block(s) and
-    the following user turn must carry a ``tool_result`` block per ``tool_use_id`` (the
-    real Messages API rejects a tool-use exchange flattened to text). The block list is
-    passed through to ``messages.create`` verbatim by :func:`build_create_kwargs`.
+    The content is either a plain string for an ordinary turn, or a list of native
+    content blocks. The structured form is what a multi-turn tool-use conversation
+    requires: the assistant turn after a tool-use response must echo the model's blocks
+    and the following user turn must carry a result per id, because the API rejects a
+    tool-use exchange flattened to text. A block list passes through to the create call
+    verbatim.
     """
 
     role: str
@@ -58,18 +56,16 @@ class Message:
 
 
 def build_system_blocks(extra: str | None = None) -> list[dict[str, Any]]:
-    """Return the Anthropic ``system`` parameter with a prompt-cache breakpoint.
+    """Returns the system parameter with a prompt-cache breakpoint.
 
-    The first block is :data:`PERSONA` as a text block carrying
-    ``cache_control={'type': 'ephemeral'}`` so the stable prefix is cached across
-    calls. When ``extra`` is given (for example the SCHEMA.md text), it is appended as
-    a second, uncached text block.
+    The first block is the persona, marked ephemeral so the stable prefix is cached
+    across calls. Any extra text is appended as a second, uncached block.
 
     Args:
-        extra: Optional extra system text to append uncached after the persona.
+        extra: Optional system text appended uncached after the persona.
 
     Returns:
-        A list of Anthropic system content blocks.
+        The system content blocks.
     """
     blocks: list[dict[str, Any]] = [
         {
@@ -93,26 +89,22 @@ def build_create_kwargs(
     tool_choice: dict[str, Any] | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
-    """Assemble the keyword arguments for ``messages.create``.
+    """Assembles the keyword arguments for the create call.
 
-    Pure and side-effect-free: no network and no SDK import. The model defaults to
-    ``config.anthropic_model`` unless ``model`` overrides it; the system parameter is
-    :func:`build_system_blocks` (persona + optional ``system_extra``); the messages are
-    rendered to ``[{'role': ..., 'content': ...}, ...]``; ``tools`` is included only
-    when provided.
+    Pure and side-effect-free, with no network and no SDK import.
 
     Args:
-        config: The frozen runtime config supplying the default model id.
+        config: Frozen runtime config supplying the default model id.
         messages: The conversation turns to send.
         system_extra: Optional uncached extra system text.
         max_tokens: Maximum tokens to generate.
-        tools: Optional tool definitions to pass through.
-        tool_choice: Optional ``tool_choice`` directive (e.g. forcing a specific tool
-            via ``{"type": "tool", "name": ...}``); included only when provided.
-        model: Optional model id overriding ``config.anthropic_model``.
+        tools: Optional tool definitions, included only when provided.
+        tool_choice: Optional directive forcing a specific tool, included only when
+            provided.
+        model: Model id overriding the configured default.
 
     Returns:
-        A kwargs dict suitable for ``client.messages.create(**kwargs)``.
+        The kwargs for the create call.
     """
     kwargs: dict[str, Any] = {
         "model": model if model is not None else config.anthropic_model,
@@ -128,19 +120,17 @@ def build_create_kwargs(
 
 
 def make_client(config: Config) -> AnthropicLike:
-    """Lazily import ``anthropic`` and build an authenticated client.
+    """Lazily imports the SDK and builds an authenticated client.
 
-    The ``anthropic`` import happens **only** inside this function, so merely importing
-    :mod:`thoth.llm` (or constructing an :class:`LLM`) never needs the package. The API
-    key is read via ``config.require_anthropic()``, which raises
-    :class:`thoth.config.ConfigError` *before* the import is attempted when no key is
-    set.
+    The import happens only inside this function, so importing :mod:`thoth.llm` or
+    constructing an :class:`LLM` never needs the package. The key is read first, so a
+    missing key raises before the import is attempted.
 
     Args:
-        config: The frozen runtime config carrying the Anthropic API key.
+        config: Frozen runtime config carrying the API key.
 
     Returns:
-        An :class:`AnthropicLike` client (a real ``anthropic.Anthropic`` instance).
+        The authenticated client.
     """
     api_key = config.require_anthropic()
     from anthropic import Anthropic
@@ -149,11 +139,10 @@ def make_client(config: Config) -> AnthropicLike:
 
 
 class LLM:
-    """Thin wrapper holding a :class:`~thoth.config.Config` plus an Anthropic client.
+    """Thin wrapper holding a config plus an Anthropic client.
 
-    The client is injectable for tests; when omitted it is created lazily via
-    :func:`make_client` on first use, so constructing an :class:`LLM` never imports the
-    ``anthropic`` package.
+    The client is injectable for tests, and when omitted it is created lazily on first
+    use, so constructing this never imports the SDK.
     """
 
     def __init__(
@@ -163,18 +152,14 @@ class LLM:
         *,
         guard: BudgetGuardLike | None = None,
     ) -> None:
-        """Store the config, an optional pre-built client, and an optional budget guard.
+        """Stores the config, an optional client, and an optional budget guard.
 
         Args:
             config: The frozen runtime config.
-            client: An optional injected client; created lazily on first
-                :meth:`complete` when ``None``.
-            guard: An optional daily-spend guard (:class:`thoth.budget.BudgetGuard`);
-                when wired, :meth:`complete` charges one Anthropic call against the
-                daily budget *before* the request and raises
-                :class:`thoth.budget.BudgetExceededError` once the cap is reached.
-                ``None`` (the default) disables the cap, so existing callers are
-                unaffected.
+            client: Injected client, or None to create one lazily on first use.
+            guard: Optional daily-spend guard. When wired, each completion charges one
+                call before the request and raises once the cap is reached. None
+                disables the cap.
         """
         self._config = config
         self._client = client
@@ -187,7 +172,7 @@ class LLM:
 
     @property
     def client(self) -> AnthropicLike:
-        """The Anthropic client, created lazily via :func:`make_client` on first use."""
+        """The Anthropic client, created lazily on first use."""
         if self._client is None:
             self._client = make_client(self._config)
         return self._client
@@ -202,28 +187,28 @@ class LLM:
         tool_choice: dict[str, Any] | None = None,
         model: str | None = None,
     ) -> Any:
-        """Call ``client.messages.create`` with assembled kwargs; return the response.
+        """Calls the create endpoint with assembled kwargs and returns the response.
 
         Args:
             messages: The conversation turns to send.
             system_extra: Optional uncached extra system text.
             max_tokens: Maximum tokens to generate.
             tools: Optional tool definitions to pass through.
-            tool_choice: Optional ``tool_choice`` directive forcing/steering tool use.
-            model: Optional model id overriding ``config.anthropic_model`` (e.g. a
-                cheaper Haiku for the Slack intent gate).
+            tool_choice: Optional directive forcing or steering tool use.
+            model: Model id overriding the configured default, such as a cheaper one
+                for the intent gate.
 
         Returns:
-            The raw response object returned by the client.
+            The raw response object.
 
         Raises:
-            thoth.budget.BudgetExceededError: when a budget guard is wired and the daily
-                call cap has been reached (raised before the request, so nothing is
-                spent; the ingest passes treat it as a deferral).
+            thoth.budget.BudgetExceededError: when a guard is wired and the daily cap
+                is reached. It raises before the request, so nothing is spent and the
+                ingest passes treat it as a deferral.
         """
         if self._guard is not None:
-            # Charge before the request so a cap-reached day defers rather than spends;
-            # every attempt (including retries) counts against the cap (issue #16).
+            # Charge before the request so a capped day defers rather than spends.
+            # Every attempt, retries included, counts against the cap (issue #16)
             self._guard.charge(KIND_ANTHROPIC)
         kwargs = build_create_kwargs(
             self._config,

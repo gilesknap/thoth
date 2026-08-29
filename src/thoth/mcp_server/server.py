@@ -20,21 +20,19 @@ from .tools_query import pkm_recent, pkm_search, pkm_todos
 
 
 def build_server(ctx: ToolContext) -> Any:
-    """Lazily import ``FastMCP``, build the server, and register the ``pkm_*`` tools.
+    """Lazily imports FastMCP, builds the server, and registers the tools.
 
-    ``mcp`` is imported **inside** this function so module import stays CI-safe. A
-    :class:`FastMCP` named :data:`SERVER_NAME` is created and one tool per
-    :data:`TOOL_NAMES` is registered, each forwarding to the matching ``pkm_*`` function
-    bound to ``ctx`` (so the registered callables carry the same keyword arguments the
-    pure functions do). The server is returned but **not** started -- :func:`run` does
-    that.
+    The ``mcp`` package is imported inside this function so module import stays CI-safe.
+    One tool is registered per name, each forwarding to the matching pure function bound
+    to the context, so the registered callables carry the same keyword arguments. The
+    server is returned but not started, which :func:`run` does.
 
     Args:
-        ctx: The injected collaborator bundle every registered tool delegates through.
+        ctx: The injected collaborator bundle every tool delegates through.
 
     Returns:
-        The configured ``FastMCP`` instance (typed ``Any`` to avoid a top-level import
-        of the optional ``mcp`` dependency).
+        The configured server, typed loosely to avoid a top-level import of the
+        optional dependency.
     """
     from mcp.server.fastmcp import FastMCP
 
@@ -128,47 +126,43 @@ def run(
     host: str = DEFAULT_MCP_HOST,
     port: int = DEFAULT_MCP_PORT,
 ) -> None:
-    """Wire a real :class:`ToolContext` (if needed) and serve over the chosen transport.
+    """Wires a context when needed and serves over the chosen transport.
 
-    This is the production entry point (``thoth mcp``). When ``ctx`` is ``None`` it
-    wires the full collaborator graph via :func:`thoth.wiring.build_collaborators`
-    (the same construction shape ``slack_app.run`` uses) -- then builds the server via
-    :func:`build_server` and runs it.
+    The production entry point for ``thoth mcp``. With no context it wires the full
+    collaborator graph, the same shape the Slack daemon uses, then builds and runs the
+    server. The transport selects how the server is exposed (issue #103):
 
-    The ``transport`` selects how the server is exposed (issue #103):
-
-    * ``"stdio"`` (the default) -- the byte-for-byte-unchanged spawn-as-a-child model
-      Claude Code uses locally: ``host``/``port`` are ignored and no socket is bound.
-    * ``"http"`` -- the streamable-HTTP transport bound to ``host``:``port``
-      (loopback by default; network exposure is delegated to cloudflared + Cloudflare
-      Access, ADR 0011). Tier-1 bearer auth is mandatory: the server **fails fast** at
-      startup if ``THOTH_MCP_API_KEYS`` is unset (never binding an unauthenticated
-      socket), and -- when ``THOTH_MCP_CF_ACCESS_*`` are set -- also enforces the
-      Cf-Access JWT. See :func:`_run_http`.
+    * ``stdio``, the default, is the spawn-as-a-child model Claude Code uses locally.
+      The host and port are ignored and no socket is bound.
+    * ``http`` binds the streamable-HTTP transport, on loopback by default, with network
+      exposure delegated to cloudflared and Cloudflare Access (ADR 0011). Bearer auth is
+      mandatory: the server fails fast at startup when no keys are set, never binding an
+      unauthenticated socket, and also enforces the Cf-Access JWT when those settings
+      are present.
 
     The collaborator construction and the lazy ``mcp`` import happen only here, so
-    importing this module stays light. This is never unit-tested live (CI has no stdio
-    and no ``mcp`` package).
+    importing this module stays light. This is never unit-tested live, because CI has no
+    stdio and no ``mcp`` package.
 
     Args:
         config: The frozen runtime config.
-        ctx: An already-wired context (for tests/embedding); built from ``config`` when
-            ``None``.
-        transport: ``"stdio"`` (default) or ``"http"``.
-        host: HTTP bind address (ignored for stdio).
-        port: HTTP listen port (ignored for stdio).
+        ctx: An already-wired context for tests or embedding, built from config when
+            None.
+        transport: Either stdio or http.
+        host: HTTP bind address, ignored for stdio.
+        port: HTTP listen port, ignored for stdio.
 
     Raises:
-        ValueError: if ``transport`` is not ``"stdio"`` or ``"http"``.
-        ConfigError: (HTTP only) if ``THOTH_MCP_API_KEYS`` is unset/empty -- refusing to
-            bind an unauthenticated socket.
+        ValueError: if the transport is neither stdio nor http.
+        ConfigError: over HTTP, when no bearer keys are set, refusing to bind an
+            unauthenticated socket.
     """
     if transport not in ("stdio", "http"):
         raise ValueError(
             f"unknown MCP transport {transport!r}; expected 'stdio' or 'http'"
         )
-    # Fail fast BEFORE wiring the graph or binding a socket: an HTTP transport with no
-    # bearer keys must never start (#103). require_mcp_api_keys raises ConfigError.
+    # Fail fast before wiring the graph or binding a socket, because an HTTP transport
+    # with no bearer keys must never start (#103)
     if transport == "http":
         config.require_mcp_api_keys()
 
@@ -176,10 +170,9 @@ def run(
         from thoth.budget import make_budget_guard
         from thoth.wiring import build_collaborators
 
-        # The daily cost guard (issue #16): one shared cap over the Anthropic +
-        # Hindsight calls, persisted in state.db. MCP has no Slack target, so it blocks
-        # silently (no alerter); the cap still defers spend once reached. No markers:
-        # the daily heartbeat watches the Slack/CLI capture path, not MCP.
+        # The daily cost guard (issue #16), one shared cap persisted in state.db. MCP
+        # has no Slack target, so it blocks silently while the cap still defers spend.
+        # No markers either, since the heartbeat watches the capture path, not MCP
         built = build_collaborators(config, guard=make_budget_guard(config))
         ctx = ToolContext(
             config=config,

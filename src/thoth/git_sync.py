@@ -1,30 +1,16 @@
-"""Deterministic git sync wrapper for the canonical vault.
+"""Git sync for the vault, and the appliance's only path to git.
 
-This module is the appliance's *only* path to git, and git is **never an LLM
-tool** (SPEC section 3): :class:`GitSync` shells out to two shipped bash scripts
-— ``bin/vault-pull`` (pull --rebase --autostash before any write) and
-``bin/vault-commit`` (stage explicit paths, commit, rebase, push) — and
-classifies their exit codes into typed results. It never pushes ``--force`` and
-fails loudly, surfacing the conflicting path, on a rebase conflict.
+git is never an LLM tool (SPEC section 3). :class:`GitSync` shells out to two shipped
+bash scripts, ``bin/vault-pull`` and ``bin/vault-commit``, and classifies their exit
+codes. It never pushes ``--force`` and fails loudly on a rebase conflict.
 
-Concurrent captures share one git working tree; the locking story (what is — and
-is not — serialised, and why) lives on :attr:`GitSync.capture_lock` (issue #85).
+The scripts push to the vault's own remote, ``THOTH_GIT_REMOTE`` (default ``origin``),
+the same place the rebase pulled from, so no repository owner is hardcoded. Tests
+redirect that at a local bare repo with ``THOTH_PUSH_REMOTE``, ``THOTH_GIT_REMOTE`` and
+``THOTH_GIT_BRANCH``.
 
-The two scripts carry the SPEC's git wrappers (``GIT_CONFIG_GLOBAL=/dev/null`` +
-``gh``'s credential helper, ``pull --rebase``, never ``--force``). They push back to
-the vault's **own** remote — ``THOTH_GIT_REMOTE`` (default ``origin``), the place the
-rebase pulled from — so no repository owner is hardcoded; if that remote is not
-configured and ``THOTH_PUSH_REMOTE`` is unset the commit script fails loudly rather than
-guessing. For tests and CI they honour ``THOTH_PUSH_REMOTE`` / ``THOTH_GIT_REMOTE`` /
-``THOTH_GIT_BRANCH`` overrides (defaulting to ``origin`` / ``origin`` / ``main``), so a
-test can redirect both the rebase and the push at a local bare repo.
-
-Only the standard library is imported at module top level (``subprocess``,
-``pathlib``, ``dataclasses``, ``os``); there is no network or third-party import,
-so importing this module at pytest collection is always safe. The vault root and
-child-environment ``PKM_VAULT`` are taken from the frozen :class:`thoth.config.Config`
-so the scripts and :mod:`thoth.vault` always agree on the root. This module never
-parses or writes page content (strict separation from :mod:`thoth.vault`).
+Only the standard library is imported here, so importing this at pytest collection is
+always safe. Page content belongs to :mod:`thoth.vault` and is never touched here.
 """
 
 from __future__ import annotations
@@ -51,41 +37,34 @@ VAULT_COMMIT_SCRIPT: str = "vault-commit"
 VAULT_BOOTSTRAP_SCRIPT: str = "vault-bootstrap"
 """Filename of the shipped clone-an-empty-vault bash script in :func:`bin_dir`."""
 
-# Sentinel emitted by vault-commit when the rebase hits a conflict (verbatim
-# prefix from the script). Matching is substring-based so the rest of the line
-# (the human-facing "resolve in Obsidian" guidance) can evolve without breaking
-# the classification.
+# Sentinel emitted by vault-commit on a rebase conflict. Matching is substring-based so
+# the rest of the line (the "resolve in Obsidian" guidance) can change without breaking
+# the classification
 _CONFLICT_SENTINEL: str = "VAULT CONFLICT"
 
-# Stdout marker emitted by vault-commit when `git diff --cached --quiet` finds no
-# staged changes (verbatim from the script). Used to set GitResult.committed.
+# Stdout marker from vault-commit when nothing is staged, used to set
+# GitResult.committed
 _NOTHING_TO_COMMIT: str = "nothing to commit"
 
-# Bounded retry on `.git/index.lock` contention. The Slack daemon dispatches each
-# capture on a worker thread sharing one working tree, and :attr:`GitSync.capture_lock`
-# only serialises *this* process's tree-mutating sections; a concurrent ``obsidian-git``
-# commit (or any other client) can still hold the index lock for a sub-second window.
-# git does not block on the lock, it fails immediately, so a transient collision must
-# be retried here. The signal is git's own diagnostic on stderr; matching is
-# substring-based so wording drift ("Unable to create index.lock") still classifies.
+# Bounded retry on .git/index.lock contention. capture_lock only serialises this
+# process, so a concurrent obsidian-git commit can still hold the index lock for a
+# sub-second window. git does not block on the lock, it fails immediately, so a
+# transient collision has to be retried here. Matching is substring-based so wording
+# drift still classifies
 _INDEX_LOCK_SIGNALS: tuple[str, ...] = ("unable to lock index", "index.lock")
 _LOCK_RETRY_ATTEMPTS: int = 5
 _LOCK_RETRY_BACKOFF: float = 0.1
 
 
 def _is_index_lock_failure(returncode: int, stderr: str) -> bool:
-    """Return ``True`` when a git invocation failed on ``.git/index.lock`` contention.
-
-    A non-zero exit whose ``stderr`` carries one of :data:`_INDEX_LOCK_SIGNALS`
-    (case-insensitively) is a transient lock collision worth retrying; everything else
-    (including success) is not.
+    """True when a git run failed on ``.git/index.lock`` contention, otherwise False.
 
     Args:
         returncode: The git process exit code.
         stderr: The captured standard error text.
 
     Returns:
-        ``True`` only for a non-zero exit that names the index lock.
+        True for a non-zero exit naming the index lock, otherwise False.
     """
     if returncode == 0:
         return False
@@ -96,22 +75,19 @@ def _is_index_lock_failure(returncode: int, stderr: str) -> bool:
 def _run_with_lock_retry(
     run: Callable[[], subprocess.CompletedProcess[str]],
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``run`` and re-run it on a transient ``.git/index.lock`` collision.
+    """Runs ``run``, re-running it on a transient ``.git/index.lock`` collision.
 
-    Re-invokes ``run`` up to :data:`_LOCK_RETRY_ATTEMPTS` times while the result is an
-    index-lock failure (see :func:`_is_index_lock_failure`), sleeping a short, growing
-    backoff between tries to let the competing client release the lock. ANY other
-    outcome (success, or a non-lock failure) is returned to the caller unchanged on the
-    first occurrence, so the caller's own classification is untouched. The last
-    attempt's result is returned even if it is still a lock failure, so an exhausted
-    retry surfaces git's stderr exactly as a single run would.
+    Up to :data:`_LOCK_RETRY_ATTEMPTS` tries with a growing backoff, to give the
+    competing client time to release the lock. Any other outcome is returned on the
+    first occurrence so the caller's own classification is untouched, and an exhausted
+    retry returns the last attempt so git's stderr surfaces as it would from a single
+    run.
 
     Args:
-        run: A zero-argument callable that performs one ``subprocess.run`` (already
-            configured with ``check=False`` so a failure returns rather than raises).
+        run: Callable performing one ``subprocess.run``, already ``check=False``.
 
     Returns:
-        The :class:`subprocess.CompletedProcess` of the final attempt.
+        The completed process of the final attempt.
     """
     completed = run()
     for attempt in range(1, _LOCK_RETRY_ATTEMPTS):
@@ -123,15 +99,14 @@ def _run_with_lock_retry(
 
 
 class GitSyncError(Exception):
-    """Base error for git sync failures (a script exited non-zero)."""
+    """Base error for git sync failures, meaning a script exited non-zero."""
 
 
 class VaultConflictError(GitSyncError):
-    """Raised when ``vault-commit`` hits a rebase conflict (must resolve in Obsidian).
+    """Raised when ``vault-commit`` hits a rebase conflict, to resolve in Obsidian.
 
-    The rebase has already been aborted by the script (no ``--force``, the remote
-    is untouched); the captured ``stderr`` carries the ``VAULT CONFLICT`` line that
-    the caller surfaces over Slack.
+    The script has already aborted the rebase, so the remote is untouched. ``stderr``
+    carries the ``VAULT CONFLICT`` line that the caller surfaces over Slack.
     """
 
 
@@ -141,12 +116,11 @@ class GitResult:
 
     Attributes:
         returncode: The script's process exit code.
-        stdout: Captured standard output (text).
-        stderr: Captured standard error (text).
-        committed: ``False`` when ``vault-commit`` reported "nothing to commit"
-            (no staged changes); ``True`` when a commit was made. Always ``True``
-            for a successful :meth:`GitSync.pull` (pull does not commit, but the
-            field is unused there and set ``True`` to mean "ran cleanly").
+        stdout: Captured standard output.
+        stderr: Captured standard error.
+        committed: False when ``vault-commit`` reported nothing to commit. A clean
+            :meth:`GitSync.pull` sets it True to mean "ran cleanly", since pull
+            never commits.
     """
 
     returncode: int
@@ -159,16 +133,13 @@ class GitResult:
 class Divergence:
     """How far the local vault branch is ahead of its push remote (issue #15).
 
-    Computed deterministically from git (never an LLM) so the unpushed-divergence alert
-    (:meth:`thoth.alerts.Alerter.alert_unpushed_divergence`) can report "N commits
+    Computed from git and never from an LLM, so
+    :meth:`thoth.alerts.Alerter.alert_unpushed_divergence` can report "N commits
     unpushed since T" when a rebase conflict refuses the push.
 
     Attributes:
-        commits_ahead: Number of local commits not present on the remote tracking ref
-            (``git rev-list --count <remote>/<branch>..HEAD``). ``-1`` when it could not
-            be determined (e.g. no remote tracking ref / not a git tree).
-        since: Author time of the *oldest* unpushed commit (the first that diverged from
-            the remote), or ``None`` when unknown / nothing is ahead.
+        commits_ahead: Local commits not yet on the remote, or -1 when unknown.
+        since: Author time of the oldest unpushed commit, or None.
     """
 
     commits_ahead: int
@@ -176,31 +147,25 @@ class Divergence:
 
 
 def _resolve_bin_dir(module_path: Path) -> Path:
-    """Resolve the shipped ``bin/`` directory relative to ``module_path``.
+    """Finds the shipped ``bin/`` directory by walking up from ``module_path``.
 
-    Walks up the ancestors of ``module_path`` (this module's resolved location)
-    and returns the first ``<ancestor>/bin`` that actually holds a
-    ``vault-pull`` script — the repo root in an editable/dev/CI checkout, where the
-    scripts sit beside the source tree. When NO ancestor carries them (a non-editable
-    install, e.g. the container image where the package lives under
-    ``site-packages/thoth/`` and the wrappers were copied to ``/usr/local/bin`` on
-    ``PATH``), consults ``PATH`` via :func:`shutil.which`; if ``vault-pull`` is found
-    there its directory is returned. Only when both miss does it fall back to the
-    repo-root guess (``parents[2]`` for ``src/thoth/git_sync.py``) so the path is
-    always concrete.
+    Returns the first ancestor holding a ``vault-pull`` script, which is the repo root
+    in an editable or CI checkout. A non-editable install has no such ancestor, so
+    ``PATH`` is consulted next. Falls back to a repo-root guess so the path is always
+    concrete.
 
     Args:
         module_path: The resolved path of this module file.
 
     Returns:
-        The ``bin/`` directory path (existence not guaranteed in the fallback).
+        The bin directory, whose existence is not guaranteed in the fallback.
     """
     for ancestor in module_path.parents:
         candidate = ancestor / "bin"
         if (candidate / VAULT_PULL_SCRIPT).is_file():
             return candidate
     # Non-editable install (the container): no ancestor holds the scripts, but the
-    # Dockerfile copies them onto PATH (/usr/local/bin). Honour PATH before guessing.
+    # Dockerfile copies them onto PATH at /usr/local/bin, so honour PATH before guessing
     which = shutil.which(VAULT_PULL_SCRIPT)
     if which is not None:
         return Path(which).resolve().parent
@@ -210,17 +175,10 @@ def _resolve_bin_dir(module_path: Path) -> Path:
 
 
 def bin_dir() -> Path:
-    """Return the absolute path to the shipped ``bin/`` directory.
-
-    Resolves by walking up from this module's location to the first ancestor that
-    contains a ``vault-pull`` script (the repo root in an editable install and in
-    CI). When no ancestor carries it (a non-editable install such as the container
-    image, where the wrappers are copied onto ``PATH`` at ``/usr/local/bin``),
-    consults ``PATH`` via :func:`shutil.which`. Falls back to a repo-root guess so
-    the path is always concrete even before the scripts exist on disk.
+    """Returns the path to the shipped ``bin/`` directory.
 
     Returns:
-        The absolute ``bin/`` directory path (not guaranteed to exist).
+        The absolute bin directory, which is not guaranteed to exist.
     """
     return _resolve_bin_dir(Path(__file__).resolve())
 
@@ -228,11 +186,9 @@ def bin_dir() -> Path:
 class GitSync:
     """Deterministic wrapper running the bash sync scripts for one vault.
 
-    The instance is cheap and stateless beyond its configuration; construct it
-    from the frozen :class:`~thoth.config.Config` that owns the vault root. The
-    child environment for every script run is derived once from ``env`` (defaulting
-    to :data:`os.environ`) with ``PKM_VAULT`` forced to ``str(config.vault_path)``
-    so the scripts and :mod:`thoth.vault` cannot disagree on the root.
+    Cheap and stateless beyond its configuration. ``PKM_VAULT`` is forced into the child
+    environment from ``config.vault_path``, so the scripts and :mod:`thoth.vault` cannot
+    disagree on the root.
     """
 
     def __init__(
@@ -242,15 +198,13 @@ class GitSync:
         env: Mapping[str, str] | None = None,
         bin_path: Path | None = None,
     ) -> None:
-        """Build a :class:`GitSync` for ``config``'s vault.
+        """Builds a :class:`GitSync` for ``config``'s vault.
 
         Args:
-            config: The frozen runtime configuration; ``config.vault_path`` is the
-                vault root (the scripts' working directory and ``PKM_VAULT``).
-            env: Base environment for child processes; defaults to
-                :data:`os.environ`. ``PKM_VAULT`` is always overridden to the
-                config vault path, so an ambient ``PKM_VAULT`` cannot win.
-            bin_path: Directory holding the sync scripts; defaults to
+            config: Frozen runtime config owning the vault root.
+            env: Base child environment, defaulting to :data:`os.environ`. An
+                ambient ``PKM_VAULT`` in it never wins.
+            bin_path: Directory holding the sync scripts, defaulting to
                 :func:`bin_dir`.
         """
         self._config = config
@@ -260,24 +214,22 @@ class GitSync:
         child_env["PKM_VAULT"] = str(config.vault_path)
         self._child_env = child_env
         self._bin_path = bin_dir() if bin_path is None else bin_path
-        # Per-working-tree mutex for a capture's tree-mutating critical sections; the
-        # full rationale lives on the :attr:`capture_lock` property docstring (#85).
+        # Per-tree mutex for a capture's tree-mutating sections, rationale on
+        # capture_lock
         self._capture_lock = threading.RLock()
 
     @property
     def capture_lock(self) -> AbstractContextManager[bool]:
-        """Re-entrant mutex for the tree-mutating critical sections of a capture (#85).
+        """Re-entrant mutex for the tree-mutating sections of a capture (issue #85).
 
-        :class:`thoth.ingest.Ingestor` acquires it ONLY around the orient pull and the
-        log-append → stage → commit → rebase → push sequence — the sub-second sections
-        that touch the single shared git working tree, ``.git/index.lock``, or the
-        shared ``log.md`` — and **never** across the slow analyse/classify/curate LLM
-        passes, so concurrent captures (the Slack daemon runs each on a worker thread)
-        overlap on the expensive work and only serialise on the commit. Re-entrant (an
-        :class:`RLock`), so a held section that nests :meth:`commit`/:meth:`pull` does
-        not self-deadlock. One ``GitSync`` per vault per process, so this instance lock
-        is the per-working-tree mutex. Returned as a context manager
-        (``with git.capture_lock:``).
+        :class:`thoth.ingest.Ingestor` holds it only around the orient pull and the
+        log-append, stage, commit, rebase, push sequence, and never across the slow
+        analyse, classify and curate LLM passes. So concurrent captures overlap on the
+        expensive work and serialise only on the commit.
+
+        Re-entrant, so a held section that nests :meth:`commit` or :meth:`pull` cannot
+        self-deadlock. One ``GitSync`` per vault per process makes this the per-tree
+        mutex.
         """
         return self._capture_lock
 
@@ -292,68 +244,60 @@ class GitSync:
         return self._bin_path
 
     def pull(self, *, timeout: float = 120.0) -> GitResult:
-        """Run ``vault-pull`` (``pull --rebase --autostash``) onto current state.
+        """Runs ``vault-pull``, a ``pull --rebase --autostash`` onto current state.
 
         Args:
-            timeout: Seconds to allow the script before
-                :class:`subprocess.TimeoutExpired` is raised.
+            timeout: Seconds before the script is killed.
 
         Returns:
-            The :class:`GitResult` (``committed=True`` meaning "ran cleanly").
+            The result, with ``committed=True`` meaning it ran cleanly.
 
         Raises:
-            GitSyncError: if the script exits non-zero (stderr/stdout attached to
-                the message).
+            GitSyncError: if the script exits non-zero.
         """
         return self._run_checked(VAULT_PULL_SCRIPT, (), timeout=timeout)
 
     def bootstrap(self, *, timeout: float = 300.0) -> GitResult:
-        """Run ``vault-bootstrap``: clone the vault into an empty ``$PKM_VAULT``.
+        """Runs ``vault-bootstrap`` to clone the vault into an empty ``$PKM_VAULT``.
 
-        A freshly-provisioned cluster mounts an empty vault PVC (no ``.git``) and
-        nothing else clones the vault repo, so the script init+fetch+checkouts the
-        ``THOTH_VAULT_REPO_URL`` repo into the mount point (tolerant of a non-empty
-        mount dir, e.g. a ``lost+found``). It is a **no-op** when ``$PKM_VAULT`` is
-        already a git repo (the steady state) and when ``THOTH_VAULT_REPO_URL`` is
-        unset (the dev/test default — bootstrap is opt-in via the cluster overlay), in
-        both cases exiting cleanly without touching the tree. Run as a Helm
-        initContainer before each vault-mounting workload.
+        A freshly provisioned cluster mounts an empty vault PVC and nothing else clones
+        the repo, so the script init, fetches and checks out ``THOTH_VAULT_REPO_URL``
+        into the mount point. It tolerates a non-empty mount dir such as a
+        ``lost+found``.
+
+        It is a no-op when ``$PKM_VAULT`` is already a git repo, and when
+        ``THOTH_VAULT_REPO_URL`` is unset, which is the dev and test default. Run it as
+        a Helm initContainer before each vault-mounting workload.
 
         Args:
-            timeout: Seconds to allow the script (a full clone) before
-                :class:`subprocess.TimeoutExpired` is raised.
+            timeout: Seconds before the script is killed, allowing for a full clone.
 
         Returns:
-            The :class:`GitResult` (``committed=True`` meaning "ran cleanly"; the
-            stdout line reports whether it cloned or skipped).
+            The result, whose stdout line reports whether it cloned or skipped.
 
         Raises:
-            GitSyncError: if the script exits non-zero (stderr/stdout attached to
-                the message).
+            GitSyncError: if the script exits non-zero.
         """
         return self._run_checked(VAULT_BOOTSTRAP_SCRIPT, (), timeout=timeout)
 
     def stage(self, paths: Sequence[str], *, timeout: float = 30.0) -> None:
-        """Stage exactly ``paths`` in the working tree (``git add -- <paths>``).
+        """Stages exactly ``paths`` with ``git add``, and never ``add -A``.
 
-        Used by the batch import path (``thoth capture``), where each capture stages its
-        own page/raw/asset/``log.md`` paths up front and a single later :meth:`commit`
-        (with no ``paths``) commits the accumulated index. Staging only this capture's
-        own paths — never ``add -A`` — means a later batch commit cannot sweep an
-        unrelated capture's untracked file (issue #85). A path may name a deletion (a
-        superseded ``inbox/`` hold), which ``git add`` stages when the file is tracked.
-        A never-tracked, now-deleted hold (created AND removed within one uncommitted
-        run) exists in neither the working tree nor the index, so it is dropped —
-        passing it to ``git add`` would fail the whole call on an unmatched pathspec.
-        Empty ``paths`` is a no-op.
+        Used by the batch import path, where each capture stages its own paths up front
+        and a single later :meth:`commit` commits the accumulated index. Staging only
+        this capture's own paths means a batch commit cannot sweep an unrelated
+        capture's untracked file (issue #85).
 
-        Runs ``git`` directly (deterministic, like :meth:`divergence`), not a sync
-        script. Held under :attr:`capture_lock` by the caller so it never races another
-        capture's stage/commit on the shared index.
+        A path may name a deletion, such as a superseded ``inbox/`` hold. A
+        never-tracked, now-deleted hold is dropped, because passing it to ``git add``
+        would fail the whole call on an unmatched pathspec.
+
+        Empty ``paths`` is a no-op. Runs ``git`` directly rather than a sync script,
+        with the caller holding :attr:`capture_lock`.
 
         Args:
             paths: Vault-relative paths to stage.
-            timeout: Seconds to allow the ``git add`` before it is killed.
+            timeout: Seconds before the ``git add`` is killed.
 
         Raises:
             GitSyncError: if ``git add`` exits non-zero.
@@ -361,8 +305,7 @@ class GitSync:
         stageable = self._stageable(paths, timeout=timeout)
         if not stageable:
             return
-        # Retried on `.git/index.lock` contention from a concurrent client (see
-        # :func:`_run_with_lock_retry`); a non-lock failure raises below unchanged.
+        # Retried on index.lock contention, a non-lock failure raises below unchanged
         completed = _run_with_lock_retry(
             lambda: self._exec(["git", "add", "--", *stageable], timeout=timeout)
         )
@@ -373,20 +316,19 @@ class GitSync:
             )
 
     def _stageable(self, paths: Sequence[str], *, timeout: float) -> list[str]:
-        """Keep only paths that exist in the working tree or are already tracked.
+        """Keeps only the paths that exist in the working tree or are already tracked.
 
-        A path that is neither (a never-committed hold removed within the same run)
-        would make ``git add -- <path>`` abort on an unmatched pathspec, so it is
-        dropped — it carries no git change anyway. Order-preserving. Assumes plain
-        file paths (no directory or glob pathspecs).
+        A path that is neither is a never-committed hold removed within the same run. It
+        carries no git change, and leaving it in would abort ``git add`` on an unmatched
+        pathspec. Assumes plain file paths rather than globs.
         """
         statuses = [(path, (self._vault_root / path).exists()) for path in paths]
         missing = [path for path, on_disk in statuses if not on_disk]
         tracked: set[str] = set()
         if missing:
-            # One batched probe for every missing path. No ``--error-unmatch`` (it
-            # aborts on the first unmatched pathspec); ``-z`` neutralises
-            # ``core.quotePath`` so non-ASCII paths round-trip verbatim.
+            # One batched probe for every missing path. No --error-unmatch as it aborts
+            # on the first unmatched pathspec, and -z neutralises core.quotePath so
+            # non-ASCII paths round-trip verbatim
             completed = self._exec(
                 ["git", "ls-files", "-z", "--", *missing], timeout=timeout
             )
@@ -401,35 +343,25 @@ class GitSync:
         paths: Sequence[str] | None = None,
         timeout: float = 120.0,
     ) -> GitResult:
-        """Run ``vault-commit <message> [-- <paths>]``: stage, commit, rebase, push.
+        """Runs ``vault-commit``, which stages, commits, rebases and pushes.
 
-        When ``paths`` is given they are the EXACT set staged for this commit
-        (``git add -- <paths>`` in the script) — a single capture's own page(s), raw
-        sidecar, assets, and ``log.md``, never the whole tree — so the commit cannot
-        sweep a concurrent capture's untracked asset and orphan an embedded
-        ``![[asset]]`` (issue #85). When ``paths`` is ``None`` the script commits
-        whatever is already staged in the index (the batch path stages incrementally via
-        :meth:`stage`). A path may name a deletion (a superseded ``inbox/`` hold).
-
-        The script prefixes the commit subject with ``agent:`` and never pushes
-        ``--force``. A clean run with no staged changes returns ``committed=False``
-        and does **not** raise.
+        ``paths`` is the exact set staged for this commit, so it cannot sweep a
+        concurrent capture's untracked asset and orphan an embedded ``![[asset]]``
+        (issue #85). The script prefixes the subject with ``agent:`` and never pushes
+        ``--force``. Nothing staged returns ``committed=False`` rather than raising.
 
         Args:
-            message: The commit subject (passed as the script's first argument).
-            paths: The exact vault-relative paths to stage, or ``None`` to commit the
-                already-staged index.
-            timeout: Seconds to allow the script before
-                :class:`subprocess.TimeoutExpired` is raised.
+            message: The commit subject.
+            paths: Vault-relative paths to stage, or None for the staged index. A
+                path may name a deletion.
+            timeout: Seconds before the script is killed.
 
         Returns:
-            The :class:`GitResult`; ``committed`` is ``False`` when nothing was
-            staged, otherwise ``True``.
+            The result, with ``committed=False`` when nothing was staged.
 
         Raises:
-            VaultConflictError: on a rebase-conflict exit (stderr carries the
-                ``VAULT CONFLICT`` line; the rebase has been aborted, the remote
-                is unchanged).
+            VaultConflictError: on a rebase conflict, where the rebase has been
+                aborted and the remote is unchanged.
             GitSyncError: on any other non-zero exit.
         """
         script_args = (message, "--", *paths) if paths is not None else (message,)
@@ -438,26 +370,19 @@ class GitSync:
         )
 
     def divergence(self, *, timeout: float = 30.0) -> Divergence:
-        """Count local vault commits ahead of the rebase tracking ref.
+        """Counts local vault commits ahead of the rebase tracking ref.
 
-        Measured against the ``THOTH_GIT_REMOTE`` / ``THOTH_GIT_BRANCH`` tracking ref
-        the wrappers rebase onto (defaults ``origin`` / ``main``) -- not
+        Measured against ``THOTH_GIT_REMOTE`` and ``THOTH_GIT_BRANCH``, not
         ``THOTH_PUSH_REMOTE``, which may differ. Only called from the conflict path,
-        where ``vault-pull``'s ``pull --rebase`` has just refreshed that ref, so the
-        count is accurate at alert time.
-
-        Runs read-only ``git`` directly (not a sync script):
-        ``rev-list --count <remote>/<branch>..HEAD`` for the
-        ahead-count and the author time of the oldest commit in that range for
-        ``since``. Any failure (no remote tracking ref, not a git tree, git error) is
-        swallowed and reported as :class:`Divergence` ``(commits_ahead=-1, since=None)``
-        so this can be called from inside a conflict handler without raising anew.
+        where ``vault-pull`` has just refreshed that ref, so the count is accurate at
+        alert time. Any failure is swallowed and reported as ``commits_ahead=-1``, so
+        this can be called from inside a conflict handler without raising anew.
 
         Args:
-            timeout: Seconds to allow each git probe.
+            timeout: Seconds before each read-only git probe is killed.
 
         Returns:
-            The :class:`Divergence` describing the unpushed local commits.
+            The unpushed local commit count and the oldest commit's time.
         """
         remote = self._child_env.get("THOTH_GIT_REMOTE", "origin")
         branch = self._child_env.get("THOTH_GIT_BRANCH", "main")
@@ -471,8 +396,8 @@ class GitSync:
             return Divergence(commits_ahead=-1, since=None)
         if ahead == 0:
             return Divergence(commits_ahead=0, since=None)
-        # Author time (Unix seconds) of the OLDEST unpushed commit (the first that
-        # diverged) -> the "unpushed since T" timestamp.
+        # Author time of the oldest unpushed commit, which is the "unpushed since T"
+        # stamp
         oldest = self._git_text(
             ("log", "--reverse", "--format=%at", rng), timeout=timeout
         )
@@ -480,11 +405,7 @@ class GitSync:
         return Divergence(commits_ahead=ahead, since=since)
 
     def _git_text(self, args: Sequence[str], *, timeout: float) -> str | None:
-        """Run ``git <args>`` read-only in the vault, returning stdout or ``None``.
-
-        Returns ``None`` on any non-zero exit or spawn failure so callers in an
-        exception handler never see a new exception.
-        """
+        """Runs ``git <args>`` read-only in the vault, returning stdout or ``None``."""
         try:
             completed = self._exec(["git", *args], timeout=timeout)
         except (OSError, subprocess.SubprocessError):
@@ -496,18 +417,17 @@ class GitSync:
     def _exec(
         self, argv: Sequence[str], *, timeout: float
     ) -> subprocess.CompletedProcess[str]:
-        """Run one child process in the vault root with the forced environment.
+        """Runs one child process in the vault root with the forced environment.
 
-        Every subprocess this class spawns goes through here: ``check=False`` so a
-        failure returns for the caller's own classification, text-mode captured
-        output, and the ``PKM_VAULT``-forced child environment.
+        Every subprocess this class spawns comes through here.
 
         Args:
-            argv: The full argument vector (no ``shell=True``).
-            timeout: Seconds before :class:`subprocess.TimeoutExpired`.
+            argv: The full argument vector, never a shell string.
+            timeout: Seconds before the process is killed.
 
         Returns:
-            The :class:`subprocess.CompletedProcess` of the run.
+            The completed process, run ``check=False`` so a failure returns for the
+            caller's own classification.
         """
         return subprocess.run(
             list(argv),
@@ -520,28 +440,22 @@ class GitSync:
         )
 
     def _run(self, script: str, args: Sequence[str], *, timeout: float) -> GitResult:
-        """Run one sync script and classify its result.
-
-        Invokes ``bash <bin_path>/<script> <args...>`` with the forced child
-        environment and the vault root as the working directory, capturing text
-        output. ``committed`` is derived from the ``nothing to commit`` stdout
-        marker (only meaningful for ``vault-commit``).
+        """Runs one sync script and classifies its result.
 
         Args:
-            script: The script filename (e.g. :data:`VAULT_COMMIT_SCRIPT`).
+            script: The script filename, such as :data:`VAULT_COMMIT_SCRIPT`.
             args: Positional arguments passed to the script.
-            timeout: Seconds before :class:`subprocess.TimeoutExpired`.
+            timeout: Seconds before the script is killed.
 
         Returns:
-            The classified :class:`GitResult`.
+            The result, whose ``committed`` comes from the ``nothing to commit``
+            stdout marker that only ``vault-commit`` emits.
         """
         script_path = self._bin_path / script
-        # Fixed argv (no shell=True); the script name is a module constant and the
-        # vault root comes from the frozen Config, so there is no injection surface.
-        # Retried on `.git/index.lock` contention (see :func:`_run_with_lock_retry`):
-        # the commit/pull scripts stage and rebase, so a concurrent client holding the
-        # index lock would otherwise fail the whole capture; a non-lock non-zero exit is
-        # returned unchanged for the caller's own conflict/error classification.
+        # Fixed argv, no shell=True. The script name is a module constant and the vault
+        # root comes from the frozen Config, so there is no injection surface.
+        # Retried on index.lock contention: these scripts stage and rebase, so a
+        # concurrent client holding the lock would otherwise fail the whole capture
         completed = _run_with_lock_retry(
             lambda: self._exec(["bash", str(script_path), *args], timeout=timeout)
         )
@@ -563,22 +477,20 @@ class GitSync:
         timeout: float,
         classify_conflict: bool = False,
     ) -> GitResult:
-        """Run one sync script via :meth:`_run` and raise on a non-zero exit.
+        """Runs one sync script via :meth:`_run` and raises on a non-zero exit.
 
         Args:
-            script: The script filename (e.g. :data:`VAULT_COMMIT_SCRIPT`).
+            script: The script filename, such as :data:`VAULT_COMMIT_SCRIPT`.
             args: Positional arguments passed to the script.
-            timeout: Seconds before :class:`subprocess.TimeoutExpired`.
-            classify_conflict: When ``True``, a failure whose stderr carries the
-                ``VAULT CONFLICT`` sentinel raises :class:`VaultConflictError`
-                (only ``vault-commit`` emits it).
+            timeout: Seconds before the script is killed.
+            classify_conflict: Raise :class:`VaultConflictError` on a ``VAULT
+                CONFLICT`` stderr, which only ``vault-commit`` emits.
 
         Returns:
-            The :class:`GitResult` of a clean (zero-exit) run.
+            The result of a clean, zero-exit run.
 
         Raises:
-            VaultConflictError: on a rebase-conflict exit when ``classify_conflict``
-                is set.
+            VaultConflictError: on a rebase conflict when ``classify_conflict`` is set.
             GitSyncError: on any other non-zero exit.
         """
         result = self._run(script, args, timeout=timeout)
@@ -594,7 +506,7 @@ class GitSync:
 
     @staticmethod
     def _format_failure(script: str, result: GitResult) -> str:
-        """Build a diagnostic message embedding the script's exit code and output."""
+        """Builds a diagnostic message carrying the script's exit code and output."""
         return (
             f"{script} failed (exit {result.returncode}). "
             f"stdout: {result.stdout.strip()!r} stderr: {result.stderr.strip()!r}"
@@ -602,10 +514,7 @@ class GitSync:
 
 
 def _parse_first_epoch(text: str | None) -> datetime | None:
-    """Parse the first line of git ``%at`` output (Unix seconds) into an aware datetime.
-
-    Returns ``None`` for empty / unparseable input so a divergence probe never raises.
-    """
+    """Parses the first line of git ``%at`` output into an aware datetime."""
     if not text:
         return None
     tokens = text.split()

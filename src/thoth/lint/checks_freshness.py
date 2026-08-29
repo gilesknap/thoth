@@ -1,9 +1,9 @@
-"""Freshness / upkeep checks: 5 (stale content), 7 (source drift), 9 (page size)
-and 12 (log rotation), plus the window and limit constants they apply.
+"""Freshness checks 5 (stale), 7 (source drift), 9 (page size), 12 (log rotation).
 
-Each check is a pure function over the parsed pages (or spine-file text) handed
-to it by :class:`thoth.lint.LintEngine`; the only non-deterministic input -- the
-current calendar date -- is passed in as ``today``.
+Each check is a pure function over the parsed pages, or the spine-file text, handed to
+it by :class:`thoth.lint.LintEngine`, and the window and limit constants they apply live
+here too. The only non-deterministic input is the current calendar date, passed in as
+``today``.
 """
 
 from __future__ import annotations
@@ -38,17 +38,17 @@ STALE_DAYS: int = 90
 MEDIA_STALE_DAYS: int = 180
 """An unconsumed media item is cold this many days after ``created`` (check 5)."""
 
-# Action statuses that exempt an overdue action from the stale check (SPEC check 5).
+# The statuses that exempt an overdue action from the stale check
 _ACTION_CLOSED_STATUSES: frozenset[str] = frozenset({"done", "cancelled"})
 
-# A log entry header line "## [YYYY-MM-DD] ...".
+# A log entry header line, "## [YYYY-MM-DD] ..."
 _LOG_ENTRY_RE: re.Pattern[str] = re.compile(r"^## \[", re.MULTILINE)
 
 
 def _check_stale(
     curated: list[_Page], actionable: list[_Page], today: date
 ) -> list[Finding]:
-    """Flag stale reference pages and overdue / cold actionable pages (check 5)."""
+    """Flags stale reference pages and overdue or cold actionable pages (check 5)."""
     findings: list[Finding] = []
     stale_floor = today - _dt.timedelta(days=STALE_DAYS)
     media_floor = today - _dt.timedelta(days=MEDIA_STALE_DAYS)
@@ -71,11 +71,11 @@ def _check_stale(
 
 
 def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Finding]:
-    """Return overdue-action / cold-media findings for one actionable page.
+    """Returns the overdue-action and cold-media findings for one actionable page.
 
     The media queue is its own ``type: media`` in the ``media/`` folder (ADR 0015), so
-    the cold-media check keys off the ``type`` plus the still-``todo`` backlog status;
-    ``action`` pages (todos/errands) get the overdue check.
+    the cold-media check keys off the type plus a still-``todo`` status, while
+    ``action`` pages get the overdue check.
     """
     out: list[Finding] = []
     page_type = _str_field(page.meta.get("type"))
@@ -111,7 +111,7 @@ def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Findi
 
 
 def _check_source_drift(pages: list[_Page]) -> list[Finding]:
-    """Flag ``raw/`` pages whose body sha256 differs from frontmatter (check 7)."""
+    """Flags a ``raw/`` page whose body sha256 differs from frontmatter (check 7)."""
     findings: list[Finding] = []
     for page in pages:
         stored = _str_field(page.meta.get("sha256"))
@@ -133,7 +133,7 @@ def _check_source_drift(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_page_size(pages: list[_Page]) -> list[Finding]:
-    """Flag curated pages over :data:`PAGE_SIZE_LIMIT` body lines (check 9)."""
+    """Flags a curated page over :data:`PAGE_SIZE_LIMIT` body lines (check 9)."""
     findings: list[Finding] = []
     for page in pages:
         line_count = len(page.body.splitlines())
@@ -152,7 +152,7 @@ def _check_page_size(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_log_rotation(log_text: str) -> list[Finding]:
-    """Flag a ``log.md`` with more than :data:`LOG_ROTATE_LIMIT` entries (check 12)."""
+    """Flags a ``log.md`` over :data:`LOG_ROTATE_LIMIT` entries (check 12)."""
     count = len(_LOG_ENTRY_RE.findall(log_text))
     if count > LOG_ROTATE_LIMIT:
         return [

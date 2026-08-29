@@ -31,13 +31,12 @@ class _FinalisePass(_IngestorBase):
     # ---- pass 5: navigation ------------------------------------------------------
 
     def _apply_navigation(self, plan: dict[str, Any], page_paths: list[str]) -> None:
-        """Append a ``log.md`` block for every file touched (SPEC step 5).
+        """Appends a ``log.md`` block for every file touched (SPEC step 5).
 
-        A reference page's one-line gloss is its own ``summary:`` frontmatter (routed in
-        at write time by :meth:`_write_planned_page`), so there is no separate
-        ``index.md`` catalog to maintain here -- ``index.md`` is a static set of Bases
-        dashboards (ADR 0008). The only navigation edit left is the append-only
-        ``log.md`` entry recording the touched paths.
+        A page's gloss is its own ``summary:`` frontmatter, routed in at write time, so
+        there is no separate catalog to maintain here. ``index.md`` is a static set of
+        dashboards (ADR 0008), which leaves the append-only log entry as the only
+        navigation edit.
         """
         try:
             self._vault.append_log("ingest", self._log_subject(plan), page_paths)
@@ -46,7 +45,7 @@ class _FinalisePass(_IngestorBase):
 
     @staticmethod
     def _log_subject(plan: dict[str, Any]) -> str:
-        """Build the log subject from the plan's log block or its first page title."""
+        """Builds the log subject from the plan's log block or first page title."""
         log = plan.get("log")
         if isinstance(log, dict):
             subject = log.get("subject")
@@ -62,21 +61,19 @@ class _FinalisePass(_IngestorBase):
     # ---- pass 6: retain ----------------------------------------------------------
 
     def _retain_pages(self, page_paths: list[str], cls: Classification) -> None:
-        """Retain each curated page into Hindsight and probe that it landed.
+        """Retains each curated page into Hindsight and probes that it landed.
 
-        The page body is read back from the (already durable) vault file and retained
-        keyed by its vault path; a ``probe`` confirms recall returns the path. A
-        Hindsight failure is surfaced (the vault write is already durable), so the page
-        is never silently lost (SPEC steps 6-7 ordering).
+        The body is read back from the already-durable vault file and retained keyed by
+        its path, then a probe confirms recall returns it. A Hindsight failure is
+        surfaced, so a page is never silently lost (SPEC steps 6 and 7).
 
-        A daily-budget trip (:class:`~thoth.budget.BudgetExceededError`) during retain
-        is **not** an error: the curated page is already on disk and committed, so
-        indexing is simply deferred to the next reindex (which re-retains every changed
-        page). The remaining pages are left unindexed too and the pass returns cleanly
-        -- the capture is filed, never lost, just not yet searchable (issue #16).
+        A daily-budget trip during retain is not an error. The page is already on disk
+        and committed, so indexing defers to the next reindex, which re-retains every
+        changed page. The capture is filed and never lost, just not yet searchable
+        (issue #16).
 
         Raises:
-            IngestError: if a retain call fails (the page is still on disk).
+            IngestError: if a retain call fails, though the page is still on disk.
         """
         for rel in page_paths:
             try:
@@ -87,14 +84,14 @@ class _FinalisePass(_IngestorBase):
             try:
                 self._hindsight.retain(rel, facts, tags=[cls.page_type, rel])
             except BudgetExceededError:
-                # Cap reached mid-ingest: the page is durable on disk and will be
-                # indexed by the next reindex; stop retaining rather than fail (#16).
+                # Cap reached mid-ingest. The page is durable on disk and the next
+                # reindex will index it, so stop retaining rather than fail (#16)
                 return
             except HindsightError as exc:
                 raise IngestError(
                     f"hindsight retain failed for {rel} (page is filed on disk): {exc}"
                 ) from exc
-            # Best-effort 'did it land?' probe; a False does not abort the ingest.
+            # Best-effort "did it land?" probe, where a false does not abort the ingest
             try:
                 self._hindsight.probe(rel, cls.title)
             except HindsightError:
@@ -102,7 +99,7 @@ class _FinalisePass(_IngestorBase):
 
     @staticmethod
     def _retain_facts(frontmatter: dict[str, object], body: str) -> str:
-        """Compose the fact text retained for a page (title line + body)."""
+        """Composes the fact text retained for a page."""
         title = frontmatter.get("title")
         header = f"{title}\n\n" if isinstance(title, str) and title else ""
         return f"{header}{body}".strip()
@@ -113,26 +110,24 @@ class _FinalisePass(_IngestorBase):
     def _capture_commit_paths(
         report: IngestReport, *, holding_raw: str | None
     ) -> list[str]:
-        """Enumerate EVERY vault path this capture touched, for explicit staging (#85).
+        """Enumerates every vault path this capture touched, for staging (#85).
 
-        Staging only the capture's own paths (rather than ``git add -A``) is the orphan
-        fix, so this list must be exhaustive or it trades one orphan for another. The
-        set is dynamic per capture:
+        Staging only the capture's own paths rather than everything is the orphan fix,
+        so this list must be exhaustive or it trades one orphan for another. The set is
+        dynamic per capture:
 
-        * ``report.page_paths`` -- the curated page(s) the file-plan wrote, which can be
-          a *create* or an *update* of an existing page, including OTHER pages the plan
-          touched (a capture may rewrite an entity page while filing a note); these are
-          the plan's ``_written`` paths.
-        * ``report.raw_paths`` -- the immutable raw sidecar (``raw/articles/<slug>.md``
-          / ``raw/papers/<slug>.md``) when one was written.
-        * ``report.asset_paths`` -- ALL N saved assets (a multi-image batch and any
-          derived ``.excalidraw.md`` artifact, issues #84/#124/#68), not just the first.
-        * ``holding_raw`` -- the superseded ``inbox/<sha>.md`` hold removed on success;
-          a *deletion* that must be staged or the orphaned hold lingers untracked.
-        * ``log.md`` -- the shared activity log every capture appends to (vault root).
+        * ``report.page_paths`` -- the curated pages the file-plan wrote, a create or an
+          update, including other pages the plan touched. A capture may rewrite an
+          entity page while filing a note.
+        * ``report.raw_paths`` -- the immutable raw sidecar, when one was written.
+        * ``report.asset_paths`` -- all saved assets, a multi-image batch and any
+          derived ``.excalidraw.md`` artifact, not just the first.
+        * ``holding_raw`` -- the superseded ``inbox/`` hold removed on success. A
+          deletion that must be staged, or the orphaned hold lingers untracked.
+        * ``log.md`` -- the shared activity log every capture appends to.
 
-        Returned de-duplicated and order-preserving (an asset already listed elsewhere
-        is not staged twice).
+        Returned de-duplicated and order-preserving, so an asset listed twice is staged
+        once.
         """
         ordered: list[str] = [
             *report.page_paths,
@@ -158,23 +153,16 @@ class _FinalisePass(_IngestorBase):
         swallow_git_error: bool,
         pre_commit: Callable[[], None] | None = None,
     ) -> IngestReport:
-        """Stage or commit this capture's ``paths``; fold the outcome into ``report``.
+        """Stages or commits this capture's paths and folds the outcome in.
 
-        The shared git tail of :meth:`_commit` / :meth:`_commit_unchanged` /
-        :meth:`_commit_deferred`. ``pre_commit`` (when given) is a tree-mutating step
-        (e.g. the deferred path's ``log.md`` append) that must share the single
-        critical section with the stage/commit (issue #85); it runs as the first
-        statement under the working-tree lock on both paths. With ``do_commit=False``
-        exactly ``paths`` is staged under the lock for the caller's batched commit; a
-        stage failure is swallowed or raised per ``swallow_stage_error`` and
-        ``staged_message`` (when given) rewrites the report's message. Otherwise the
-        commit/rebase/push runs under the lock: a
-        :class:`~thoth.git_sync.VaultConflictError` is surfaced on the report via
-        ``conflict_message`` (content stays filed locally; never a ``--force``), a
-        :class:`~thoth.git_sync.GitSyncError` is swallowed or raised per
-        ``swallow_git_error``, and a real push records the push liveness marker (issue
-        #15) once the lock is released. ``success_message`` (when given) replaces the
-        report's message on the committed path.
+        This is the shared git tail of the three commit methods. With ``do_commit``
+        false, exactly these paths are staged under the working-tree lock for the
+        caller's batched commit.
+
+        Otherwise the commit, rebase and push run under that lock, and a real push
+        records the push marker (issue #15) once it is released. A conflict is surfaced
+        on the report rather than raised, so content stays filed locally and nothing is
+        ever force-pushed.
         """
         if not do_commit:
             with self._git.capture_lock:
@@ -208,8 +196,8 @@ class _FinalisePass(_IngestorBase):
                     return report
                 raise IngestError(f"commit failed: {exc}") from exc
         if result.committed:
-            # A non-empty vault-commit ran the rebase + push to completion, so the
-            # remote is now current -- record the push liveness marker (issue #15).
+            # A non-empty commit ran the rebase and push to completion, so the remote is
+            # current and the push marker can be recorded (issue #15)
             self._record_marker(MARKER_PUSH)
         return replace(
             report,
@@ -226,23 +214,16 @@ class _FinalisePass(_IngestorBase):
         do_commit: bool = True,
         paths: list[str] | None = None,
     ) -> IngestReport:
-        """Commit this capture's explicit ``paths``; surface a conflict on the report.
+        """Commits this capture's explicit paths, surfacing a conflict on the report.
 
-        ``paths`` is the exact set of vault-relative paths this capture touched (curated
-        page(s), raw sidecar, assets, the superseded inbox/ hold, and ``log.md``). It is
-        staged and committed atomically (``git add -- <paths>`` in ``vault-commit``), so
-        the commit can never sweep a different, concurrent capture's untracked asset and
-        orphan its embedded ``![[asset]]`` (issue #85).
-
-        ``do_commit=False`` (the ``thoth capture`` batch path, issue #80) defers the
-        commit to the caller: it stages exactly ``paths`` here (so the batched commit
-        later picks them up without an ``add -A`` that could sweep an unrelated
-        capture's file), appends nothing more, and returns the report unchanged
-        (``committed=False``). The caller commits+pushes the whole batch via
-        :meth:`thoth.git_sync.GitSync.commit` (no ``paths`` -> commit the staged index).
+        The paths are the exact set this capture touched, staged and committed
+        atomically, so the commit can never sweep a concurrent capture's untracked asset
+        and orphan its embed (issue #85). With ``do_commit`` false, the batch path
+        stages exactly these paths and leaves the commit to the caller, which then
+        commits the staged index for the whole batch.
 
         Returns:
-            The report with ``committed``/``conflict``/``message`` populated.
+            The report with the commit outcome populated.
 
         Raises:
             IngestError: on a non-conflict git failure.
@@ -273,17 +254,15 @@ class _FinalisePass(_IngestorBase):
         do_commit: bool,
         hold_rel: str | None,
     ) -> IngestReport:
-        """Commit the holding-removal for a skip-on-unchanged run (issue #95, task D).
+        """Commits the hold removal for a skip-on-unchanged run (issue #95).
 
-        Mirrors :meth:`_commit_deferred`'s git handling but preserves the ``unchanged``
-        report's message instead of synthesising a "Filed N page(s)" line: a conflict is
-        surfaced on the report (the removal is local; never a ``--force``), a benign
-        "nothing to commit" leaves ``committed=False``, and a real push records the push
-        marker. ``do_commit=False`` defers the commit to the batch caller. The ONLY path
-        this run touched is the superseded inbox/ hold deletion, so exactly that is
-        staged (issue #85) -- never an ``add -A`` that could sweep a concurrent capture.
+        Mirrors the deferred path's git handling but keeps the unchanged report's own
+        message rather than synthesising a filed line. A benign nothing-to-commit leaves
+        the report uncommitted, and a real push records the marker. The only path this
+        run touched is the superseded hold deletion, so exactly that is staged (issue
+        #85).
         """
-        # The only working-tree change is the hold deletion; stage exactly that.
+        # The only working-tree change is the hold deletion, so stage exactly that
         commit_paths = [hold_rel] if hold_rel is not None else []
         return self._finalise_git(
             report,
@@ -303,28 +282,22 @@ class _FinalisePass(_IngestorBase):
     def _commit_deferred(
         self, holding: _Holding, exc: LLMUnavailableError, *, do_commit: bool = True
     ) -> IngestReport:
-        """Commit the durable holding page; report deferred curation (SPEC section 6).
+        """Commits the durable hold and reports deferred curation (SPEC section 6).
 
-        The inbound item is already on disk (``inbox/`` holding page); the LLM was
-        unavailable, so classify/curate are skipped. The holding page is logged and
-        committed (best-effort -- a conflict or git failure is surfaced on the report,
-        not raised, since the capture is already durable locally), and a ``deferred``
-        report is returned so the Slack/MCP reply can say "saved raw, curation deferred"
-        and a later reindex/sweep re-curates the held item.
-
-        ``do_commit=False`` (the ``thoth capture`` batch path, issue #80) keeps the
-        navigation log append (the hold is staged in the working tree) but leaves the
-        git commit to the caller's batched commit -- exactly like the non-deferred
-        :meth:`_commit`, so the deferred path is covered too.
+        The item is already on disk as a hold and the LLM was unavailable, so classify
+        and curate are skipped. Committing is best-effort: a conflict or git failure is
+        surfaced on the report rather than raised, because the capture is already
+        durable locally. The deferred report lets the reply say the raw was saved and
+        curation deferred, so a later sweep re-curates the held item.
 
         Args:
             holding: The durable pre-LLM holding write.
-            exc: The :class:`LLMUnavailableError` that triggered the deferral.
-            do_commit: When ``False``, append the log but defer the git commit to the
-                caller's batch commit.
+            exc: The failure that triggered the deferral.
+            do_commit: False appends the log but leaves the commit to the batch
+                caller, exactly as the non-deferred path does.
 
         Returns:
-            A ``deferred`` :class:`IngestReport` naming the held raw page.
+            A deferred report naming the held raw page.
         """
         rel = holding.result.raw_path
         raw_paths = [rel] if rel is not None else []
@@ -342,20 +315,19 @@ class _FinalisePass(_IngestorBase):
                 "to curate it once capacity is available."
             ),
         )
-        # The hold page, its assets, and log.md are the only paths this deferred capture
-        # touched; stage exactly those (issue #85). De-duplicated, log.md last.
+        # The hold page, its assets and log.md are the only paths this deferred capture
+        # touched, so stage exactly those (issue #85), de-duplicated with log.md last
         commit_paths = [*raw_paths, *asset_paths, "log.md"]
 
-        # The log append + stage/commit is the narrow tree-mutating section: hand the
-        # append to :meth:`_finalise_git` as ``pre_commit`` so the shared log.md append
-        # and the commit/rebase run under ONE working-tree lock hold and never race a
-        # concurrent capture (issue #85) -- while the push liveness marker is still
-        # recorded after the lock is released.
+        # The log append plus stage or commit is the narrow tree-mutating section, so
+        # the append is handed over as pre_commit. The shared log.md append and the
+        # commit run under one lock hold and never race a concurrent capture (issue
+        # #85), while the push marker is still recorded after the lock is released
         def _append_deferred_log() -> None:
             try:
                 self._vault.append_log("ingest", "deferred capture", raw_paths)
             except VaultError:
-                # Navigation is best-effort here; the durable hold is what matters.
+                # Navigation is best-effort here, the durable hold is what matters
                 pass
 
         return self._finalise_git(
@@ -384,14 +356,11 @@ class _FinalisePass(_IngestorBase):
         page_paths: list[str],
         plan: dict[str, Any],
     ) -> IngestReport:
-        """Assemble the report with harness-built ``obsidian://`` links and wikilinks.
+        """Assembles the report with harness-built links and wikilinks.
 
-        Every link is built by :meth:`thoth.vault.Vault.obsidian_uri` from a confined
-        path, so the model cannot fabricate a link to a page that does not exist. The
-        per-page ``titles`` run parallel to ``page_paths`` (both are ordered from
-        ``plan["pages"]``, whose ``_written`` paths are ``page_paths``): each title is
-        the page's ``frontmatter.title``, falling back to the slug-derived title when
-        absent or empty, so the Slack renderer can label every link (issue #53).
+        Every link is built from a confined path, so the model cannot fabricate a link
+        to a page that does not exist. The titles run parallel to the page paths, both
+        ordered from the plan, so the Slack renderer can label every link (issue #53).
         """
         links = [self._vault.obsidian_uri(rel) for rel in page_paths]
         wikilinks = [f"[[{PurePosixPath(rel).stem}]]" for rel in page_paths]
@@ -408,13 +377,11 @@ class _FinalisePass(_IngestorBase):
 
     @staticmethod
     def _page_titles(plan: dict[str, Any], page_paths: list[str]) -> list[str]:
-        """Build a per-page title list parallel to ``page_paths`` (issue #53).
+        """Builds a per-page title list parallel to the page paths (issue #53).
 
-        Reads ``frontmatter.title`` from each ``plan["pages"]`` entry (ordered the same
-        as ``page_paths``), falling back to the slug-derived title from the written path
-        when a plan title is missing or blank. Pages without a matching plan entry
-        (uneven lengths) still get a slug-derived title so the renderer never indexes
-        off the end.
+        Titles come from each plan page's frontmatter, falling back to a slug-derived
+        title when one is missing or blank. A page with no matching plan entry still
+        gets a slug-derived title, so the renderer never indexes off the end.
         """
         pages = plan.get("pages")
         plan_pages = pages if isinstance(pages, list) else []
@@ -433,16 +400,15 @@ class _FinalisePass(_IngestorBase):
         return titles
 
     def _written_page_paths(self, plan: dict[str, Any]) -> list[str]:
-        """Return the page paths written by :meth:`curate` (the ``_written`` key)."""
+        """Returns the page paths curate wrote."""
         written = plan.get("_written")
         return list(written) if isinstance(written, list) else []
 
     def _page_tags(self, page_paths: list[str]) -> list[str]:
-        """Collect the curated pages' frontmatter tags for the success log (issue #52).
+        """Collects the curated pages' tags for the success log (issue #52).
 
-        Reads each curated page's ``tags`` and returns the de-duplicated,
-        order-preserving union; an unreadable page or a missing/ill-typed ``tags`` value
-        is skipped so the observability line never raises or blocks a good ingest.
+        An unreadable page, or an absent or ill-typed tags value, is skipped, so the
+        observability line never raises or blocks a good ingest.
         """
         seen: list[str] = []
         for path in page_paths:

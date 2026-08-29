@@ -1,58 +1,43 @@
 """Read-only accessor over thoth's packaged vault-spine and dashboard templates.
 
-This module ships the canonical *seed* of a thoth vault as package data under
-``src/thoth/templates/`` and exposes it through :mod:`importlib.resources`, so
-later phases (``migrate.py`` laying down a fresh vault, and the dashboards
-decision) can read the spine and Bases definitions without re-deriving them. The
-data directory is **not** a Python subpackage -- it has no ``__init__.py`` and
-holds only ``.md``/``.base`` files -- so pytest never imports it as a doctest
-module and Sphinx autosummary never documents it. This module (``templates.py``)
-is the importable surface.
+The canonical seed of a vault ships as package data and is exposed through
+:mod:`importlib.resources`, so a fresh vault can be laid down without re-deriving the
+spine and Bases definitions. The data directory is deliberately not a package, so pytest
+never imports it as a doctest module and autosummary never documents it. Two kinds of
+template ship:
 
-Two kinds of template ship:
+* **Spine files** (:data:`SPINE_NAMES`) -- ``index.md`` is the Home landing page, an
+  OKF-compliant stub linking to the Dashboards page; ``SCHEMA.md`` carries the
+  frontmatter contract and the ``## Tag Taxonomy`` section
+  :func:`thoth.lint.parse_taxonomy_tags` reads as its single source of truth; ``log.md``
+  is the append-only action log.
+* **Bases dashboards** (:data:`BASE_NAMES`) -- YAML ``.base`` files under ``_bases/``
+  embedded by the ``_bases/index.md`` page. Each base is one class of item whose views
+  differ only by date window (ADR 0014): ``actions`` and ``personal`` are open todos,
+  ``media`` the consume queue, ``inbox`` the unfiled holding queue, ``recent``
+  vault-wide activity, ``reference`` the curated layer. Every ``filters:`` block must be
+  an object keyed by exactly one of ``and:``, ``or:`` or ``not:``, because a bare YAML
+  list is a Bases parse error.
 
-* **Spine files** -- :data:`SPINE_NAMES` (``index.md``, ``SCHEMA.md``,
-  ``log.md``): frontmatter + Markdown. ``index.md`` is the Home landing page -- a
-  thin, OKF-compliant stub that links to the Dashboards page with a standard
-  markdown link (the dashboards themselves live in ``_bases/index.md``, see
-  :data:`BASE_DOC_NAMES`); ``SCHEMA.md`` carries the frontmatter contract and
-  the ``## Tag Taxonomy`` section that :func:`thoth.lint.parse_taxonomy_tags`
-  reads as its single source of truth; ``log.md`` is the append-only action log.
-* **Bases dashboards** -- :data:`BASE_NAMES` (``actions``, ``personal``,
-  ``media``, ``inbox``, ``recent``, ``reference``): YAML ``.base`` files under
-  ``_bases/`` embedded by the ``_bases/index.md`` Dashboards page. Each base is one
-  *class* of item and its views
-  differ only by date window (ADR 0014): ``actions`` (open work todos) and
-  ``personal`` (open personal todos) each ship ``7 Days`` / ``30 Days`` / ``All``;
-  ``media`` is the consume queue (work + personal, with a personal column);
-  ``inbox`` is the unfiled holding queue; ``recent`` is vault-wide activity
-  (``7`` / ``30`` / ``60 Days``); ``reference`` is the curated Notes / Entities /
-  Memories layer. Every ``filters:`` block is an object keyed by exactly one of
-  ``and:`` / ``or:`` / ``not:`` (a bare YAML list is a Bases parse error).
-
-**Bases vs Dataview is a VPS / Obsidian-time decision (SPEC section 15, open item
-2), so this module ships and documents BOTH.** The *v1 target is Bases* if the
-installed Obsidian build ships Bases and the ``.base`` filter/date syntax (in
-particular the date arithmetic ``due_date < now() + "7 days"``) validates. If it
-does not, fall back to **Dataview** -- a ``dataview`` code block per view on the
-relevant index / Home page. The canonical open-actions fallback, recorded here so
-neither option is lost, is::
+Bases against Dataview is an Obsidian-time decision (SPEC section 15), so both are
+recorded here. Bases is the v1 target if the installed build ships it and the date
+arithmetic validates. If it does not, fall back to a ``dataview`` code block per view.
+The canonical open-actions fallback, recorded so neither option is lost, is::
 
     ```dataview
-    TABLE status, due_date, priority, kind
+    TABLE status, due_date, priority
     FROM "actions"
     WHERE status != "done" AND status != "cancelled"
     SORT priority ASC, due_date ASC
     ```
 
-A second fallback is status-only Bases filters (no date arithmetic) with the cron
-daily-briefing doing all the date math from frontmatter. The packaged ``.base``
-files are the Bases v1 target; this docstring is the Dataview fallback of record.
+A second fallback is status-only filters with the cron briefing doing all the date maths
+from frontmatter. The packaged ``.base`` files are the v1 target and this docstring is
+the Dataview fallback of record.
 
-The accessor confines every lookup to the templates resource root: a name with a
-parent (``..``) or absolute component, or any name that does not resolve to a
-shipped file, raises :class:`TemplateError`. The appliance LLM never reaches this
-module; it is deterministic plumbing for vault provisioning.
+Every lookup is confined to the resource root, so a name with a parent or absolute
+component, or one that resolves to no shipped file, raises. The appliance LLM never
+reaches this module: it is deterministic plumbing for vault provisioning.
 """
 
 from __future__ import annotations
@@ -120,32 +105,29 @@ class TemplateError(Exception):
 
 
 def base_names() -> tuple[str, ...]:
-    """Return the Bases dashboard names (no ``.base`` suffix)."""
+    """Returns the Bases dashboard names, without the suffix."""
     return BASE_NAMES
 
 
 def spine_names() -> tuple[str, ...]:
-    """Return the three vault-spine file names."""
+    """Returns the three vault-spine file names."""
     return SPINE_NAMES
 
 
 def _root() -> Traversable:
-    """Return the templates resource root as a :class:`Traversable`.
+    """Returns the templates resource root.
 
-    Resolved as the ``templates`` data subdirectory *under* the importable
-    ``thoth`` package, because the data directory itself is not a package.
+    Resolved as the data subdirectory under the importable package, because the data
+    directory itself is not a package.
     """
     return resources.files(_PACKAGE).joinpath(_DATA_DIR)
 
 
 def _resolve(name: str) -> Traversable:
-    """Resolve a relative template ``name`` confined to the resource root.
+    """Resolves a relative template name, confined to the resource root.
 
-    The name is split on ``/`` and rejected if it is empty, absolute, or contains
-    a ``.``/``..`` (or backslash) component, so a lookup can never escape the
-    packaged ``thoth.templates`` directory. Returns the located
-    :class:`Traversable` or raises :class:`TemplateError` if no such file is
-    shipped.
+    The name is rejected when empty, absolute, or carrying a dot or backslash component,
+    so a lookup can never escape the packaged directory.
     """
     if not name or name.startswith("/") or "\\" in name:
         raise TemplateError(f"invalid template name: {name!r}")
@@ -161,13 +143,11 @@ def _resolve(name: str) -> Traversable:
 
 
 def _discover_obsidian_names() -> tuple[str, ...]:
-    """Discover every shipped ``.obsidian/`` config file, recursively.
+    """Discovers every shipped Obsidian config file, recursively.
 
-    Walks the packaged ``templates/.obsidian`` tree so a new Obsidian config file
-    is seeded into fresh vaults just by dropping it in -- no code change needed.
-    Returns forward-slash paths under the templates root (each prefixed with
-    ``.obsidian/``), sorted for a deterministic seed order. Empty if no
-    ``.obsidian`` directory ships.
+    Walking the packaged tree means a new config file is seeded into fresh vaults just
+    by dropping it in, with no code change. The result is sorted for a deterministic
+    seed order, and empty when no config directory ships.
     """
     root = _root().joinpath(".obsidian")
     if not root.is_dir():
@@ -196,11 +176,10 @@ OBSIDIAN_NAMES: tuple[str, ...] = _discover_obsidian_names()
 
 
 def template_text(name: str) -> str:
-    """Return the UTF-8 text of a packaged template by relative name.
+    """Returns the UTF-8 text of a packaged template by relative name.
 
-    ``name`` is a forward-slash path under the templates root, e.g. ``index.md``
-    or ``_bases/home.base``. Raises :class:`TemplateError` if the name is unknown
-    or escapes the templates resource root (``..``, absolute, etc.).
+    The name is a forward-slash path under the templates root. It raises when the name
+    is unknown or would escape that root.
     """
     resource = _resolve(name)
     try:
@@ -210,20 +189,19 @@ def template_text(name: str) -> str:
 
 
 def base_text(name: str) -> str:
-    """Return the text of the ``_bases/<name>.base`` dashboard.
+    """Returns the text of one Bases dashboard.
 
-    ``name`` is a bare dashboard name from :data:`BASE_NAMES` (no ``.base``
-    suffix). Raises :class:`TemplateError` for an unknown dashboard.
+    The name is a bare dashboard name from :data:`BASE_NAMES`, without the suffix, and
+    an unknown dashboard raises.
     """
     return template_text(f"_bases/{name}.base")
 
 
 def iter_templates() -> list[tuple[str, str]]:
-    """Return ``(relative-name, text)`` for every packaged template.
+    """Returns the name and text of every packaged template.
 
-    The result lists the three spine files, the ``_bases/*.base`` dashboards, the
-    ``_bases/`` markdown landing pages (:data:`BASE_DOC_NAMES`), the ``.obsidian``
-    config files, and the vault-root dotfiles, each paired with its UTF-8 text.
+    Covers the spine files, the Bases dashboards and their landing pages, the Obsidian
+    config files, and the vault-root dotfiles.
     """
     items: list[tuple[str, str]] = []
     for spine in SPINE_NAMES:

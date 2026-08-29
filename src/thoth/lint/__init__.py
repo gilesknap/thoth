@@ -1,56 +1,43 @@
-"""The 13 SPEC section 11 / Appendix maintenance checks as a pure vault scan.
+"""The 13 SPEC section 11 maintenance checks as a pure vault scan.
 
 This package is the appliance's deterministic maintenance pass (SPEC section 11 and the
-Appendix "Lint checks" table). It is a *pure programmatic markdown scan* over a real
-:class:`thoth.vault.Vault`: no network, no LLM, no subprocess. Each of checks 1-12 is a
-method returning ``list[Finding]``; :meth:`LintEngine.run` aggregates them into a
-:class:`LintReport` grouped and counted by :class:`Severity`; check 13
-(:meth:`LintEngine.record`) appends **exactly one** ``log.md`` entry via
-:meth:`thoth.vault.Vault.append_log` carrying the issue count.
+Appendix "Lint checks" table). It is a pure programmatic markdown scan over a real
+:class:`thoth.vault.Vault`, with no network, no LLM and no subprocess. Checks 1 to 12
+are each a method returning ``list[Finding]``, :meth:`LintEngine.run` aggregates them
+into a :class:`LintReport` grouped and counted by :class:`Severity`, and check 13
+(:meth:`LintEngine.record`) appends exactly one ``log.md`` entry carrying the count.
 
-The 13 checks (SPEC Appendix table):
-
-1.  **Orphan pages** -- curated knowledge pages with zero inbound ``[[wikilinks]]``
-    (life-admin pages are exempt; Bases surface them).
-2.  **Broken wikilinks** -- ``[[target]]`` references that resolve to no page, honouring
-    ``aliases`` frontmatter. Highest severity.
-3.  **Summary gloss** -- every content page (all four types, including ``action``
-    since ADR 0013) carries a non-empty one-line ``summary:`` frontmatter gloss
-    (issue #72 / ADR 0008): the canonical, rebuildable home of the per-page gloss
-    that replaced the old agent-maintained ``index.md`` catalog.
-4.  **Frontmatter validation** -- required fields present (content pages against
-    :data:`~thoth.vault.CONTENT_COMMON_FIELDS`, inbox holds against
-    :data:`~thoth.vault.INBOX_REQUIRED_FIELDS`), ``type`` valid, type-specific
-    required fields present, ``personal`` a real boolean, and ``status`` / ``kind`` /
-    ``priority`` / ``media_type`` values within the vault vocabularies.
-5.  **Stale content** -- a knowledge page whose ``updated`` is older than
-    :data:`STALE_DAYS`; an ``action`` past its ``due_date`` and not done/cancelled; a
-    ``kind: media`` action still ``todo`` older than :data:`MEDIA_STALE_DAYS`.
-6.  **Contradictions** -- every page with ``contested: true`` or a non-empty
+1.  **Orphan pages** -- a curated page with no inbound link. Life-admin pages are
+    exempt, since the Bases dashboards surface them.
+2.  **Broken links** -- a target resolving to no page, honouring ``aliases``. The
+    highest severity.
+3.  **Summary gloss** -- a non-empty one-line ``summary:`` on every content page (issue
+    #72, ADR 0008), the rebuildable home of the gloss that replaced the old
+    agent-maintained ``index.md`` catalog.
+4.  **Frontmatter validation** -- required fields present, ``type`` valid, type-specific
+    fields present, ``personal`` a real boolean, and every ``status``, ``priority`` and
+    ``media_type`` value inside the vault vocabularies.
+5.  **Stale content** -- a knowledge page older than :data:`STALE_DAYS`, an open action
+    past its ``due_date``, and a media item still cold after :data:`MEDIA_STALE_DAYS`.
+6.  **Contradictions** -- a page with ``contested: true`` or a non-empty
     ``contradictions:`` list.
 7.  **Source drift** -- a ``raw/`` page whose recomputed body sha256 differs from its
-    stored ``sha256`` frontmatter.
-8.  **Quality signals** -- ``confidence: low`` pages and single-source pages with no
-    ``confidence``.
-9.  **Page size** -- curated pages whose body exceeds :data:`PAGE_SIZE_LIMIT` lines.
-10. **Tag audit** -- every tag in use must appear in ``SCHEMA.md``'s
-    ``## Tag Taxonomy`` section.
-11. **Image hygiene** -- orphan binaries in ``raw/assets/`` with no embed anywhere,
-    pages embedding a missing asset, and surviving per-image sidecar ``.md`` files.
-12. **Log rotation** -- a ``log.md`` with more than :data:`LOG_ROTATE_LIMIT` entries.
-13. **Report + log** -- group by severity and append one ``log.md`` line.
+    stored one.
+8.  **Quality signals** -- ``confidence: low``, and a single-source page carrying no
+    ``confidence`` at all.
+9.  **Page size** -- a body over :data:`PAGE_SIZE_LIMIT` lines.
+10. **Tag audit** -- a tag in use that is absent from ``SCHEMA.md``'s taxonomy.
+11. **Image hygiene** -- an orphan binary in ``raw/assets/``, a page embedding a missing
+    asset, and a surviving per-image sidecar.
+12. **Log rotation** -- a ``log.md`` over :data:`LOG_ROTATE_LIMIT` entries.
+13. **Report and log** -- group by severity and append one ``log.md`` line.
 
-All folder / type / slug contract constants AND the status / kind / priority /
-media_type vocabularies are imported from :mod:`thoth.vault` so the closed-surface
-contract stays single-sourced (ADR 0013). The only injected non-determinism is
-``today`` (a :class:`~datetime.date`) so the stale / overdue / media-cold windows are
-reproducible under a frozen clock.
-
-Only the standard library plus ``frontmatter`` / ``yaml`` and import-light ``thoth``
-modules (the frozen :class:`thoth.config.Config` / :class:`thoth.vault.Vault`, the
-shared time/field helpers, and :mod:`thoth.summary` for the media-status vocabulary)
-are imported at module level, so importing this package at pytest collection is always
-CI-safe.
+Every folder, type and slug constant and every status, priority and media_type
+vocabulary is imported from :mod:`thoth.vault`, so the closed-surface contract stays
+single-sourced (ADR 0013). The only injected non-determinism is ``today``, so the stale,
+overdue and media-cold windows are reproducible under a frozen clock. Only the standard
+library plus ``frontmatter``, ``yaml`` and import-light ``thoth`` modules are imported
+at module level, so importing this package at pytest collection is always CI-safe.
 """
 
 from thoth._time import LONDON
@@ -104,12 +91,10 @@ __all__ = [
     "extract_wiki_embeds",
 ]
 
-# CURATED_DIRS / ACTIONABLE_DIRS are the canonical folder vocabulary owned by
-# thoth.vault (ADR 0005); they are imported above and re-exported here so the __all__
-# surface and lint consumers derive the same list instead of restating it.
-# "Curated page" means a lifecycle-free reference page in one of the CURATED_DIRS
-# folders (entities/notes/memories): the orphan, index-completeness, page-size and
-# quality-signal checks scope to these. The ACTIONABLE_DIRS pages (actions/, which also
-# holds the media queue as actions with kind: media) are exempt from the orphan /
-# index-completeness checks (Bases dashboards surface them) but still carry the common
-# frontmatter contract + summary gloss and get the overdue / cold-media checks instead.
+# CURATED_DIRS and ACTIONABLE_DIRS are thoth.vault's canonical folder vocabulary (ADR
+# 0005), re-exported here so lint consumers derive the same list rather than restate it.
+# A curated page is a lifecycle-free reference page under CURATED_DIRS, which the
+# orphan, index-completeness, page-size and quality-signal checks scope to. The
+# ACTIONABLE_DIRS pages are exempt from those two because Bases dashboards surface them,
+# but they still carry the frontmatter contract and summary gloss and get the overdue
+# and cold-media checks instead

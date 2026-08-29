@@ -17,9 +17,9 @@ SERVER_NAME: str = "thoth"
 DEFAULT_MCP_HOST: str = "127.0.0.1"
 """Default HTTP bind address: loopback only (issue #103).
 
-The HTTP transport binds loopback by design -- network exposure is delegated to a
-cloudflared tunnel + Cloudflare Access in front of it (ADR 0011), never a raw
-``0.0.0.0`` socket. Override with ``--host`` only when you understand the consequence.
+Network exposure is delegated to a cloudflared tunnel and Cloudflare Access in front of
+it (ADR 0011), never a raw ``0.0.0.0`` socket. Override with ``--host`` only when you
+understand the consequence.
 """
 
 DEFAULT_MCP_PORT: int = 8765
@@ -46,12 +46,9 @@ class ToolResult:
     """The structured outcome of a ``pkm_*`` tool, rendered by the MCP host.
 
     Attributes:
-        ok: ``True`` on success, ``False`` when a typed collaborator error was caught
-            and surfaced (the tool never raises into the MCP runtime).
-        text: A Markdown reply (MCP style: ``[label](obsidian-uri)`` plus the plain
-            vault path and the ``[[wikilink]]``) suitable for a chat host to display.
-        data: A structured echo (paths, ``used_web`` and the like) for programmatic
-            callers that want the fields rather than the rendered prose.
+        ok: False when a typed collaborator error was caught, since a tool never raises
+        text: A Markdown reply for a chat host to display, link plus path plus wikilink
+        data: A structured echo of the paths and flags, for programmatic callers
     """
 
     ok: bool
@@ -63,19 +60,17 @@ class ToolResult:
 class ToolContext:
     """The single injection bundle the ``pkm_*`` tools delegate through.
 
-    Holds the frozen config and the already-constructed Phase 0-3 collaborators. The
-    tool functions take this explicitly (the FastMCP wrappers in :func:`build_server`
-    close over one instance and forward the same arguments), so each tool is a pure,
-    testable delegation with no global state.
+    Holds the frozen config and the already-constructed collaborators. The tool
+    functions take this explicitly, and the FastMCP wrappers in :func:`build_server`
+    close over one instance, so each tool is a pure testable delegation with no global
+    state.
 
     Attributes:
-        config: The frozen runtime configuration.
-        vault: The path-confined read/write vault facade (the only disk surface).
-        ingestor: The constructed ingest pipeline (``pkm_ingest``).
-        query_engine: The vault-only retrieval engine (``pkm_search``).
-        git: The vault git two-way sync used to commit+push the disk writes the
-            write tools make (``pkm_write_page``), staging exactly the path each
-            wrote (mirrors ``pkm_ingest``'s commit discipline, issue #85).
+        config: The frozen runtime configuration
+        vault: The path-confined read/write facade, the only disk surface
+        ingestor: The constructed ingest pipeline, behind ``pkm_ingest``
+        query_engine: The vault-only retrieval engine, behind ``pkm_search``
+        git: The two-way sync that commits each write tool's path (issue #85)
     """
 
     config: Config
@@ -86,7 +81,7 @@ class ToolContext:
 
 
 def _reject_outside(path: str) -> ToolResult:
-    """Build the path-confinement rejection for a path outside the vault root."""
+    """Builds the rejection for a path that resolves outside the vault root."""
     return ToolResult(
         ok=False,
         text=f"Path is outside the vault and was rejected: `{path}`",

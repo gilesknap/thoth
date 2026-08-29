@@ -1,8 +1,8 @@
 """Shared frontmatter field coercions (pure, total) used by summary and lint.
 
-Stdlib-only leaf module holding the tolerant scalar coercions both vault scanners
-apply to already-parsed frontmatter metadata. Every helper is total: a malformed
-value degrades to the neutral result (``None`` / ``[]`` / ``False``), never raises.
+Stdlib-only leaf module holding the tolerant scalar coercions both vault scanners apply
+to already-parsed frontmatter metadata. Every helper is total: a malformed value
+degrades to the neutral result (``None`` / ``[]`` / ``False``), never raises.
 """
 
 from __future__ import annotations
@@ -13,10 +13,9 @@ __all__: list[str] = []
 
 
 def _str_field(value: object) -> str | None:
-    """Return ``value`` as a stripped string, or ``None`` when absent/blank.
+    """Coerces ``value`` to a stripped string, or ``None`` when absent or blank.
 
-    A real string is stripped (blank -> ``None``), ``None`` stays ``None``, and any
-    other scalar is stringified.
+    ``None`` stays ``None`` and any other scalar is stringified.
     """
     if isinstance(value, str):
         stripped = value.strip()
@@ -27,7 +26,7 @@ def _str_field(value: object) -> str | None:
 
 
 def _page_tags(meta: dict[str, object]) -> list[str]:
-    """Return a page's ``tags`` frontmatter as a list of trimmed strings."""
+    """Returns a page's ``tags`` frontmatter as a list of trimmed strings."""
     raw = meta.get("tags")
     if isinstance(raw, list):
         return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
@@ -37,7 +36,7 @@ def _page_tags(meta: dict[str, object]) -> list[str]:
 
 
 def _is_truthy(value: object) -> bool:
-    """Return ``True`` for boolean ``True`` or a truthy string (true / yes / 1)."""
+    """True for boolean ``True`` or for a truthy string (true / yes / 1)."""
     if value is True:
         return True
     if isinstance(value, str):
@@ -46,13 +45,11 @@ def _is_truthy(value: object) -> bool:
 
 
 def _parse_date(value: object) -> date | None:
-    """Coerce a frontmatter date-ish value to a :class:`date`, else ``None``.
+    """Coerces a frontmatter date-ish value to a :class:`date`, else ``None``.
 
-    Accepts a real :class:`~datetime.date` or :class:`~datetime.datetime` (YAML often
-    parses bare ``YYYY-MM-DD`` to a ``date``), and a string in ``YYYY-MM-DD`` or
-    ``YYYY-MM-DD HH:MM`` form (the trailing time is dropped). Any other value, an empty
-    string, or an unparseable string yields ``None`` -- a malformed date is treated as
-    "no date" and never raises.
+    Accepts a real date or datetime, since YAML parses a bare ``YYYY-MM-DD`` to a date,
+    and a string in ``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM`` form with the time dropped.
+    Anything else is treated as "no date" and never raises.
     """
     if isinstance(value, datetime):
         return value.date()

@@ -1,9 +1,9 @@
 """Shared types, constants, and the package logger of the query passes.
 
 The result/citation dataclasses, the error, the retrieval-method vocabulary, and the
-tuning constants live here so the pass submodules of :mod:`thoth.query` stay
-cycle-free. Only the standard library plus ``thoth.vault`` is imported, preserving the
-package's import-purity contract.
+tuning constants live here so the pass submodules of :mod:`thoth.query` stay cycle-free.
+Only the standard library plus ``thoth.vault`` is imported, preserving the package's
+import-purity contract.
 """
 
 from __future__ import annotations
@@ -15,23 +15,20 @@ from thoth.vault import REFERENCE_TYPES
 
 logger = logging.getLogger("thoth.query")
 
-# Folders searched for lexical/structural retrieval. Lexical retrieval spans the
-# reference folders PLUS actions/, so a filed action page is reachable from knowledge
-# Q&A (issue #106). raw/ stays excluded: raw sources are reached via their owning page's
-# wikilinks, not scanned directly.
+# Lexical retrieval spans the reference folders plus actions/, so a filed action page
+# is reachable from knowledge Q&A (issue #106). raw/ stays excluded because raw sources
+# are reached through their owning page's wikilinks rather than scanned
 SEARCHED_DIRS: tuple[str, ...] = ("entities", "notes", "memories", "actions")
 """Top-level vault folders scanned by :meth:`QueryEngine.grep` (reference + actions)."""
 
-# Page-type scope for the knowledge-Q&A semantic-recall pass (issue #106): the reference
-# types plus ``action``, so a filed action page can also surface as a recall hit on the
-# knowledge-Q&A path. recall_paths' own default stays REFERENCE_TYPES so the actionable
-# dashboard path and any explicit-typed caller keep their existing scope.
+# The reference types plus action, so a filed action page can surface as a recall hit
+# on the knowledge-Q&A path (issue #106). recall_paths' own default stays
+# REFERENCE_TYPES, so the dashboard path and any explicit-typed caller keep their scope
 RECALL_QA_TYPES: frozenset[str] = REFERENCE_TYPES | frozenset({"action"})
 """Page-type scope for the knowledge-Q&A recall pass (reference types + ``action``)."""
 
 # Retrieval-method tags carried in a page's provenance (issue #143). A page can be
-# surfaced by more than one method (e.g. found by grep AND recall), so provenance holds
-# the *set* of methods that produced it; the order they are reported in is fixed below.
+# surfaced by more than one method, so provenance holds the set that produced it
 METHOD_GREP: str = "grep"
 """Provenance tag: the page was surfaced by the lexical grep pass."""
 METHOD_WIKILINK: str = "wikilink"
@@ -39,34 +36,29 @@ METHOD_WIKILINK: str = "wikilink"
 METHOD_RECALL: str = "recall"
 """Provenance tag: the page was surfaced by the semantic Hindsight recall pass."""
 
-# Stable display/report order for the provenance method tags (issue #143): grep first,
-# then wikilink, then recall (cheapest-discovered first), so a page's methods tuple
-# reads the same regardless of the set's iteration order.
+# Cheapest-discovered first, so a page's methods tuple reads the same however the set
+# happens to iterate
 _METHOD_ORDER: tuple[str, ...] = (METHOD_GREP, METHOD_WIKILINK, METHOD_RECALL)
 
-# The standard Reciprocal Rank Fusion damping constant (issue #143). RRF fuses several
-# ranked lists by scoring each item ``Σ 1 / (RRF_K + rank)`` over the lists it appears
-# in (rank 0-based); the large constant (60 is the value from the original
-# Cormack/Clarke/Buettcher RRF paper) keeps the score gap between adjacent ranks gentle,
-# so a page that appears in *both* sources reliably outscores one that tops only a
-# single source. A recall-only hit at rank 0 still scores ``1 / RRF_K`` -- enough to
-# earn a cited slot even when the structural source already filled ``max_pages``.
+# RRF fuses ranked lists by scoring each item as the sum of 1 / (RRF_K + rank) over the
+# lists it appears in. 60 is the constant from the original Cormack, Clarke and
+# Buettcher paper, and it keeps the gap between adjacent ranks gentle, so a page in both
+# sources reliably outscores one that tops a single source. A recall-only hit at rank 0
+# still scores 1 / RRF_K, enough for a cited slot when grep already filled max_pages
 RRF_K: int = 60
-"""Reciprocal Rank Fusion damping constant (the standard 60); see the blend in ``answer``."""  # noqa: E501
+"""Reciprocal Rank Fusion damping constant, the standard 60 (issue #143)."""
 
-# Cap on bytes read per page during grep so a pathological file cannot blow up a scan.
+# Cap on bytes read per page so a pathological file cannot blow up a grep scan
 _MAX_GREP_BYTES: int = 1_000_000
 
-# grep token-match placement weights (issue #96): a token hitting the high-weight
-# haystack (the filename + the page's frontmatter title/summary gloss) outscores one
-# hitting only the body, so for the SAME token count a title match ranks above a
-# body-only match. These weights only ever break ties *within* a token-count tier --
-# the ranking key is (distinct tokens matched, placement-weight sum), so the count of
-# matched words always dominates and more words beats a single better-placed one.
+# A token hitting the filename, title or summary gloss outscores one hitting only the
+# body, so at the same token count a title match ranks higher (issue #96). The ranking
+# key is (distinct tokens matched, weight sum), so these weights only break ties within
+# a token-count tier and more matched words always wins
 _HIGH_WEIGHT: int = 2
 _LOW_WEIGHT: int = 1
 
-# Excerpt length used for the deterministic (no-LLM) answer fallback.
+# Excerpt length for the deterministic answer fallback, used when no LLM is injected
 _EXCERPT_CHARS: int = 600
 
 
@@ -78,11 +70,11 @@ class QueryError(Exception):
 class Citation:
     """Harness-built, unfabricable handle for one cited vault page.
 
-    Every field is derived from a real, path-confined vault page: ``path`` has passed
+    Every field derives from a real, path-confined vault page: ``path`` has passed
     :meth:`~thoth.vault.Vault.resolve`, ``obsidian_uri`` comes from
-    :meth:`~thoth.vault.Vault.obsidian_uri`, ``wikilink`` is derived from the page's
-    actual filename, and ``snippet`` is the page's own ``summary:`` frontmatter gloss
-    (issue #72 / ADR 0008) when it carries one. The model never supplies any of these.
+    :meth:`~thoth.vault.Vault.obsidian_uri`, ``wikilink`` comes from the page's actual
+    filename, and ``snippet`` is the page's own ``summary:`` gloss (ADR 0008) when it
+    carries one. The model never supplies any of these.
     """
 
     path: str
@@ -99,13 +91,12 @@ class Citation:
 
 @dataclass(frozen=True, slots=True)
 class PageProvenance:
-    """How one cited page was surfaced: its retrieval methods + final rank (issue #143).
+    """How one cited page was surfaced: its methods and final rank (issue #143).
 
-    A page can be produced by more than one retrieval source (e.g. grep AND recall both
-    name it), so ``methods`` is the full set of tags that surfaced it, reported in the
-    fixed :data:`_METHOD_ORDER` (grep, wikilink, recall). ``rank`` is the page's 1-based
-    position in the cited (consulted) set after the RRF blend -- so a list of
-    ``PageProvenance`` reads as the final retrieval order with its attribution attached.
+    A page can be produced by more than one retrieval source, so ``methods`` is the full
+    set of tags that surfaced it, reported in the fixed :data:`_METHOD_ORDER`. ``rank``
+    is the page's 1-based position in the consulted set after the RRF blend, so a list
+    of these reads as the final retrieval order with its attribution attached.
     """
 
     path: str
@@ -118,27 +109,24 @@ class PageProvenance:
 
 @dataclass(frozen=True, slots=True)
 class QueryResult:
-    """A composed answer plus its harness-attached citations and per-page provenance.
+    """A composed answer with its harness-attached citations and provenance.
 
-    ``citations`` is the **used** subset: when an LLM composes the prose it ends its
-    reply with a ``USED: 1, 3`` line naming the candidate pages that directly supported
-    the answer, and only those are kept (issue #34) so the Slack ``Sources:`` list
-    reflects what the answer actually drew on, not the whole retrieval candidate set. A
-    missing/garbled ``USED:`` line falls back to keeping every consulted page (the
-    pre-#34 behaviour), and the deterministic (no-LLM) path keeps its single top page.
+    ``citations`` is the used subset. When an LLM composes the prose it ends its reply
+    with a ``USED: 1, 3`` line naming the candidates that directly supported the answer,
+    and only those are kept (issue #34), so the Slack ``Sources:`` list reflects what
+    the answer drew on rather than the whole candidate set. A missing or garbled
+    ``USED:`` line falls back to keeping every consulted page, and the deterministic
+    path keeps its single top page.
 
-    ``provenance`` (issue #143) records, for **every consulted (cited) page** in final
-    rank order, which retrieval methods surfaced it (a :class:`PageProvenance` per
-    page). The two retrieval sources -- structural (grep + wikilinks) and semantic
-    recall -- are blended by Reciprocal Rank Fusion (:data:`RRF_K`), so a page may carry
-    more than one method, and provenance is the record of that blend: it covers the
-    consulted set (which may be a superset of the ``USED:`` ``citations``).
+    ``provenance`` records, for every consulted page in final rank order, which
+    retrieval methods surfaced it (issue #143). The structural and semantic sources are
+    blended by Reciprocal Rank Fusion, so a page may carry more than one method, and the
+    consulted set this covers may be a superset of the used ``citations``.
 
-    ``consulted_count`` records how many candidate pages were retrieved and offered to
-    the model *before* the ``USED:`` filter, so an operator log (issue #52) can compare
-    consulted-vs-used recall. ``used_recall`` records whether the (more expensive)
-    Hindsight semantic pass contributed to the answer: it is ``True`` when a
-    recall-surfaced page lands in the ``USED:`` subset, ``False`` otherwise.
+    ``consulted_count`` is how many candidates were offered to the model before the
+    ``USED:`` filter, so an operator log can compare consulted against used (issue #52).
+    ``used_recall`` is True when a recall-surfaced page lands in the used subset,
+    recording whether the more expensive Hindsight pass contributed.
     """
 
     answer: str

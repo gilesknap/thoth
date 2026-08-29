@@ -18,11 +18,9 @@ from thoth.vault import (
 from .client import SchemaValidationError
 from .contract import _VALID_LOG_ACTIONS
 
-# Optional enum-valued frontmatter fields the repair loop can self-correct on
-# (ADR 0013). ``personal``/``summary`` are deliberately NOT hard-required here:
-# the curate prompt asks for them, lint enforces them, but a plan omitting them
-# must not be rejected (write_page defaults personal; summary arrives via the
-# page-level plan field).
+# The enum-valued frontmatter fields the repair loop can self-correct on (ADR 0013).
+# Personal and summary are deliberately not hard-required: the prompt asks for them and
+# lint enforces them, but a plan omitting them must not be rejected
 _ENUM_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("status", ACTION_STATUS_VOCAB),
     ("priority", PRIORITY_VOCAB),
@@ -33,7 +31,7 @@ _ENUM_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 def _check_frontmatter(
     frontmatter: object, folder: str, where: str, problems: list[str]
 ) -> None:
-    """Validate one page's frontmatter against the common contract and folder x type."""
+    """Validates one page's frontmatter against the contract and its folder type."""
     if not isinstance(frontmatter, dict):
         problems.append(f"{where}: 'frontmatter' must be an object")
         return
@@ -101,33 +99,30 @@ def _check_page(page: object, idx: int, problems: list[str]) -> None:
     if summary is not None and not isinstance(summary, str):
         problems.append(f"{where}: 'summary' must be a string")
 
-    # No link-count gate here: the OKF links live in the ``body`` (standard markdown
-    # ``[text](path.md)``, issue #189), the prompt asks for >= 2, and the lint
-    # orphan/broken-link checks enforce the graph after the fact. The retired
-    # ``wikilinks`` plan array was never written to disk.
+    # No link-count gate: the OKF links live in the body as standard markdown (#189),
+    # the prompt asks for two, and lint enforces the graph after the fact
 
     _check_frontmatter(page.get("frontmatter"), folder, where, problems)
 
 
 def validate_file_plan(obj: dict[str, Any]) -> None:
-    """Validate a file-plan against the vault contract.
+    """Validates a file plan against the vault contract.
 
-    Reuses :mod:`thoth.vault`'s validators so a passing plan is guaranteed to survive
+    Reuses :mod:`thoth.vault`'s validators, so a passing plan is guaranteed to survive
     :meth:`thoth.vault.Vault.write_page`. Each ``pages[*]`` entry is checked for a known
-    ``action``, a valid ``slug``, an allowed ``folder`` x ``type`` pairing, the required
-    common frontmatter fields (plus ``status`` on action and media pages, with
-    ``status``/``priority``/``media_type`` values enum-checked against the
-    vault vocabularies -- the repair loop self-corrects on the listed values), a valid
-    ``source`` and a string ``summary`` when present. Any ``log`` block is shape-checked
-    too. (The page body carries the OKF ``[text](path.md)`` links; their count is not
-    gated here -- the prompt asks for >= 2 and lint enforces the link graph.)
+    ``action``, a valid ``slug``, an allowed folder and type pairing, the required
+    common frontmatter fields plus ``status`` on action and media pages, enum-checked
+    ``status``, ``priority`` and ``media_type`` values that the repair loop can
+    self-correct on, a valid ``source``, and a string ``summary`` when present.
+
+    Any ``log`` block is shape-checked too. The body's links are not counted here: the
+    prompt asks for two and lint enforces the graph.
 
     Args:
-        obj: The decoded file-plan object.
+        obj: The decoded file-plan object
 
     Raises:
-        SchemaValidationError: listing every problem found; the message names the
-            offending field(s).
+        SchemaValidationError: Listing every problem found, naming the offending fields
     """
     problems: list[str] = []
 
