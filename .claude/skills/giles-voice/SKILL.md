@@ -147,11 +147,15 @@ Leave LLM-facing prompt strings and tool-description docstrings alone, because a
 
 `scripts/setdoc.py <path> <qualname>` replaces one docstring with the text on stdin, taking `<module>` for the module's own. It adds the indentation and the quotes, and it finds the docstring by walking the AST rather than by matching its text, so a rewrite cannot land on the wrong copy of a repeated line.
 
+`scripts/longblocks.py [--show] [path]...` reports every docstring paragraph over three sentences and exits non-zero, skipping lists, code blocks and the Google sections. It is the only mechanical check on the paragraph rule, because a paragraph is too long only in the reading and no test notices. Run it before you hand the work over.
+
 `scripts/codesame.py <ref> <path>...` strips docstrings and attribute docstrings from both sides and compares the ASTs, so "nothing behavioural changed" is proved rather than asserted. Run it on every file you touch.
 
 `scripts/degoogle.py <path>...` normalises what you wrote: it matches each function's `Args:` and `Returns:` to the ref's own layout, re-wraps prose to the column limit, and refuses to touch a `.tool`-decorated docstring. It glues nothing together - every block you wrote stays its own block, and a list, a fenced code block or a reST literal block is left verbatim with its line breaks and hanging indent intact. A function absent from the ref is new, so its sections are left alone, and a file absent from the ref is skipped entirely. It is idempotent, so re-running it is free.
 
-None of them replaces reading the file. The last two stop the failures that judgement alone did not.
+None of them replaces reading the file. Each exists because judgement alone did not hold: a hand-rolled pass altered four model-facing tool descriptions, a prose rule flattened 28 lists, and a collapse rule buried 96 over-long paragraphs.
+
+Two mechanical traps to know before you start. A docstring's summary line has to fit the column limit **including its indent and its opening quotes**, and no script can wrap it for you, so keep a method summary under about 70 characters. And when you write a list, wrap its items for the indent that docstring actually sits at: text wrapped for a module docstring overflows once it is nested inside a method.
 
 ## Before and after
 
