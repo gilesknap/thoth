@@ -1,4 +1,4 @@
-"""The :class:`Reindexer` walk/retain/prune engine over the canonical vault."""
+"""The :class:`Reindexer` walk, retain and prune engine over the canonical vault."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ from ._model import (
 
 
 class Reindexer:
-    """Incremental + full-rebuild reindexer over the canonical vault.
+    """Incremental and full-rebuild reindexer over the canonical vault.
 
     Construct it from the frozen :class:`~thoth.config.Config`, a real
-    :class:`~thoth.vault.Vault` (for the root walk and the body-hash key), and a
-    :class:`~thoth.hindsight.Hindsight` (for ``retain``/``forget`` and the full-rebuild
-    :meth:`~thoth.hindsight.Hindsight.reset_bank` wipe). Every Hindsight operation goes
-    through that injected wrapper, so tests substitute a fake.
+    :class:`~thoth.vault.Vault` for the root walk and the body-hash key, and a
+    :class:`~thoth.hindsight.Hindsight` for ``retain``, ``forget`` and the full-rebuild
+    :meth:`~thoth.hindsight.Hindsight.reset_bank` wipe. Every Hindsight operation goes
+    through that injected wrapper, so a test substitutes a fake.
     """
 
     def __init__(
@@ -44,16 +44,17 @@ class Reindexer:
         """Build a :class:`Reindexer`.
 
         Args:
-            config: The frozen runtime configuration (supplies ``thoth_home`` for the
-                manifest path).
-            vault: The path-confined vault facade; provides the root to walk and the
+            config: The frozen runtime configuration, supplying ``thoth_home`` for the
+                manifest path.
+            vault: The path-confined vault facade, providing the root to walk and the
                 body-hash idempotency key.
-            hindsight: The semantic-index wrapper used for ``retain``, ``forget``, and
+            hindsight: The semantic-index wrapper used for ``retain``, ``forget`` and
                 the full-rebuild ``reset_bank`` wipe.
-            markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired, a
-                successful :meth:`run` records a ``reindex`` marker so the daily
-                heartbeat can report "last reindex at T" (issue #15). ``None`` (the
-                default) disables recording, so existing callers/tests are unaffected.
+            markers: An optional liveness :class:`~thoth.state.MarkerStore`. When
+                wired, a successful :meth:`run` records a ``reindex`` marker, so the
+                daily heartbeat can report "last reindex at T" (issue #15). ``None``,
+                the default, disables recording, leaving callers and tests
+                unaffected.
         """
         self._config = config
         self._vault = vault
@@ -68,13 +69,13 @@ class Reindexer:
     def body_hash(self, markdown: str) -> str:
         """Return the body SHA-256 idempotency key for a page's full text.
 
-        The leading frontmatter block is stripped (:func:`_split_body`) and the
-        body is hashed with :meth:`thoth.vault.Vault.body_sha256`, so the key is
-        identical to ``Vault.body_sha256(read_page(...).body)`` and is invariant under
-        a frontmatter ``updated:`` bump.
+        :func:`_split_body` strips the leading frontmatter block and
+        :meth:`thoth.vault.Vault.body_sha256` hashes the body, so the key is identical
+        to ``Vault.body_sha256(read_page(...).body)`` and is invariant under a
+        frontmatter ``updated:`` bump.
 
         Args:
-            markdown: The full page text (frontmatter + body).
+            markdown: The full page text, frontmatter and body.
 
         Returns:
             The hex SHA-256 of the page body.
@@ -82,13 +83,14 @@ class Reindexer:
         return self._vault.body_sha256(_split_body(markdown))
 
     def load_manifest(self) -> dict[str, dict[str, str]]:
-        """Load the body-hash manifest, treating a missing/corrupt file as empty.
+        """Load the body-hash manifest, treating a missing or corrupt file as empty.
 
         Returns:
-            A mapping of vault-relative path -> ``{"sha256": ..., "retained_at": ...}``.
-            A missing file, an empty file, or any JSON/shape error yields ``{}`` (the
-            index is disposable, so a damaged manifest just forces a full re-walk rather
-            than crashing).
+            A mapping from vault-relative path to
+            ``{"sha256": ..., "retained_at": ...}``. A missing file, an empty file, or
+            any JSON or shape error yields ``{}``. The index is disposable, so a
+            damaged
+            manifest merely forces a full re-walk rather than crashes.
         """
         path = self.manifest_file
         if not path.is_file():
@@ -111,7 +113,8 @@ class Reindexer:
         """Atomically write the manifest, creating parent directories as needed.
 
         Args:
-            manifest: The path -> ``{"sha256", "retained_at"}`` mapping to persist.
+            manifest: The mapping from path to ``{"sha256", "retained_at"}`` to
+        persist.
         """
         path = self.manifest_file
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,14 +126,12 @@ class Reindexer:
     def reset_bank(self) -> None:
         """Wipe the Hindsight bank for a full rebuild.
 
-        Delegates to :meth:`~thoth.hindsight.Hindsight.reset_bank`, which issues a
-        ``DELETE`` of the bank: it removes the bank and all its data, and the next
-        re-retain auto-recreates it. A failed wipe is a hard error because a full
-        rebuild must not re-retain on top of stale facts.
+        Delegates to :meth:`~thoth.hindsight.Hindsight.reset_bank`. A failed wipe is a
+        hard error, because a full rebuild must not re-retain on top of stale facts.
 
         Raises:
-            ReindexError: if the wipe fails (wrapping
-                :class:`~thoth.hindsight.HindsightError`).
+            ReindexError: when the wipe fails, wrapping
+                :class:`~thoth.hindsight.HindsightError`.
         """
         try:
             self._hindsight.reset_bank()
@@ -140,25 +141,25 @@ class Reindexer:
     def run(self, *, full_rebuild: bool = False) -> ReindexResult:
         """Reindex the vault, retaining changed pages and pruning deleted ones.
 
-        On ``full_rebuild`` the manifest is ignored, :meth:`reset_bank` is run first,
-        and every live page is re-retained. Otherwise pages whose body hash matches the
-        manifest are skipped with zero embedding work. For every retained page the prior
-        facts are forgotten first (forget-then-retain, so a body edit replaces rather
-        than duplicates), then retained with ``tags=[page_type, rel]``. After the walk,
-        manifest entries for pages no longer on disk are forgotten and dropped.
+        On ``full_rebuild`` the manifest is ignored, :meth:`reset_bank` runs first, and
+        every live page is re-retained. Otherwise a page whose body hash matches the
+        manifest is skipped with zero embedding work. For every retained page the prior
+        facts are forgotten first, so a body edit replaces rather than duplicates, then
+        retained with ``tags=[page_type, rel]``. After the walk, a manifest entry for a
+        page no longer on disk is forgotten and dropped.
 
         Args:
-            full_rebuild: When ``True``, wipe the bank and re-retain every live page
-                even if its body hash is unchanged.
+            full_rebuild: When ``True``, wipes the bank and re-retains every live page
+                even when its body hash is unchanged.
 
         Returns:
-            A :class:`ReindexResult` with the changed/skipped/pruned/live counts.
+            A :class:`ReindexResult` with the changed, skipped, pruned and live counts.
 
         Raises:
-            ReindexError: if :meth:`reset_bank` fails, or a checked
+            ReindexError: when :meth:`reset_bank` fails, or a checked
                 :meth:`~thoth.hindsight.Hindsight.retain` raises
-                :class:`~thoth.hindsight.HindsightError` (the page stays in the vault
-                and its manifest entry is not advanced).
+                :class:`~thoth.hindsight.HindsightError`. The page then stays in the
+                vault and its manifest entry is not advanced.
         """
         manifest = {} if full_rebuild else self.load_manifest()
         if full_rebuild:
@@ -203,11 +204,11 @@ class Reindexer:
         )
 
     def _record_marker(self) -> None:
-        """Record the ``reindex`` liveness marker (best-effort, issue #15).
+        """Record the ``reindex`` liveness marker, best-effort (issue #15).
 
-        A reindex that completed the walk + manifest write is a live signal; a failure
-        to write the disposable marker DB must not turn a successful reindex into an
-        error, so any error is swallowed.
+        A reindex that completed the walk and the manifest write is a live signal, and a
+        failure to write the disposable marker database must not turn a successful
+        reindex into an error, so any error is swallowed.
         """
         if self._markers is None:
             return
@@ -221,10 +222,10 @@ class Reindexer:
     def _iter_pages(self) -> list[tuple[str, str]]:
         """Walk the indexed folders, yielding ``(vault_rel_path, text)`` per page.
 
-        Walks each :data:`INDEXED_DIRS` folder recursively for ``*.md`` files,
-        skipping :data:`SKIP_FILES` by basename, and returns deterministic, sorted
-        ``(rel, text)`` pairs. Folders that do not exist are silently skipped (a fresh
-        vault may lack some). The relative path uses POSIX separators so it matches the
+        Walks each :data:`INDEXED_DIRS` folder recursively for ``*.md`` files, skipping
+        :data:`SKIP_FILES` by basename, and returns deterministic, sorted ``(rel,
+        text)`` pairs. A folder that does not exist is silently skipped, since a fresh
+        vault may lack some. The relative path uses POSIX separators, so it matches the
         in-band ``SOURCE:`` sentinel and the manifest keys on every platform.
 
         Returns:
@@ -250,14 +251,15 @@ class Reindexer:
         """Forget any stale facts for ``rel`` then retain the current body.
 
         Args:
-            rel: The vault-relative page path (the Hindsight reference / manifest key).
-            markdown: The full page text (supplies the :func:`page_type` retain tag).
-            body: The page body with the leading frontmatter already stripped
-                (:func:`_split_body`), so only the body is retained, matching
-                the body-hash idempotency key.
+            rel: The vault-relative page path, which is both the Hindsight reference and
+                the manifest key.
+            markdown: The full page text, supplying the :func:`page_type` retain tag.
+            body: The page body with the leading frontmatter already stripped by
+                :func:`_split_body`, so only the body is retained, matching the
+                body-hash idempotency key.
 
         Raises:
-            ReindexError: if the checked retain raises
+            ReindexError: when the checked retain raises
                 :class:`~thoth.hindsight.HindsightError`.
         """
         self._hindsight.forget(rel)
@@ -276,7 +278,7 @@ class Reindexer:
             seen: The set of vault-relative paths observed on this walk.
 
         Returns:
-            The number of pruned (forgotten + removed) manifest entries.
+            The number of manifest entries pruned, meaning forgotten and removed.
         """
         gone = [rel for rel in manifest if rel not in seen]
         for rel in gone:
