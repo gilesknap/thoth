@@ -29,7 +29,7 @@ The registers contradict each other on person and contractions, so picking the w
 
 ## The core
 
-**One idea per paragraph, and the paragraph is one or two sentences.** Sentences run 14 to 15 words. Docs are tightest at a median of 1 sentence, and the talk runs looser at 2. This is a PROSE rule: it governs the spoken and docs registers and does not reach inside a docstring.
+**One idea per paragraph, and the paragraph is one or two sentences.** Sentences run 14 to 15 words. Docs are tightest at a median of 1 sentence, and the talk runs looser at 2. The one-or-two-sentence target is a prose rule and governs the spoken and docs registers. A docstring may run looser, but the three-sentence ceiling in the hand-over check holds everywhere.
 
 **No em dashes.** Zero across all three corpora, roughly 20,000 words. This is the loudest tell that Giles did not write something, so fix it first.
 
@@ -94,7 +94,9 @@ Pages follow Diataxis: tutorials, how-tos, explanations, reference.
 
 The narrative is the part that bloats, so that is where you cut. Never economise by deleting a docstring or an `Args:` block.
 
-**Docstring prose is one block.** Blank lines are only 7% of docstring lines in the corpus and just 18% of docstrings carry a second paragraph, so reserve a break for a genuinely separate point. Splitting every idea out is a docs-register habit that adds lines inside a docstring without removing words.
+**A short docstring is one block. A long one still breaks by idea.** Blank lines are only 7% of docstring lines in the corpus and just 18% carry a second paragraph, but that corpus has a 17-word median, so most of its docstrings have nothing to break. The measurement says docstrings are short, not that a long one may be a wall.
+
+So both failures are real, and the cure for each is different. Splitting every idea out is a docs-register habit that adds lines without removing words. Gluing four ideas together is worse, and it is what an earlier version of this skill did: it produced a 254-word, 15-sentence paragraph in one module docstring. When a docstring needs more than three sentences in a row, the fix is almost always fewer words, not fewer blank lines.
 
 **A list is not prose, and it keeps its bullets.** That measurement comes from function docstrings, which is where it holds. A module docstring that enumerates a fixed set the reader will scan or count - the 13 lint checks, the 7 tools a server registers, the ordered passes of a pipeline - is clearer numbered than as a paragraph of clauses, and flattening one destroys the count. So keep the list, and cut the words inside each item instead. Reach for prose when the "items" are really sentences of argument that happen to have been bulleted.
 
@@ -147,7 +149,7 @@ Leave LLM-facing prompt strings and tool-description docstrings alone, because a
 
 `scripts/codesame.py <ref> <path>...` strips docstrings and attribute docstrings from both sides and compares the ASTs, so "nothing behavioural changed" is proved rather than asserted. Run it on every file you touch.
 
-`scripts/degoogle.py <path>...` normalises what you wrote: it matches each function's `Args:` and `Returns:` to the ref's own layout, collapses adjacent prose paragraphs into one block, and refuses to touch a `.tool`-decorated docstring. A bulleted or numbered block survives verbatim, keeping its line breaks and its hanging indent, so the enumerations above are safe to write. A function absent from the ref is new, so its sections are left alone, and a file absent from the ref is skipped entirely. It is idempotent, so re-running it is free.
+`scripts/degoogle.py <path>...` normalises what you wrote: it matches each function's `Args:` and `Returns:` to the ref's own layout, re-wraps prose to the column limit, and refuses to touch a `.tool`-decorated docstring. It glues nothing together - every block you wrote stays its own block, and a list, a fenced code block or a reST literal block is left verbatim with its line breaks and hanging indent intact. A function absent from the ref is new, so its sections are left alone, and a file absent from the ref is skipped entirely. It is idempotent, so re-running it is free.
 
 None of them replaces reading the file. The last two stop the failures that judgement alone did not.
 
@@ -165,6 +167,6 @@ Spoken: inside 100 words per minute. Read it aloud, and rewrite it if it sounds 
 
 Docs: `you` outnumbers `I`, contractions near zero, and every costly caveat sits in a `!!! warning`.
 
-Code: narrative median near 17 to 20 words with nothing over 120. `Args:` and `Returns:` follow Google style rather than appearing everywhere, and no entry restates a type. Docstring prose is one block unless a second point earns the break, and any enumeration of a fixed set is still a list.
+Code: narrative median near 17 to 20 words with nothing over 120. `Args:` and `Returns:` follow Google style rather than appearing everywhere, and no entry restates a type. No paragraph runs past three sentences, and any enumeration of a fixed set is still a list.
 
 Count the lines, not only the words. A rewrite that cuts words but grows the diff has moved the verbosity rather than removed it.

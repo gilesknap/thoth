@@ -4,9 +4,12 @@ Sections are matched to the git ref's own Google-style layout, so a helper the r
 bare stays bare and one it documented keeps its block, and a function the ref gave no
 sections at all stays a bare one-liner.
 
-Adjacent prose paragraphs collapse into one block. A bulleted or numbered list survives
-verbatim, because an enumeration of a fixed set reads better as a list than as a
-paragraph of clauses, and collapsing one destroys information the reader counts on.
+Every block the author wrote survives as its own block. Prose is re-wrapped to the
+column limit, and a bulleted list, a fenced code block or a reST literal block is left
+verbatim, because its line breaks carry meaning.
+
+Nothing is glued together. Deciding that two paragraphs are really one is the author's
+call, and a script making it mechanically produced 250-word docstring paragraphs.
 
 A docstring decorated with .tool is never touched, because a model reads it at runtime.
 
@@ -119,27 +122,17 @@ def rebuild(doc: str, keep: set[str], indent: str) -> str:
         return line[min(blanks, len(indent)) :]
 
     out = [summary]
-    pending: list[str] = []
-
-    def flush() -> None:
-        if not pending:
-            return
-        joined = " ".join(p.strip() for p in pending)
-        out.append("")
-        out.extend(textwrap.wrap(joined, width=width, break_on_hyphens=False))
-        pending.clear()
 
     # everything after the summary line, keeping the blank lines that mark its blocks
     for block in paragraphs(prose[prose.index(text[0]) + 1 :]):
+        out.append("")
         if structured(block, indent):
             # a list or a code block keeps its own line breaks and its relative
             # indentation, so only the docstring's own indent comes off
-            flush()
-            out.append("")
             out.extend(unindent(line) for line in block)
         else:
-            pending.extend(block)
-    flush()
+            joined = " ".join(line.strip() for line in block)
+            out.extend(textwrap.wrap(joined, width=width, break_on_hyphens=False))
     for name, body in blocks:
         if name not in keep:
             continue
