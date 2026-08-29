@@ -33,7 +33,7 @@ _ENUM_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 def _check_frontmatter(
     frontmatter: object, folder: str, where: str, problems: list[str]
 ) -> None:
-    """Validate one page's frontmatter against the common contract and folder x type."""
+    """Validate one page's frontmatter against the common contract and folder type."""
     if not isinstance(frontmatter, dict):
         problems.append(f"{where}: 'frontmatter' must be an object")
         return
@@ -112,22 +112,24 @@ def _check_page(page: object, idx: int, problems: list[str]) -> None:
 def validate_file_plan(obj: dict[str, Any]) -> None:
     """Validate a file-plan against the vault contract.
 
-    Reuses :mod:`thoth.vault`'s validators so a passing plan is guaranteed to survive
+    Reuses :mod:`thoth.vault`'s validators, so a passing plan is guaranteed to survive
     :meth:`thoth.vault.Vault.write_page`. Each ``pages[*]`` entry is checked for a known
-    ``action``, a valid ``slug``, an allowed ``folder`` x ``type`` pairing, the required
-    common frontmatter fields (plus ``status`` on action and media pages, with
-    ``status``/``priority``/``media_type`` values enum-checked against the
-    vault vocabularies -- the repair loop self-corrects on the listed values), a valid
-    ``source`` and a string ``summary`` when present. Any ``log`` block is shape-checked
-    too. (The page body carries the OKF ``[text](path.md)`` links; their count is not
-    gated here -- the prompt asks for >= 2 and lint enforces the link graph.)
+    ``action``, a valid ``slug``, an allowed ``folder`` and ``type`` pairing, the
+    required common frontmatter fields, a valid ``source``, and a string ``summary``
+    when present. An action or media page additionally needs ``status``, and the
+    ``status``, ``priority`` and ``media_type`` values are enum-checked against the
+    vault vocabularies, the repair loop self-correcting on the listed values. Any
+    ``log`` block is shape-checked too.
+
+    The page body carries the OKF ``[text](path.md)`` links, and their count is not
+    gated here: the prompt asks for two or more, and lint enforces the link graph.
 
     Args:
         obj: The decoded file-plan object.
 
     Raises:
-        SchemaValidationError: listing every problem found; the message names the
-            offending field(s).
+        SchemaValidationError: listing every problem found, with the message naming the
+            offending fields.
     """
     problems: list[str] = []
 
