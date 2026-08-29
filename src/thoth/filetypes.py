@@ -1,8 +1,8 @@
 """Shared file-extension vocabularies for capture-kind detection.
 
 A standard-library-only leaf module, and the single source for the extension sets that
-the ingest pipeline, the bulk-import walker and the Slack upload path classify by. List
-every extension in lowercase with no dot.
+the ingest pipeline, the bulk-import walker and the Slack upload path classify by,
+listed in lowercase with no dot.
 """
 
 from __future__ import annotations
@@ -19,5 +19,5 @@ TEXT_EXTS: frozenset[str] = frozenset(
     {"md", "txt", "csv", "json", "org", "yaml", "yml", "log", "rst", "tsv"}
 )
 """Plain-text uploads whose bytes ARE the text body: markdown, a note, a data dump. Read
-the file, rather than misclassify it as an image binary and drop its text (issue #57).
-``thoth.ingest._ext_kind`` checks this set before the image default."""
+the file, rather than misclassify it as an image binary and drop its text (issue #57),
+which is why ``thoth.ingest._ext_kind`` checks this set before the image default."""

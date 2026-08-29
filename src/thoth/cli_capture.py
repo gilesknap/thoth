@@ -1,9 +1,9 @@
 """Per-item helpers for ``thoth capture``, split out of :mod:`thoth.__main__`.
 
 These helpers back the :func:`thoth.__main__.run_capture` loop that the file-walk (#80)
-and inbox-drain (#105) branches share. One tallies a capture's disposition, and one
-commits a batch of imported files. Import safety: the module top level imports only the
-standard library, and each helper body imports the ingest and git exception types
+and inbox-drain (#105) branches share, one tallying a capture's disposition and one
+committing a batch of imported files. Import safety: the module top level imports only
+the standard library, and each helper body imports the ingest and git exception types
 lazily.
 """
 
@@ -44,12 +44,12 @@ def _ingest_one(
     failure stays isolated: the helper logs an :class:`~thoth.ingest.IngestError`,
     counts it and skips the item, which stays durable in ``inbox/``.
 
-    A drain hold retires once its content is durably curated, and the deletion stages
-    into the next batch. That means a genuine file, with ``page_paths`` non-empty, and
-    also an ``unchanged`` skip. ``unchanged`` is reported only when the curated page
-    provably already exists (#113), so such a hold duplicates already-filed content. A
-    deferred or skipped hold stays, recoverable and idempotent, so a budget re-trip
-    never silently deletes un-filed content.
+    A drain hold retires, with the deletion staged into the next batch, once its
+    content is durably curated: a genuine file with ``page_paths`` non-empty, or an
+    ``unchanged`` skip, which is reported only when the curated page provably already
+    exists (#113) and therefore duplicates already-filed content. A deferred or skipped
+    hold stays, recoverable and idempotent, so a budget re-trip never silently deletes
+    un-filed content.
 
     Returns:
         The disposition string.

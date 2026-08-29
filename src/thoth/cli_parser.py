@@ -1,8 +1,8 @@
 """The ``thoth`` argument parser, split out of :mod:`thoth.__main__`.
 
-Import safety: this module imports only the standard library and the package version.
-Building the parser therefore never needs the heavy optional clients ``anthropic``,
-``slack_bolt`` or ``mcp``, so ``--version`` and ``--help`` work without them.
+Import safety: this module imports only the standard library and the package version, so
+building the parser never needs the heavy optional clients ``anthropic``, ``slack_bolt``
+or ``mcp``, and ``--version`` and ``--help`` work without them.
 """
 
 from __future__ import annotations

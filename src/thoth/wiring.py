@@ -7,13 +7,12 @@ the Slack daemon and the ``thoth capture`` and ``thoth ask`` commands, and
 :class:`~thoth.extract.Extractor`, a :class:`~thoth.hindsight.Hindsight`, a
 :class:`~thoth.git_sync.GitSync`, an :class:`~thoth.ingest.Ingestor` and a
 :class:`~thoth.query.QueryEngine`. :func:`build_collaborators` wires that shape in one
-place, so the two callers cannot drift. The MCP wiring once dropped
-``schema_md``, which left curate blind to the live schema.
+place, so the two callers cannot drift, as they did when the MCP wiring dropped
+``schema_md`` and left curate blind to the live schema.
 
-The heavy imports run inside the function body, at call time. This module therefore
-stays light to import, and a test that patches a collaborator on its defining module,
-such as
-``thoth.git_sync.GitSync`` or ``thoth.hindsight.Hindsight``, takes effect.
+The heavy imports run inside the function body, at call time, so this module stays light
+to import and a test that patches a collaborator on its defining module takes effect,
+such as ``thoth.git_sync.GitSync`` or ``thoth.hindsight.Hindsight``.
 """
 
 from __future__ import annotations
@@ -57,11 +56,11 @@ def build_collaborators(
     Args:
         config: The frozen runtime config.
         guard: The :class:`~thoth.budget.BudgetGuard`, or a no-op stand-in, shared by
-            the LLM, for classify, analyse and curate, and by Hindsight, for retain, so
-            one daily cap covers both spenders. The caller builds it: the Slack and CLI
-            side attaches an alerter, and the MCP side blocks silently.
+            the LLM (classify, analyse, curate) and Hindsight (retain), so one daily cap
+            covers both spenders. The caller builds it, with an alerter on the Slack and
+            CLI side and silent blocking on the MCP side.
         markers: An optional liveness :class:`~thoth.state.MarkerStore` threaded into
-            the ingestor (issue #15). ``None``, the MCP default, disables marker
+            the ingestor (issue #15), where ``None`` (the MCP default) disables marker
             recording.
 
     Returns:
