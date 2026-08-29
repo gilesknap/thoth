@@ -10,17 +10,17 @@ from .client import LLMError, Message
 
 
 def _field(obj: Any, key: str) -> Any:
-    """Read ``key`` from a dict or an attribute-style object (``None`` when absent).
+    """Read ``key`` from a dict or an attribute-style object, ``None`` when absent.
 
-    The real Anthropic SDK returns responses and content blocks as typed objects;
-    test fakes use plain dicts. Every response-shape helper here reads both through
+    The real Anthropic SDK returns responses and content blocks as typed objects, while
+    a test fake uses plain dicts. Every response-shape helper here reads both through
     this one accessor.
     """
     return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
 
 
 def _content_list(response: Any) -> list[Any]:
-    """Return a response's content blocks (``[]`` when there is no content)."""
+    """Return a response's content blocks, or ``[]`` when there is no content."""
     content = _field(response, "content")
     return [] if content is None else content
 
@@ -28,9 +28,10 @@ def _content_list(response: Any) -> list[Any]:
 def extract_text(response: Any) -> str:
     """Concatenate the text from an Anthropic response's content blocks.
 
-    Tolerant of both the real SDK response (objects whose blocks have ``.type`` and
-    ``.text`` attributes) and a fake shaped ``{'content': [{'type': 'text', 'text':
-    ...}]}``. Non-text blocks (for example ``tool_use``) are ignored.
+    Tolerant of both the real SDK response, whose blocks are objects with ``.type`` and
+    ``.text`` attributes, and a fake shaped
+    ``{'content': [{'type': 'text', 'text': ...}]}``. A non-text block, such as
+    ``tool_use``, is ignored.
 
     Args:
         response: An Anthropic response object or a dict-shaped stand-in.
@@ -49,15 +50,16 @@ def extract_text(response: Any) -> str:
 def _block_as_dict(block: Any) -> dict[str, Any]:
     """Normalise one content block (an SDK object or a dict) to a plain ``dict``.
 
-    The real Anthropic SDK returns content blocks as typed objects; a test fake returns
-    plain dicts. To echo the assistant's ``tool_use`` block(s) back into the next
-    request verbatim (so the ``tool_use_id`` keys line up with the ``tool_result``
-    blocks the harness sends), each block is reduced to the JSON-able dict the Messages
-    API expects. An object is converted via its ``.model_dump()`` (Pydantic v2, what the
-    SDK uses) or, failing that, by reading the documented attributes for the block type.
+    The real Anthropic SDK returns content blocks as typed objects, while a test fake
+    returns plain dicts. Each block is reduced to the JSON-able dict the Messages API
+    expects, so the assistant's ``tool_use`` blocks echo back into the next request
+    verbatim and their ``tool_use_id`` keys line up with the ``tool_result`` blocks the
+    harness sends. An object converts through its ``.model_dump()``, the Pydantic v2
+    method the SDK uses, or failing that by reading the documented attributes for the
+    block type.
 
     Args:
-        block: A content block (typed SDK object or a dict-shaped stand-in).
+        block: A content block, a typed SDK object or a dict-shaped stand-in.
 
     Returns:
         A plain ``dict`` suitable to place back into a ``messages`` content list.
@@ -83,17 +85,17 @@ def _block_as_dict(block: Any) -> dict[str, Any]:
 def response_content_blocks(response: Any) -> list[dict[str, Any]]:
     """Return a response's content blocks as plain dicts, ready to re-send.
 
-    This is the structured counterpart of :func:`extract_text`: where that flattens a
-    response to its text, this preserves *every* block (text and ``tool_use`` alike) so
-    an assistant turn can be echoed verbatim into the next ``messages.create`` call. The
-    ``tool_use`` blocks must round-trip with their ``id`` intact so the following
-    ``tool_result`` blocks can reference them (the API requires the match).
+    This is the structured counterpart of :func:`extract_text`. Where that flattens a
+    response to its text, this preserves *every* block, text and ``tool_use`` alike, so
+    an assistant turn can be echoed verbatim into the next ``messages.create`` call. A
+    ``tool_use`` block must round-trip with its ``id`` intact so the following
+    ``tool_result`` block can reference it, the API requiring the match.
 
     Args:
         response: An Anthropic response object or a dict-shaped stand-in.
 
     Returns:
-        The content blocks as plain dicts, in order (empty when there is no content).
+        The content blocks as plain dicts, in order, empty when there is no content.
     """
     return [_block_as_dict(block) for block in _content_list(response)]
 
@@ -102,18 +104,18 @@ def response_content_blocks(response: Any) -> list[dict[str, Any]]:
 
 
 def _tool_use_blocks(response: Any) -> list[Any]:
-    """Return the ``tool_use`` content blocks of a response (objects or dicts).
+    """Return the ``tool_use`` content blocks of a response, as objects or dicts.
 
-    :func:`extract_text` deliberately ignores ``tool_use`` blocks, so a tool-use caller
-    inspects ``response.content`` itself. Tolerant of the real SDK shape (blocks with a
-    ``.type`` attribute) and a dict-shaped fake
-    (``{'content': [{'type': 'tool_use', ...}]}``).
+    :func:`extract_text` deliberately ignores a ``tool_use`` block, so a tool-use caller
+    inspects ``response.content`` itself. Tolerant of the real SDK shape, whose blocks
+    carry a ``.type`` attribute, and of a dict-shaped fake such as
+    ``{'content': [{'type': 'tool_use', ...}]}``.
 
     Args:
         response: An Anthropic response object or a dict-shaped stand-in.
 
     Returns:
-        The list of ``tool_use`` blocks, in order (possibly empty).
+        The list of ``tool_use`` blocks, in order and possibly empty.
     """
     return [
         block
@@ -123,24 +125,24 @@ def _tool_use_blocks(response: Any) -> list[Any]:
 
 
 def _block_name(block: Any) -> str:
-    """Return a ``tool_use`` block's tool ``name`` as a string (``''`` when absent)."""
+    """Return a ``tool_use`` block's tool ``name`` as a string, ``''`` when absent."""
     name = _field(block, "name")
     return name if isinstance(name, str) else ""
 
 
 def _block_id(block: Any) -> str:
-    """Return a ``tool_use`` block's ``id`` as a string (``''`` when absent).
+    """Return a ``tool_use`` block's ``id`` as a string, ``''`` when absent.
 
-    The id keys the matching ``tool_result`` block in the next user turn, so it must be
-    carried through verbatim (the Messages API rejects a ``tool_result`` whose
-    ``tool_use_id`` matches no prior ``tool_use`` block).
+    The id keys the matching ``tool_result`` block in the next user turn, so it must
+    carry through verbatim. The Messages API rejects a ``tool_result`` whose
+    ``tool_use_id`` matches no prior ``tool_use`` block.
     """
     value = _field(block, "id")
     return value if isinstance(value, str) else ""
 
 
 def _block_input(block: Any) -> dict[str, Any]:
-    """Return a ``tool_use`` block's ``input`` map (``{}`` when absent/ill-typed)."""
+    """Return a ``tool_use`` block's ``input`` map, ``{}`` when absent or ill-typed."""
     value = _field(block, "input")
     return value if isinstance(value, dict) else {}
 
@@ -148,11 +150,11 @@ def _block_input(block: Any) -> dict[str, Any]:
 def extract_tool_use(response: Any, name: str) -> dict[str, Any] | None:
     """Return the input dict of the first ``tool_use`` block named ``name``.
 
-    Built on the tolerant block helpers, so it works against both the real SDK response
-    (where ``tool_use.input`` is an already-parsed dict) and a dict-shaped test fake. A
-    forced tool call (``tool_choice={"type": "tool", "name": name}``) makes the model
-    return a structured ``tool_use.input`` dict the SDK/transport escapes for us, so a
-    body with raw newlines / non-breaking spaces can never break JSON parsing.
+    Built on the tolerant block helpers, so it works against both the real SDK response,
+    where ``tool_use.input`` is an already-parsed dict, and a dict-shaped test fake. A
+    forced tool call, ``tool_choice={"type": "tool", "name": name}``, makes the model
+    return a structured ``tool_use.input`` dict that the SDK and transport escape, so a
+    body with raw newlines or non-breaking spaces can never break JSON parsing.
 
     Args:
         response: An Anthropic response object or a dict-shaped stand-in.
@@ -170,9 +172,9 @@ def extract_tool_use(response: Any, name: str) -> dict[str, Any] | None:
 def assistant_blocks_message(response: Any) -> Message:
     """Wrap a response's content blocks as an assistant :class:`Message` to re-send.
 
-    The returned message carries the native blocks (including any ``tool_use`` blocks),
-    so appending it to the running transcript reproduces the assistant turn exactly --
-    the precondition the Messages API places on the turn that *precedes* a user
+    The returned message carries the native blocks, including any ``tool_use`` block, so
+    appending it to the running transcript reproduces the assistant turn exactly. That
+    is the precondition the Messages API places on the turn *preceding* a user
     ``tool_result`` turn.
 
     Args:
@@ -191,13 +193,13 @@ def tool_result_block(
 
     The Messages API requires the user turn after a ``stop_reason='tool_use'`` response
     to contain a ``tool_result`` block whose ``tool_use_id`` matches the originating
-    ``tool_use`` block; ``is_error=True`` marks a tool failure the model should recover
-    from (an SSRF/extract rejection, an unknown tool, a bad argument).
+    ``tool_use`` block. ``is_error=True`` marks a tool failure the model should recover
+    from, such as an SSRF or extract rejection, an unknown tool, or a bad argument.
 
     Args:
         tool_use_id: The ``id`` of the ``tool_use`` block this result answers.
-        content: The textual tool output (or error message).
-        is_error: Whether the tool failed (sets the API ``is_error`` flag).
+        content: The textual tool output, or the error message.
+        is_error: Whether the tool failed, setting the API ``is_error`` flag.
 
     Returns:
         A ``tool_result`` content-block dict.
@@ -219,9 +221,9 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 def parse_json_block(text: str) -> dict[str, Any]:
     """Extract and parse the first JSON object from model text.
 
-    Strips a ```` ```json ```` (or bare ```` ``` ````) fence if present, otherwise
-    parses from the first ``{`` to the matching end of the string. The decoded value
-    must be a JSON object (``dict``).
+    Strips a ```` ```json ```` fence, or a bare ```` ``` ```` fence, when present, and
+    otherwise parses from the first ``{`` to the matching end of the string. The decoded
+    value must be a JSON object, a ``dict``.
 
     Args:
         text: The model's text output.
@@ -230,7 +232,7 @@ def parse_json_block(text: str) -> dict[str, Any]:
         The decoded JSON object.
 
     Raises:
-        LLMError: if no JSON object is found or the JSON is invalid.
+        LLMError: when no JSON object is found, or the JSON is invalid.
     """
     candidate: str | None = None
     fence = _FENCE_RE.search(text)

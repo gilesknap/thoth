@@ -1,4 +1,4 @@
-"""Passes 0b + 2: the durable pre-LLM holding write and idempotent raw capture."""
+"""Passes 0b and 2: the durable pre-LLM holding write and idempotent raw capture."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from .assets import _AssetStore
 
 
 class _RawCapturePass(_AssetStore):
-    """Pass 0b (persist inbound durably) and pass 2 (idempotent raw capture)."""
+    """Pass 0b, persisting inbound durably, and pass 2, the idempotent raw capture."""
 
     # ---- durable pre-LLM capture (SPEC section 6: persist before classify) -------
 
@@ -32,34 +32,33 @@ class _RawCapturePass(_AssetStore):
         """Extract and persist the inbound item durably *before* any LLM call.
 
         Writes a holding page under ``inbox/<sha12>.md`` whose body is the extracted
-        text (a URL article's markdown, plain text, or an audio transcript) -- or, for a
-        binary capture (image/PDF, no text yet), a short provenance stub naming the
-        source so a later sweep can re-fetch and curate it. The slug is derived from the
-        body SHA-256, so re-persisting identical content lands on the same path and is
-        idempotent (``skipped_unchanged``). This is the *capture-never-lost* guarantee:
-        the text is on disk and committable before classify/curate run.
+        text, a URL article's markdown, plain text or an audio transcript. For a binary
+        image or PDF capture with no text yet, the body is instead a short provenance
+        stub naming the source, so a later sweep can re-fetch and curate it. The slug
+        derives from the body SHA-256, so re-persisting identical content lands on the
+        same path and is idempotent, reporting ``skipped_unchanged``. This is the
+        *capture-never-lost* guarantee: the text is on disk and committable before
+        classify and curate run.
 
-        The intended curation mode (``--as-is`` low-touch vs the default re-curate) and
-        the original ``filename`` are stamped into the hold frontmatter (issue #95, task
-        E) so a later inbox sweep (:mod:`thoth.inbox_drain`) honours the ORIGINAL intent
-        rather than guessing: a hold deferred under ``--as-is`` is re-filed as-is, a
-        normal one is re-curated.
+        :meth:`_write_inbox_holding` stamps the intended curation mode and the original
+        ``filename`` into the hold frontmatter (issue #95, task E), so a later sweep
+        through :mod:`thoth.inbox_drain` honours the ORIGINAL intent.
 
-        The extraction itself (the only network step) happens here, so an
-        :class:`thoth.extract.ExtractError` still aborts the ingest loudly (nothing is
-        lost -- there was nothing to persist). The extracted text is returned on the
-        :class:`_Holding` so the later :meth:`capture_raw` reuses it without a second
+        The extraction itself, the only network step, happens here, so an
+        :class:`thoth.extract.ExtractError` still aborts the ingest loudly, losing
+        nothing because there was nothing to persist. The extracted text returns on the
+        :class:`_Holding`, so the later :meth:`capture_raw` reuses it without a second
         fetch.
 
         Args:
             capture: The inbound item.
             as_is: Whether this capture was requested in low-touch ``--as-is`` mode, so
-                the hold records ``mode: as-is`` and a later sweep re-files it low-touch
-                (default ``False`` records ``mode: curate``).
+                the hold records ``mode: as-is`` and a later sweep re-files it
+                low-touch. The ``False`` default records ``mode: curate``.
 
         Returns:
-            A :class:`_Holding` carrying the holding :class:`RawCaptureResult` and the
-            prefetched extraction (if any) for reuse by :meth:`capture_raw`.
+            A :class:`_Holding` carrying the holding :class:`RawCaptureResult` and any
+            prefetched extraction, for reuse by :meth:`capture_raw`.
 
         Raises:
             IngestError: on an extraction failure or a vault write error.
@@ -94,45 +93,42 @@ class _RawCapturePass(_AssetStore):
         fetched: FetchedBinary | None = None,
         derived: _Analysed | None = None,
     ) -> RawCaptureResult:
-        """Extract the immutable source and write it under ``raw/`` (idempotent).
+        """Extract the immutable source and write it idempotently under ``raw/``.
 
-        Dispatches on the capture kind: a URL is extracted to clean markdown, a PDF or
-        image is downloaded as a binary into ``raw/assets/`` via
-        :meth:`thoth.extract.Extractor.fetch_binary` + :meth:`Vault.save_asset`, audio
-        is transcribed, and plain text is filed verbatim. For text/markdown sources the
-        body SHA-256 is compared to any existing raw page's stored digest *before*
-        writing: an identical body is skipped (``'skipped_unchanged'``) and a changed
-        body is flagged and rewritten (``'updated_drift'``). Images never become base64.
+        Dispatches on the capture kind. A URL is extracted to clean markdown, a PDF or
+        image is downloaded as a binary into ``raw/assets/`` through
+        :meth:`thoth.extract.Extractor.fetch_binary` and :meth:`Vault.save_asset`, audio
+        is transcribed, and plain text is filed verbatim. For a text or markdown source
+        the body SHA-256 is compared to any existing raw page's stored digest *before*
+        writing: an identical body is skipped as ``'skipped_unchanged'``, and a changed
+        body is flagged and rewritten as ``'updated_drift'``. An image never becomes
+        base64.
 
-        When ``prefetched`` is supplied (the text extracted by :meth:`persist_inbound`
-        before classify), the text-bearing kinds reuse it instead of re-fetching, so a
-        URL/audio source is fetched/transcribed exactly once per ingest. When
-        ``fetched`` is supplied (a URL image/PDF the analyse pass already downloaded),
-        the binary kinds reuse those staged bytes instead of fetching a second time, so
-        a URL binary is downloaded exactly once per ingest and its temp file is never
-        leaked. Calling this directly with neither re-extracts/re-fetches, the
-        standalone behaviour.
+        ``prefetched`` and ``fetched`` let the text-bearing and binary kinds reuse work
+        the earlier passes already did, so a source is fetched, transcribed or
+        downloaded exactly once per ingest and no temp file leaks. Calling this directly
+        with neither re-extracts and re-fetches, the standalone behaviour.
 
         Args:
             capture: The inbound item.
-            cls: Its validated classification (supplies the raw slug).
+            cls: Its validated classification, which supplies the raw slug.
             prefetched: Text already extracted before classify, reused to avoid a second
-                fetch; ``None`` re-extracts.
+                fetch. ``None`` re-extracts.
             fetched: A URL binary the analyse pass already downloaded, reused to avoid a
-                second download (and the temp-file leak); ``None`` re-fetches.
+                second download and the temp-file leak. ``None`` re-fetches.
             derived: The :class:`_Analysed` carrying the best-effort enhancement
-                artifacts (issue #68) -- an Excalidraw reconstruction of a ``diagram``
-                and a cleaned scan of a ``document`` -- saved as *extra* assets next to
-                the original image (the original is always kept and listed first).
-                ``None`` saves only the original.
+                artifacts (issue #68), an Excalidraw reconstruction of a ``diagram`` and
+                a cleaned scan of a ``document``, saved as *extra* assets beside the
+                original image, which is always kept and listed first. ``None`` saves
+                only the original.
 
         Returns:
             A :class:`RawCaptureResult` recording the path and disposition. For an image
             capture its ``asset_paths`` lists the original first, then derived assets.
 
         Raises:
-            IngestError: on extraction failure (wraps
-                :class:`thoth.extract.ExtractError`) or a vault write error.
+            IngestError: on an extraction failure, wrapping
+                :class:`thoth.extract.ExtractError`, or a vault write error.
         """
         kind = self._capture_kind(capture)
         try:
@@ -160,14 +156,14 @@ class _RawCapturePass(_AssetStore):
     def _extract_text(self, capture: Capture, kind: CaptureKind) -> _Prefetched | None:
         """Extract the text body for a text-bearing capture (no LLM), else ``None``.
 
-        Runs the single network/IO step per kind -- web-extract a URL, transcribe audio,
-        read an uploaded text file (issue #57), or take inline text verbatim -- and
-        returns the body plus any provenance URL. Binary kinds (image/PDF) have no text
-        body yet, so ``None`` is returned and the caller holds a provenance stub
-        instead.
+        Runs the single network or IO step per kind, web-extracting a URL, transcribing
+        audio, reading an uploaded text file (issue #57), or taking inline text
+        verbatim, and returns the body plus any provenance URL. A binary image or PDF
+        kind has no text body yet, so ``None`` returns and the caller holds a provenance
+        stub instead.
 
         Raises:
-            ExtractError: on a web-extract / transcribe failure (raised to the caller).
+            ExtractError: on a web-extract or transcribe failure, raised to the caller.
             IngestError: when a text capture supplies neither inline text nor a readable
                 file path.
         """
@@ -185,14 +181,14 @@ class _RawCapturePass(_AssetStore):
     def _text_body(capture: Capture) -> str:
         """Return the body for a TEXT capture: inline text, else the uploaded file.
 
-        An uploaded ``.md``/``.txt``/... file (issue #57) carries its body as the file
-        itself, so when no inline ``text`` is supplied the server-resolvable ``path`` is
-        read. Decoding uses ``errors="replace"`` so a stray non-UTF-8 byte in a log/CSV
-        dump never aborts the capture (the text is still filed, with the offending byte
-        shown as the replacement char).
+        An uploaded ``.md`` or ``.txt`` file (issue #57) carries its body as the file
+        itself, so with no inline ``text`` supplied the server-resolvable ``path`` is
+        read. Decoding uses ``errors="replace"``, so a stray non-UTF-8 byte in a log or
+        CSV dump never aborts the capture: the text is still filed, with the offending
+        byte shown as the replacement char.
 
         Raises:
-            IngestError: if the capture has neither inline text nor a readable path.
+            IngestError: when the capture has neither inline text nor a readable path.
         """
         if capture.text is not None:
             return capture.text
@@ -206,12 +202,12 @@ class _RawCapturePass(_AssetStore):
     def _binary_stub_body(capture: Capture) -> str:
         """Build the holding-page body for a binary capture with no extracted text yet.
 
-        Reached only for a binary upload (image/PDF) whose bytes have not yet been
-        analysed/extracted, so the held page records the source URL / filename for a
-        later reindex/sweep to re-fetch and curate; it carries no base64 (the bytes are
-        fetched server-side when the item is curated). The deferral reason is the
-        *unsupported binary content*, not LLM availability (issue #57): a text upload is
-        read directly and never lands here.
+        Reached only for a binary image or PDF upload whose bytes are not yet analysed,
+        so the held page records the source URL or filename for a later reindex or sweep
+        to re-fetch and curate. It carries no base64, since the bytes are fetched
+        server-side when the item is curated. The deferral reason is the *unsupported
+        binary content*, not LLM availability (issue #57), because a text upload is read
+        directly and never lands here.
         """
         ref = capture.url or capture.filename or "(binary upload)"
         return (
@@ -229,27 +225,27 @@ class _RawCapturePass(_AssetStore):
         mode: str = HOLD_MODE_CURATE,
         filename: str | None = None,
     ) -> RawCaptureResult:
-        """Write the durable ``inbox/<sha12>.md`` holding page (idempotent on body SHA).
+        """Write the durable ``inbox/<sha12>.md`` holding page, idempotent on body SHA.
 
         The slug is the first 12 hex chars of the body SHA-256, so re-persisting an
-        identical body lands on the same path and is skipped (``skipped_unchanged``);
-        the page records ``type: inbox`` so a later sweep can find un-curated holds. The
-        ``source`` is the capture's own origin (``mcp``/``slack``/...), threaded through
-        so a deferred item is held under its true provenance for the re-curate sweep; it
-        is validated against :data:`~thoth.vault.VALID_SOURCES` by
-        :meth:`Vault.write_page`. The durable digest compare uses
-        :meth:`Vault.stored_body_sha256` (the same digest the writer stamps), matching
+        identical body lands on the same path and is skipped as ``skipped_unchanged``.
+        The page records ``type: inbox``, so a later sweep can find un-curated holds.
+        The ``source`` is the capture's own origin, ``mcp`` or ``slack``, threaded
+        through so a deferred item is held under its true provenance for the re-curate
+        sweep, and :meth:`Vault.write_page` validates it against
+        :data:`~thoth.vault.VALID_SOURCES`. The durable digest compare uses
+        :meth:`Vault.stored_body_sha256`, the same digest the writer stamps, matching
         :meth:`_write_raw_doc`.
 
-        The intended curation ``mode`` (``curate``/``as-is``) and the original
-        ``filename`` are stamped into the frontmatter (issue #95, task E) so a later
-        inbox sweep honours the original intent; ``filename`` is omitted when the
-        capture had none (Slack/MCP text), keeping the frontmatter minimal.
+        The intended curation ``mode``, ``curate`` or ``as-is``, and the original
+        ``filename`` are stamped into the frontmatter (issue #95, task E), so a later
+        inbox sweep honours the original intent. ``filename`` is omitted when the
+        capture had none, as for Slack and MCP text, keeping the frontmatter minimal.
 
         Args:
-            body: The extracted inbound text (or a binary provenance stub) to hold.
+            body: The extracted inbound text, or a binary provenance stub, to hold.
             source: The capture's frontmatter ``source`` value.
-            mode: The intended curation mode to stamp (``curate``/``as-is``).
+            mode: The intended curation mode to stamp, ``curate`` or ``as-is``.
             filename: The original upload name to stamp, or ``None`` to omit it.
 
         Returns:
@@ -287,13 +283,13 @@ class _RawCapturePass(_AssetStore):
         """Write (or idempotently skip) a textual raw page after a SHA-256 compare.
 
         The body SHA-256 is computed and compared to the stored ``sha256`` of any
-        existing raw page at the same path *before* writing: equal means skip (the page
-        and its mtime are untouched), different means drift (rewrite). A brand-new path
-        is created.
+        existing raw page at the same path *before* writing. Equal means skip, leaving
+        the page and its mtime untouched, and different means drift, so it is rewritten.
+        A brand-new path is created.
 
         Args:
-            subdir: The ``raw/`` subdir (``articles`` or ``transcripts``).
-            cls: The validated classification (supplies the slug).
+            subdir: The ``raw/`` subdir, ``articles`` or ``transcripts``.
+            cls: The validated classification, which supplies the slug.
             body: The raw markdown body.
             source_url: The provenance URL stamped into frontmatter, if any.
         """
@@ -316,17 +312,17 @@ class _RawCapturePass(_AssetStore):
     ) -> RawCaptureResult:
         """Keep a PDF binary and write a searchable ``raw/papers/<slug>.md`` page.
 
-        The binary is staged into ``raw/assets/`` (idempotent on its bytes SHA-256,
-        like an image) and a ``raw/papers/<slug>.md`` page is written (idempotent on
-        its body SHA-256) recording the source URL and a pointer to the kept binary, so
-        the curate pass and :mod:`thoth.query` retrieval have a text body to surface
-        (SPEC step 2: ``PDF/arxiv -> raw/papers/<slug>.md + keep <slug>.pdf``). Full PDF
-        text extraction is deferred to Phase 3; the page is the provenance stub until
-        then. The returned disposition is the raw page's (the searchable artefact);
+        The binary is staged into ``raw/assets/``, idempotent on its bytes SHA-256 like
+        an image, and a ``raw/papers/<slug>.md`` page is written, idempotent on its body
+        SHA-256, recording the source URL and a pointer to the kept binary. The curate
+        pass and :mod:`thoth.query` retrieval therefore have a text body to surface
+        (SPEC step 2, ``PDF/arxiv -> raw/papers/<slug>.md + keep <slug>.pdf``). Full PDF
+        text extraction is deferred to Phase 3, so the page is the provenance stub until
+        then. The returned disposition is the raw page's, the searchable artefact, and
         ``skipped_unchanged`` is reported only when the page body is also unchanged.
 
         Raises:
-            IngestError: if the binary is genuinely different at an existing asset slug.
+            IngestError: when the binary genuinely differs at an existing asset slug.
         """
         asset_result, source_url = self._obtain_primary_asset(
             capture, cls, fetched, local_ext="pdf"
@@ -341,10 +337,10 @@ class _RawCapturePass(_AssetStore):
     ) -> RawCaptureResult:
         """Write the ``raw/papers/<slug>.md`` provenance page for a kept PDF binary.
 
-        The page body names the kept binary (so retrieval can follow it) and notes the
-        deferred text extraction. The asset's own disposition/paths are carried through
-        so the report still lists the saved binary; the page write is idempotent on its
-        body SHA-256 via :meth:`_write_raw_doc`.
+        The page body names the kept binary, so retrieval can follow it, and notes the
+        deferred text extraction. The asset's own disposition and paths carry through so
+        the report still lists the saved binary, and the page write is idempotent on its
+        body SHA-256 through :meth:`_write_raw_doc`.
         """
         asset_rel = asset_result.asset_paths[0] if asset_result.asset_paths else None
         asset_note = (
@@ -371,19 +367,19 @@ class _RawCapturePass(_AssetStore):
         fetched: FetchedBinary | None = None,
         derived: _Analysed | None = None,
     ) -> RawCaptureResult:
-        """Download/stage an image binary into ``raw/assets`` (never base64).
+        """Download and stage an image binary into ``raw/assets``, never as base64.
 
-        The original image is always saved first, then any best-effort enhancement
-        artifacts the analyse pass derived (issue #68) are saved as *extra* assets under
-        the same slug and merged into the returned ``asset_paths`` (original first), so
+        The original image is always saved first. Any best-effort enhancement artifacts
+        the analyse pass derived (issue #68) are then saved as *extra* assets under the
+        same slug and merged into the returned ``asset_paths``, original first, so
         :meth:`_append_embeds` embeds all of them and curate sees them:
 
-        * ``<slug>.excalidraw.md`` -- an editable Excalidraw reconstruction of a hand-
-          drawn ``diagram`` (the original is kept, never replaced).
+        * ``<slug>.excalidraw.md``, an editable Excalidraw reconstruction of a
+          hand-drawn ``diagram``, where the original is kept and never replaced.
 
         Each derived asset goes through :meth:`_store_asset`, so it keeps the same
-        bytes-SHA-256 idempotency/drift behaviour as the original (a byte-identical
-        re-ingest skips it).
+        bytes-SHA-256 idempotency and drift behaviour as the original, and a
+        byte-identical re-ingest skips it.
         """
         name = capture.filename or (
             capture.path.name if capture.path is not None else ""
@@ -402,14 +398,14 @@ class _RawCapturePass(_AssetStore):
         """Save a multi-image batch's extra images as assets under the same slug (#84).
 
         A Slack message that carried several images at once is ONE capture, so every
-        extra image rides on :attr:`Capture.extra_paths` and is saved next to the
-        primary under a numbered slug (``<slug>-2.png``, ``<slug>-3.png``, ...), in
-        upload order, and merged into the returned ``asset_paths`` after the primary so
-        :meth:`_append_embeds` embeds them all in the one curated page. Each goes
-        through :meth:`_store_asset`, so it keeps the same bytes-SHA-256
-        idempotency/drift behaviour as the primary. The primary's own disposition is
-        preserved (the extras are additive). An empty ``extra_paths`` (the single-file
-        case) returns the original unchanged.
+        extra image rides on :attr:`Capture.extra_paths`, is saved beside the primary
+        under a numbered slug such as ``<slug>-2.png`` in upload order, and is merged
+        into the returned ``asset_paths`` after the primary, so :meth:`_append_embeds`
+        embeds them all in the one curated page. Each goes through :meth:`_store_asset`,
+        so it keeps the same bytes-SHA-256 idempotency and drift behaviour as the
+        primary. The primary's own disposition is preserved, the extras being additive.
+        An empty ``extra_paths``, the single-file case, returns the original
+        unchanged.
         """
         if not capture.extra_paths:
             return original
@@ -438,11 +434,11 @@ class _RawCapturePass(_AssetStore):
 
         Writes each derived artifact (issue #68) to a temp file and routes it through
         :meth:`_store_asset` under the classification slug, then returns a
-        :class:`RawCaptureResult` whose ``asset_paths`` lists the original first then
-        every derived asset saved. The original's own disposition is preserved (the
-        derived assets are additive and never change whether the *original* was created,
-        skipped, or drifted). ``None`` derived (or no artifacts) returns the original
-        unchanged.
+        :class:`RawCaptureResult` whose ``asset_paths`` lists the original first, then
+        every derived asset saved. The original's own disposition is preserved, the
+        derived assets being additive and never changing whether the *original* was
+        created, skipped or drifted. A ``None`` derived, or no artifacts, returns the
+        original unchanged.
         """
         if derived is None:
             return original
@@ -462,10 +458,10 @@ class _RawCapturePass(_AssetStore):
     def _doc_disposition(self, rel: str, body: str) -> str:
         """Classify a textual raw/holding write against any existing stored digest.
 
-        The writer stamps the parse-stable redacted digest
-        (:meth:`Vault.stored_body_sha256`), so the idempotency compare MUST use the
-        same derivation -- otherwise an unchanged body ending in a newline (the normal
-        extractor case) never matches and is wrongly re-reported as drift. Returns
+        The writer stamps the parse-stable redacted digest through
+        :meth:`Vault.stored_body_sha256`, so the idempotency compare MUST use the same
+        derivation. Otherwise an unchanged body ending in a newline, the normal
+        extractor case, never matches and is wrongly re-reported as drift. Returns
         ``'skipped_unchanged'`` for a byte-identical existing page, ``'updated_drift'``
         for a changed one, and ``'created'`` for a brand-new path.
         """

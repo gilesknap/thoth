@@ -1,18 +1,18 @@
 """Pure markdown extractors for the lint scan (also unit-tested directly).
 
-Inter-page link / embed token extraction (with code-fence suppression) and the
-``SCHEMA.md`` tag-taxonomy parser. Everything here is a pure function of the
-text it is given; nothing touches the vault.
+Inter-page link and embed token extraction, with code-fence suppression, plus the
+``SCHEMA.md`` tag-taxonomy parser. Everything here is a pure function of the text it
+is given, and nothing touches the vault.
 
-Link style is OKF standard markdown (issue #189): pages link with
-``[text](path.md)`` and embed images with ``![alt](path)``. The extractors here
-still also recognise the legacy Obsidian ``[[wikilink]]`` / ``![[embed]]`` forms
-so that the link-graph checks stay correct during/after a migration and so a stray
-wiki token a future capture emits is still counted as a link (the dedicated
-:func:`extract_wiki_links` / :func:`extract_wiki_embeds` feed the OKF style check
-that flags those legacy tokens). Obsidian Bases (``.base``) and Excalidraw
-(``.excalidraw``) embeds have no standard-markdown equivalent and legitimately stay
-in ``![[...]]`` form.
+Link style is OKF standard markdown (issue #189), so a page links with
+``[text](path.md)`` and embeds an image with ``![alt](path)``. The extractors here
+still recognise the legacy Obsidian ``[[wikilink]]`` and ``![[embed]]`` forms too, so
+the link-graph checks stay correct during and after a migration, and a stray wiki
+token a future capture emits still counts as a link. The dedicated
+:func:`extract_wiki_links` and :func:`extract_wiki_embeds` feed the OKF style check
+that flags those legacy tokens. An Obsidian Bases (``.base``) or Excalidraw
+(``.excalidraw``) embed has no standard-markdown equivalent and legitimately stays in
+``![[...]]`` form.
 """
 
 from __future__ import annotations
@@ -57,9 +57,9 @@ _TAXONOMY_HEADING: str = "## Tag Taxonomy"
 def _is_internal_link(target: str) -> bool:
     """Return ``True`` for a vault-internal link target.
 
-    Excludes external URLs (``https://...``, ``mailto:``, the ``obsidian://`` scheme)
-    and pure same-page anchors (``#section``) -- neither resolves to a vault page, so
-    neither belongs in the broken-link / orphan graph.
+    Excludes an external URL, such as ``https://...``, ``mailto:`` or the
+    ``obsidian://`` scheme, and a pure same-page ``#section`` anchor. Neither resolves
+    to a vault page, so neither belongs in the broken-link and orphan graph.
     """
     stripped = target.strip()
     if not stripped or stripped.startswith("#"):
@@ -71,11 +71,11 @@ def _is_internal_link(target: str) -> bool:
 def _normalise_target(target: str) -> str:
     """Reduce a link target to the bare page handle (slug stem) it resolves to.
 
-    Handles both a standard markdown href (``../entities/jane.md#bio``, possibly
-    ``%20``-escaped) and a legacy wiki target (``dir/jane|Jane#bio``): the ``|alias``,
-    ``#anchor``, directory, ``.md`` suffix and URL-escapes are all stripped, leaving the
-    bare filename stem. Active vault slugs are unique, so the stem is enough to match a
-    page's slug in the resolvable set.
+    Handles both a standard markdown href, such as ``../entities/jane.md#bio`` and
+    possibly ``%20``-escaped, and a legacy wiki target such as ``dir/jane|Jane#bio``.
+    The ``|alias``, the ``#anchor``, the directory, the ``.md`` suffix and the
+    URL-escapes are all stripped, leaving the bare filename stem. Active vault slugs are
+    unique, so that stem is enough to match a page's slug in the resolvable set.
     """
     head = target.split("|", 1)[0]
     head = head.split("#", 1)[0]
@@ -88,10 +88,10 @@ def _normalise_target(target: str) -> str:
 def _normalise_embed(target: str) -> str:
     """Reduce an embed target to the bare asset filename (extension kept).
 
-    Handles a markdown image href (``../raw/assets/photo%20one.png``) and a legacy wiki
-    embed (``photo.png|320``): the ``|size``/``#anchor`` suffix, directory and
-    URL-escapes are stripped, leaving the filename the image-hygiene check matches
-    against ``raw/assets/``.
+    Handles a markdown image href such as ``../raw/assets/photo%20one.png`` and a legacy
+    wiki embed such as ``photo.png|320``. The ``|size`` or ``#anchor`` suffix, the
+    directory and the URL-escapes are stripped, leaving the filename the image-hygiene
+    check matches against ``raw/assets/``.
     """
     head = target.split("|", 1)[0]
     head = head.split("#", 1)[0]
@@ -102,17 +102,17 @@ def extract_links(body: str) -> list[str]:
     """Return the raw target of every internal inter-page link in ``body``.
 
     Recognises the OKF standard markdown form ``[text](path.md)`` and the legacy
-    Obsidian ``[[wikilink]]`` form (so the link graph stays correct across a migration).
-    External URLs and pure ``#anchor`` links are dropped; the caller normalises each
-    target with :func:`_normalise_target`. Links inside fenced or inline code spans are
-    ignored so code examples never produce false positives.
+    Obsidian ``[[wikilink]]`` form, so the link graph stays correct across a migration.
+    An external URL and a pure ``#anchor`` link are dropped, and the caller normalises
+    each target with :func:`_normalise_target`. A link inside a fenced or inline code
+    span is ignored, so a code example never produces a false positive.
 
     Args:
         body: The page body markdown.
 
     Returns:
-        The raw target text of each link, in document order (markdown links first, then
-        any residual wiki links).
+        The raw target text of each link, in document order, markdown links first and
+        then any residual wiki links.
     """
     stripped = _FENCE_RE.sub("", body)
     targets = [
@@ -128,16 +128,17 @@ def extract_embeds(body: str) -> list[str]:
     """Return the filename of every asset embed in ``body``.
 
     Recognises the OKF standard markdown image form ``![alt](path)`` and the legacy
-    Obsidian ``![[asset.ext]]`` form (still used for Bases/Excalidraw embeds). The
-    ``|size`` / ``#anchor`` suffix, directory and URL-escapes are stripped to the bare
-    filename. External image URLs and embeds inside code spans are ignored.
+    Obsidian ``![[asset.ext]]`` form, which Bases and Excalidraw embeds still use. The
+    ``|size`` or ``#anchor`` suffix, the directory and the URL-escapes are stripped to
+    the bare filename. An external image URL, and an embed inside a code span, are
+    ignored.
 
     Args:
         body: The page body markdown.
 
     Returns:
-        The embedded filenames, in document order (markdown images first, then any
-        residual wiki embeds).
+        The embedded filenames, in document order, markdown images first and then any
+        residual wiki embeds.
     """
     stripped = _FENCE_RE.sub("", body)
     names = [
@@ -152,22 +153,22 @@ def extract_embeds(body: str) -> list[str]:
 
 
 def extract_wiki_links(body: str) -> list[str]:
-    """Return the raw inner text of every legacy ``[[wikilink]]`` (the OKF style check).
+    """Return the raw inner text of every legacy ``[[wikilink]]``, for the OKF check.
 
-    Used only by the OKF link-style check (a wiki link is non-portable and not the
-    standard markdown form OKF requires). ``![[embeds]]`` are excluded (the leading
-    ``!``); code-fenced tokens are ignored.
+    Only the OKF link-style check uses it, because a wiki link is non-portable and not
+    the standard markdown form OKF requires. An ``![[embed]]`` is excluded by its
+    leading ``!``, and a code-fenced token is ignored.
     """
     stripped = _FENCE_RE.sub("", body)
     return [match.group(1).strip() for match in _WIKILINK_RE.finditer(stripped)]
 
 
 def extract_wiki_embeds(body: str) -> list[str]:
-    """Return the raw inner text of every legacy ``![[embed]]`` (the OKF style check).
+    """Return the raw inner text of every legacy ``![[embed]]``, for the OKF check.
 
-    Used by the OKF link-style check, which flags wiki *image* embeds but exempts the
-    Bases (``.base``) and Excalidraw (``.excalidraw``) embeds that have no
-    standard-markdown equivalent. Code-fenced tokens are ignored.
+    The OKF link-style check uses it. That check flags a wiki *image* embed but exempts
+    the Bases (``.base``) and Excalidraw (``.excalidraw``) embeds with no
+    standard-markdown equivalent. A code-fenced token is ignored.
     """
     stripped = _FENCE_RE.sub("", body)
     return [match.group(1).strip() for match in _EMBED_RE.finditer(stripped)]
@@ -176,11 +177,11 @@ def extract_wiki_embeds(body: str) -> list[str]:
 def parse_taxonomy_tags(schema_text: str) -> set[str]:
     """Return the tag set listed under ``## Tag Taxonomy`` in ``SCHEMA.md``.
 
-    The taxonomy section (SPEC Appendix) lists tags as bullet lines of the form
-    ``- <label>: tag-a, tag-b, tag-c``; this collects every comma-separated tag after
-    the first colon on each bullet, between the ``## Tag Taxonomy`` heading and the next
-    ``##`` heading. A label-less bullet (``- tag-a, tag-b``) is also accepted. The
-    result is an empty set if the heading is absent.
+    The taxonomy section (SPEC Appendix) lists tags as bullet lines of the form ``-
+    <label>: tag-a, tag-b, tag-c``. This collects every comma-separated tag after the
+    first colon on each bullet, between the ``## Tag Taxonomy`` heading and the next
+    ``##`` heading. A label-less bullet such as ``- tag-a, tag-b`` is accepted too, and
+    the result is an empty set when the heading is absent.
 
     Args:
         schema_text: The full ``SCHEMA.md`` text.

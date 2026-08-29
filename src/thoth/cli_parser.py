@@ -1,8 +1,8 @@
 """The ``thoth`` argument parser, split out of :mod:`thoth.__main__`.
 
-Import safety: only the standard library plus the package version is imported here,
-so building the parser -- and therefore ``--version`` / ``--help`` -- never needs the
-heavy optional clients (``anthropic`` / ``slack_bolt`` / ``mcp``) to be installed.
+Import safety: this module imports only the standard library and the package version,
+so building the parser never needs the heavy optional clients ``anthropic``,
+``slack_bolt`` or ``mcp``, and ``--version`` and ``--help`` work without them.
 """
 
 from __future__ import annotations
@@ -18,18 +18,9 @@ __all__ = ["build_parser"]
 def build_parser() -> ArgumentParser:
     """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
 
-    Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
-    ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
-    MCP server -- ``--transport stdio`` by default, ``--transport http`` for the
-    bearer-authenticated network surface on ``--host``/``--port``, issue #103),
-    ``reindex`` (nightly incremental, ``--full-rebuild`` for
-    recovery, ``--budget`` for a transient cap override, issue #95), ``summary``
-    (``daily`` / ``weekly`` Slack digest), ``lint`` (the
-    13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
-    ``capture`` (backfill files/folders through the ingest pipeline -- ``--as-is`` for
-    a low-touch import, ``--budget`` for a transient cap override, plus
-    ``--dry-run``/``--limit``/``--batch-size``/``--include``/``--exclude``, issue #80).
-    ``-v/--version`` prints the version and exits.
+    Every subcommand and option carries its own ``help`` text below, the one
+    description of what it does. ``capture`` backfills files and folders through the
+    ingest pipeline (issue #80), and ``-v``/``--version`` prints the version and exits.
 
     Returns:
         The configured :class:`argparse.ArgumentParser`.
@@ -69,10 +60,11 @@ def build_parser() -> ArgumentParser:
         help="stdio (default, spawn-as-child for Claude Code) or http (network "
         "streamable-HTTP, bearer-authenticated; THOTH_MCP_API_KEYS required) (#103)",
     )
-    # Defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST/PORT; kept as literals here so
-    # parsing --help never imports the (heavy, mcp-dependent) server module. Loopback by
-    # default by design: network exposure is delegated to cloudflared + Cloudflare
-    # Access (ADR 0011), never a raw 0.0.0.0 socket.
+    # These defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST and DEFAULT_MCP_PORT.
+    # They stay literals here, so parsing --help never imports the heavy,
+    # mcp-dependent server module. Loopback is the deliberate default: cloudflared and
+    # Cloudflare Access carry the network exposure (ADR 0011), never a raw 0.0.0.0
+    # socket.
     mcp.add_argument(
         "--host",
         default="127.0.0.1",

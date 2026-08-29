@@ -1,9 +1,10 @@
-"""Freshness / upkeep checks: 5 (stale content), 7 (source drift), 9 (page size)
-and 12 (log rotation), plus the window and limit constants they apply.
+"""Freshness and upkeep checks 5, 7, 9 and 12, plus the constants they apply.
 
-Each check is a pure function over the parsed pages (or spine-file text) handed
-to it by :class:`thoth.lint.LintEngine`; the only non-deterministic input -- the
-current calendar date -- is passed in as ``today``.
+Check 5 is stale content, check 7 source drift, check 9 page size and check 12 log
+rotation, and the window and limit constants live here too. Each check is a pure
+function over the parsed pages, or the spine-file text, that
+:class:`thoth.lint.LintEngine` hands it. The only non-deterministic input, the current
+calendar date, arrives as ``today``.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ _LOG_ENTRY_RE: re.Pattern[str] = re.compile(r"^## \[", re.MULTILINE)
 def _check_stale(
     curated: list[_Page], actionable: list[_Page], today: date
 ) -> list[Finding]:
-    """Flag stale reference pages and overdue / cold actionable pages (check 5)."""
+    """Flag stale reference pages, and overdue or cold actionable pages (check 5)."""
     findings: list[Finding] = []
     stale_floor = today - _dt.timedelta(days=STALE_DAYS)
     media_floor = today - _dt.timedelta(days=MEDIA_STALE_DAYS)
@@ -71,11 +72,11 @@ def _check_stale(
 
 
 def _stale_actionable(page: _Page, today: date, media_floor: date) -> list[Finding]:
-    """Return overdue-action / cold-media findings for one actionable page.
+    """Return the overdue-action and cold-media findings for one actionable page.
 
     The media queue is its own ``type: media`` in the ``media/`` folder (ADR 0015), so
-    the cold-media check keys off the ``type`` plus the still-``todo`` backlog status;
-    ``action`` pages (todos/errands) get the overdue check.
+    the cold-media check keys off the ``type`` plus the still-``todo`` backlog status.
+    An ``action`` page, a todo or errand, gets the overdue check instead.
     """
     out: list[Finding] = []
     page_type = _str_field(page.meta.get("type"))

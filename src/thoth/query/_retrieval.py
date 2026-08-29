@@ -1,9 +1,9 @@
 """The three retrieval passes as pure functions over the injected collaborators.
 
-Each pass is a module-level function taking the :class:`~thoth.vault.Vault` (and, for
-recall, the :class:`~thoth.hindsight.Hindsight` seam) explicitly; the thin public
-methods on :class:`thoth.query.QueryEngine` gather the collaborators and delegate
-here. The user-facing contract of each pass is documented on those methods.
+Each pass is a module-level function taking the :class:`~thoth.vault.Vault`
+explicitly, plus the :class:`~thoth.hindsight.Hindsight` seam for recall. The thin
+public methods on :class:`thoth.query.QueryEngine` gather the collaborators and
+delegate here, and those methods document each pass's user-facing contract.
 """
 
 from __future__ import annotations
@@ -68,10 +68,10 @@ def _follow_links(vault: Vault, path: str, *, limit: int = 20) -> list[str]:
     """Resolve a page body's inter-page links to existing vault paths.
 
     Recognises the OKF standard markdown form ``[text](path.md)`` and any residual
-    wikilink (issue #189). Every target is reduced to its bare slug stem
-    (directory / ``.md`` / ``%20``-escapes / ``|alias`` / ``#anchor`` stripped) and
-    resolved against the searched folders; vault slugs are unique, so the stem alone
-    locates the page.
+    wikilink (issue #189). Every target reduces to its bare slug stem, with the
+    directory, the ``.md``, the ``%20``-escapes, the ``|alias`` and the ``#anchor``
+    stripped, then resolves against the searched folders. Vault slugs are unique, so the
+    stem alone locates the page.
     """
     if limit < 1:
         return []
@@ -96,8 +96,9 @@ def _link_stems(body: str) -> list[str]:
     """Yield the bare slug stem of every internal inter-page link in ``body``.
 
     Unions the standard markdown ``[text](path.md)`` and legacy ``[[wikilink]]`` forms.
-    External URLs (``https://``, ``mailto:``) are dropped; each surviving target has its
-    ``|alias`` / ``#anchor`` / directory / ``.md`` / URL-escapes stripped to the stem.
+    An external URL, such as ``https://`` or ``mailto:``, is dropped, and each surviving
+    target has its ``|alias``, ``#anchor``, directory, ``.md`` and URL-escapes stripped
+    to the stem.
     """
     raw: list[str] = [match.group(1) for match in _WIKILINK_RE.finditer(body)]
     for match in _MD_LINK_RE.finditer(body):
@@ -144,12 +145,12 @@ def _recall_paths(
 
 
 def _target_to_path(vault: Vault, target: str) -> str | None:
-    """Resolve a wikilink/catalog target to an existing vault page path or ``None``.
+    """Resolve a wikilink or catalog target to a vault page path, else ``None``.
 
-    Accepts a folder-qualified target (``people/jane-doe``) verbatim, and a bare
-    slug (``program-motion-controller``) by probing each searched folder in order.
-    A trailing ``.md`` is tolerated. Only confined, existing pages are returned, so
-    a target that would escape the vault never resolves.
+    Accepts a folder-qualified target such as ``people/jane-doe`` verbatim, and a bare
+    slug such as ``program-motion-controller`` by probing each searched folder in order.
+    A trailing ``.md`` is tolerated. Only a confined, existing page is returned, so a
+    target that would escape the vault never resolves.
     """
     cleaned = target.strip().strip("/")
     if not cleaned:
@@ -205,14 +206,15 @@ def _token_pattern(token: str) -> re.Pattern[str]:
 
 
 def _split_frontmatter(raw: str) -> tuple[str, str]:
-    """Split a page's raw text into its YAML frontmatter and its body (#96 weighting).
+    """Split a page's raw text into its YAML frontmatter and body (#96 weighting).
 
     A vault page opens with a ``---`` fence, the YAML frontmatter, a closing ``---``
-    fence, then the body (the same shape ``python-frontmatter`` writes). This returns
-    ``(frontmatter, body)`` so grep can weight a token hitting the title/summary gloss
-    above one hitting only prose. When the text has no well-formed frontmatter block the
-    whole thing is treated as body (empty frontmatter), so a malformed or fence-less
-    page never crashes the scan and simply matches at the lower body weight.
+    fence, then the body, the same shape ``python-frontmatter`` writes. This returns
+    ``(frontmatter, body)``, so grep can weight a token hitting the title or summary
+    gloss above one hitting only prose. When the text has no well-formed frontmatter
+    block, the whole thing counts as body with empty frontmatter, so a malformed or
+    fence-less page never crashes the scan and simply matches at the lower body
+    weight.
     """
     if not raw.startswith("---"):
         return "", raw

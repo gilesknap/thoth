@@ -1,10 +1,10 @@
-"""The canonical page-type / source / folder vocabulary and the slug grammar.
+"""The canonical page-type, source and folder vocabulary, plus the slug grammar.
 
-The single source of the folder x type contract (issue #19): the classify prompt
-(:mod:`thoth.ingest`), the lint folder walks (:mod:`thoth.lint`), the summary scans
-(:mod:`thoth.summary`) and the file-plan validator (:mod:`thoth.llm`) all import these
-constants rather than restating them, so the contract and its consumers never drift
-apart.
+This is the single source of the folder-by-type contract (issue #19). The classify
+prompt in :mod:`thoth.ingest`, the lint folder walks in :mod:`thoth.lint`, the summary
+scans in :mod:`thoth.summary` and the file-plan validator in :mod:`thoth.llm` all
+import these constants rather than restate them, so the contract and its consumers
+never drift apart.
 """
 
 from __future__ import annotations

@@ -1,26 +1,25 @@
 """Command-line entry point for ``thoth`` (``python -m thoth`` / the console script).
 
 This is the single dispatch surface the deploy artifacts invoke (SPEC section 4 table,
-section 13 Phase 3-4): the ``pkm-slack`` / ``thoth-slack`` systemd unit runs ``thoth
-slack``; Claude Code's MCP config runs ``thoth mcp``; the 06:30 cron runs ``thoth
-reindex`` (``--full-rebuild`` on recovery); the 07:00 / Mon-07:00 cron runs ``thoth
-summary daily`` / ``thoth summary weekly``; and the Mon-08:00 cron runs ``thoth lint``
-(SPEC section 11). ``thoth init`` seeds a fresh or wiped vault with the packaged spine
-(``index.md`` / ``SCHEMA.md`` / ``log.md``) and Bases dashboards (idempotent). Each
-subcommand loads the configuration once via
-:func:`thoth.config.load_config` and constructs the collaborator graph, then delegates
-to the already-built Phase 0-4 entrypoint (:func:`thoth.slack_app.run`,
-:func:`thoth.mcp_server.run`, :meth:`thoth.reindex_from_vault.Reindexer.run`,
-:class:`thoth.summary.SummaryEngine`, :class:`thoth.lint.LintEngine`).
+section 13 Phase 3-4): the ``pkm-slack`` or ``thoth-slack`` systemd unit runs ``thoth
+slack``, Claude Code's MCP config runs ``thoth mcp``, the 06:30 cron runs ``thoth
+reindex`` with ``--full-rebuild`` on recovery, the 07:00 and Mon-07:00 crons run ``thoth
+summary daily`` and ``thoth summary weekly``, and the Mon-08:00 cron runs ``thoth lint``
+(SPEC section 11). ``thoth init`` idempotently seeds a fresh or wiped vault with the
+packaged spine (``index.md``, ``SCHEMA.md``, ``log.md``) and Bases dashboards. Each
+subcommand loads the configuration once through :func:`thoth.config.load_config` and
+constructs the collaborator graph, then delegates to the already-built Phase 0-4
+entrypoint: :func:`thoth.slack_app.run`, :func:`thoth.mcp_server.run`,
+:meth:`thoth.reindex_from_vault.Reindexer.run`, :class:`thoth.summary.SummaryEngine` or
+:class:`thoth.lint.LintEngine`.
 
-Import safety: only the standard library plus :mod:`thoth.config` and the import-light
-:mod:`thoth.cli_parser` is imported at module top level. Every subcommand handler
-imports its heavy collaborators (and the lazily
-imported optional clients behind them) **inside** the handler, so importing this module
--- and parsing ``--version`` / ``--help`` -- never needs ``anthropic`` / ``slack_bolt``
-/ ``mcp`` to be installed. The handlers are split out as small, individually testable
-functions so a test can substitute a fake for the entrypoint that would otherwise block
-(the Slack/MCP daemons) or spawn a subprocess.
+Import safety: module top level imports only the standard library, :mod:`thoth.config`
+and the import-light :mod:`thoth.cli_parser`. Every subcommand handler imports its heavy
+collaborators, and the optional clients behind them, **inside** the handler, so
+importing this module and parsing ``--version`` or ``--help`` never needs ``anthropic``,
+``slack_bolt`` or ``mcp`` installed. The handlers are split out as small, individually
+testable functions, so a test can substitute a fake for an entrypoint that would
+otherwise block, such as the Slack and MCP daemons, or spawn a subprocess.
 """
 
 from __future__ import annotations
@@ -43,11 +42,11 @@ logger = logging.getLogger("thoth")
 def main(args: Sequence[str] | None = None) -> None:
     """Parse ``args`` and dispatch to the matching subcommand handler.
 
-    With no subcommand, prints help and returns (a bare ``thoth`` invocation is not an
-    error). ``--version`` is handled by argparse before dispatch.
+    With no subcommand it prints help and returns, since a bare ``thoth`` invocation is
+    not an error. argparse handles ``--version`` before dispatch.
 
     Args:
-        args: The argument vector (defaults to ``sys.argv[1:]``).
+        args: The argument vector, defaulting to ``sys.argv[1:]``.
     """
     parser = build_parser()
     namespace = parser.parse_args(args)
@@ -63,12 +62,12 @@ def main(args: Sequence[str] | None = None) -> None:
 def _configure_logging(config: Config) -> None:
     """Configure root logging once at daemon start, honouring ``THOTH_LOG_LEVEL``.
 
-    The appliance was silent on the happy path (issue #52): the per-operation success
-    lines emitted by ingest/query/intent only surface once the root logger has
-    a handler. This calls :func:`logging.basicConfig` with the configured level
-    (default ``INFO``) so a long-running daemon (``thoth slack``/``mcp``) and the cron
+    The appliance was silent on the happy path (issue #52), because the per-operation
+    success lines from ingest, query and intent surface only once the root logger has a
+    handler. This calls :func:`logging.basicConfig` with the configured level, ``INFO``
+    by default, so a long-running ``thoth slack`` or ``thoth mcp`` daemon and the cron
     entrypoints print concise operator-readable progress. An unknown level name falls
-    back to ``INFO`` rather than raising, so a typo never blocks boot.
+    back to ``INFO`` rather than raises, so a typo never blocks boot.
     """
     level = logging.getLevelName(config.log_level.upper())
     if not isinstance(level, int):
@@ -96,18 +95,18 @@ def _dispatch(command: str, namespace: Namespace, config: Config) -> None:
 
 
 def run_init(namespace: Namespace, config: Config) -> None:
-    """Seed the vault spine + dashboards (``thoth init [--force]``).
+    """Seed the vault spine and dashboards (``thoth init [--force]``).
 
-    Builds a real :class:`~thoth.vault.Vault` and calls
-    :meth:`~thoth.vault.Vault.seed`, which writes the packaged spine (``index.md`` /
-    ``SCHEMA.md`` / ``log.md``) and Bases dashboards and creates the empty content
-    folders. Idempotent: existing spine files are left untouched unless ``--force`` is
-    passed. A one-line created/skipped summary is printed. The heavy import is local to
-    the handler so importing this module never needs the vault surface.
+    Builds a real :class:`~thoth.vault.Vault` and calls :meth:`~thoth.vault.Vault.seed`,
+    which writes the packaged spine (``index.md``, ``SCHEMA.md``, ``log.md``) and Bases
+    dashboards, and creates the empty content folders. It is idempotent, leaving an
+    existing spine file untouched unless ``--force`` is passed, and prints a one-line
+    created-or-skipped summary. The heavy import is local to the handler, so importing
+    this module never needs the vault surface.
 
     Args:
-        namespace: The parsed args (carries ``--force``).
-        config: The frozen runtime config (used to build the vault).
+        namespace: The parsed args, carrying ``--force``.
+        config: The frozen runtime config, which builds the vault.
     """
     from .vault import Vault
 
@@ -123,16 +122,18 @@ def run_vault_bootstrap(namespace: Namespace, config: Config) -> None:
 
     Builds a :class:`~thoth.git_sync.GitSync` over ``config`` and calls
     :meth:`~thoth.git_sync.GitSync.bootstrap`, which runs the shipped
-    ``bin/vault-bootstrap`` wrapper: it clones the ``THOTH_VAULT_REPO_URL`` repo into
-    the vault mount point when it is not yet a git repo, and is a no-op when the vault
-    already has a ``.git`` (the steady state) or when ``THOTH_VAULT_REPO_URL`` is unset
-    (the dev/test default). Wired as a Helm initContainer before each vault-mounting
-    workload so a fresh cluster's empty vault PVC is populated once on first start. The
-    git import is local to the handler so importing this module never needs it.
+    ``bin/vault-bootstrap`` wrapper. That wrapper clones the ``THOTH_VAULT_REPO_URL``
+    repo into the vault mount point when it is not yet a git repo, and no-ops when the
+    vault already has a ``.git``, the steady state, or when ``THOTH_VAULT_REPO_URL`` is
+    unset, the dev and test default. A Helm initContainer runs it before each
+    vault-mounting workload, so a fresh cluster's empty vault PVC is populated once on
+    first start. The git import is local to the handler, so importing this module never
+    needs it.
 
     Args:
-        namespace: The parsed args (no flags for this subcommand).
-        config: The frozen runtime config (resolves the vault root + child env).
+        namespace: The parsed args, which carry no flags for this subcommand.
+        config: The frozen runtime config, which resolves the vault root and child
+            environment.
     """
     from .git_sync import GitSync
 
@@ -142,11 +143,11 @@ def run_vault_bootstrap(namespace: Namespace, config: Config) -> None:
 
 
 def run_slack(namespace: Namespace, config: Config) -> None:
-    """Construct the ingest/query graph and start the Slack daemon (``thoth slack``).
+    """Construct the ingest and query graph, then start the Slack daemon.
 
     Builds the same collaborator graph as :func:`thoth.mcp_server.run` and hands it to
-    :func:`thoth.slack_app.run`, which blocks serving Socket Mode. The heavy imports
-    happen here, not at module load.
+    :func:`thoth.slack_app.run`, which blocks while it serves Socket Mode. The heavy
+    imports happen here, not at module load.
     """
     from . import slack_app
 
@@ -162,11 +163,11 @@ def run_mcp(namespace: Namespace, config: Config) -> None:
     """Build the MCP context and serve over the chosen transport (``thoth mcp``).
 
     Delegates to :func:`thoth.mcp_server.run`, which wires its own collaborator graph
-    from ``config`` and serves the ``pkm_*`` tools (blocking). ``--transport stdio``
-    (the default) is the byte-for-byte-unchanged spawn-as-child model Claude Code uses;
-    ``--transport http`` serves bearer-authenticated streamable-HTTP on
-    ``--host``:``--port`` (loopback by default), failing fast if ``THOTH_MCP_API_KEYS``
-    is unset (issue #103).
+    from ``config`` and blocks while it serves the ``pkm_*`` tools. ``--transport
+    stdio``, the default, is the byte-for-byte-unchanged spawn-as-child model Claude
+    Code uses. ``--transport http`` serves bearer-authenticated streamable-HTTP on
+    ``--host``:``--port``, loopback by default, and fails fast when
+    ``THOTH_MCP_API_KEYS`` is unset (issue #103).
     """
     from . import mcp_server
 
@@ -183,14 +184,13 @@ def run_reindex(namespace: Namespace, config: Config) -> None:
 
     Constructs a :class:`~thoth.reindex_from_vault.Reindexer` over a real
     :class:`~thoth.vault.Vault` and :class:`~thoth.hindsight.Hindsight` and runs one
-    pass, forwarding ``--full-rebuild``. The budget guard is built with the
-    ``--budget`` transient override (issue #95): ``None`` uses
-    ``THOTH_DAILY_LLM_BUDGET``, a positive value caps THIS run, and ``0`` disables the
-    cap so a deliberate full rebuild can run to completion. A successful run records
-    the ``reindex``
-    liveness marker for the daily heartbeat, and a crash is reported to the
-    errors-to-Slack target before being re-raised so the cron log still shows the
-    failure (issue #15). The resulting counts are printed for the cron log.
+    pass, forwarding ``--full-rebuild``. The budget guard takes the ``--budget``
+    transient override (issue #95): ``None`` uses ``THOTH_DAILY_LLM_BUDGET``, a positive
+    value caps THIS run, and ``0`` disables the cap so a deliberate full rebuild runs to
+    completion. A successful run records the ``reindex`` liveness marker for the daily
+    heartbeat, and a crash reaches the errors-to-Slack target before it is re-raised, so
+    the cron log still shows the failure (issue #15). The resulting counts are printed
+    for that log.
     """
     from .alerts import _cron_alerting, make_alerter
     from .budget import make_budget_guard
@@ -228,21 +228,21 @@ def run_summary(
     *,
     poster_factory: Callable[[Config], Any] | None = None,
 ) -> None:
-    """Compose and post the daily/weekly Slack digest (``thoth summary daily|weekly``).
+    """Compose and post the Slack digest (``thoth summary daily|weekly``).
 
     Builds a :class:`~thoth.summary.SummaryEngine` over a real vault, composes the
-    requested digest, resolves the target channel from ``config`` (the
-    ``SLACK_SUMMARY_CHANNEL`` var, never a hard-coded id), builds a real Slack
-    ``WebClient`` from ``config.slack_bot_token``, and posts via
-    :meth:`~thoth.summary.SummaryEngine.post`. ``poster_factory`` is injectable so a
-    test can substitute a fake poster without the Slack SDK; in production it defaults
+    requested digest, resolves the target channel from ``config``'s
+    ``SLACK_SUMMARY_CHANNEL`` variable rather than a hard-coded id, builds a real Slack
+    ``WebClient`` from ``config.slack_bot_token``, and posts through
+    :meth:`~thoth.summary.SummaryEngine.post`. ``poster_factory`` is injectable, so a
+    test can substitute a fake poster without the Slack SDK, and production defaults it
     to :func:`thoth.alerts._make_web_client`.
 
     Args:
-        namespace: The parsed args (``kind`` and ``--skip-when-empty``).
+        namespace: The parsed args, ``kind`` and ``--skip-when-empty``.
         config: The frozen runtime config.
-        poster_factory: Builds a :class:`~thoth.summary.SlackPoster` from ``config``;
-            defaults to a real Slack ``WebClient`` builder.
+        poster_factory: Builds a :class:`~thoth.summary.SlackPoster` from ``config``,
+            defaulting to a real Slack ``WebClient`` builder.
     """
     from .alerts import _cron_alerting, _make_web_client
     from .state import MarkerStore
@@ -276,17 +276,17 @@ def run_summary(
 def run_lint(namespace: Namespace, config: Config) -> None:
     """Scan the vault and print the grouped lint report (``thoth lint [--no-log]``).
 
-    Builds a real :class:`~thoth.vault.Vault` and a
-    :class:`~thoth.lint.LintEngine`, runs the 13-check pass (SPEC section 11), prints
-    :meth:`~thoth.lint.LintReport.render` (the findings grouped by severity), and --
-    unless ``--no-log`` is set -- appends exactly one ``log.md`` entry via
+    Builds a real :class:`~thoth.vault.Vault` and a :class:`~thoth.lint.LintEngine`,
+    runs the 13-check pass (SPEC section 11), prints
+    :meth:`~thoth.lint.LintReport.render`, the findings grouped by severity, and, unless
+    ``--no-log`` is set, appends exactly one ``log.md`` entry through
     :meth:`~thoth.lint.LintEngine.record` (check 13, "report + log"). A trailing
-    ``lint: N issue(s) found`` line is printed for the Mon-08:00 cron log. All heavy
-    imports are local to the handler so importing this module never needs the linter.
+    ``lint: N issue(s) found`` line goes to the Mon-08:00 cron log. Every heavy import
+    is local to the handler, so importing this module never needs the linter.
 
     Args:
-        namespace: The parsed args (carries ``--no-log``).
-        config: The frozen runtime config (used to build the vault).
+        namespace: The parsed args, carrying ``--no-log``.
+        config: The frozen runtime config, which builds the vault.
     """
     from .lint import LintEngine
     from .vault import Vault
@@ -301,44 +301,39 @@ def run_lint(namespace: Namespace, config: Config) -> None:
 
 
 def run_capture(namespace: Namespace, config: Config) -> None:
-    """Backfill files/folders into the vault (``thoth capture <path>... [flags]``).
+    """Backfill files and folders into the vault (``thoth capture <path>...``).
 
-    The CLI capture path (issue #80): a thin walker
-    (:func:`thoth.capture_walk.walk_captures`) yields one
-    :class:`~thoth.ingest.Capture` per eligible file under each ``paths`` entry
-    (Markdown/text -> a ``text`` capture; image/PDF/audio -> a ``path`` capture; every
-    one ``source="import"``), honouring the ``--include``/``--exclude`` globs, the
-    always-skipped machinery/spine, and the overall ``--limit``. Each capture is fed
-    through the EXISTING :meth:`thoth.ingest.Ingestor.ingest` pipeline with commits
-    deferred, and git is driven in batches:
+    The CLI capture path (issue #80). :func:`thoth.capture_walk.walk_captures` yields
+    one :class:`~thoth.ingest.Capture` per eligible file under each ``paths`` entry,
+    honouring ``--include``, ``--exclude`` and ``--limit``, each carrying
+    ``source="import"``. Each capture then feeds the EXISTING
+    :meth:`thoth.ingest.Ingestor.ingest` pipeline with commits deferred, and git is
+    driven in batches:
 
-    * The budget guard is built with the ``--budget`` transient override (issue #80):
-      ``None`` uses ``THOTH_DAILY_LLM_BUDGET``; a positive value caps THIS run; ``0``
-      disables the cap (the unlimited-import escape hatch). The same guard is injected
-      into the ingest graph so it covers analyse/classify/curate and the retain pass.
-    * ``--dry-run`` lists what would be filed and writes/commits NOTHING (no LLM call,
-      no vault pull): the walker is iterated and each planned filing is printed.
-    * Otherwise the vault is pulled ONCE up front, each capture is ingested with
-      ``commit=False`` (and ``as_is=--as-is``), and ``GitSync.commit`` is called every
-      ``--batch-size`` ingested files plus a final flush -- not one commit per file. A
-      :class:`~thoth.git_sync.VaultConflictError` from a batch commit is surfaced loudly
-      and stops the run (content is filed locally; never ``--force``).
+    * The budget guard takes the ``--budget`` transient override (issue #80): ``None``
+      uses ``THOTH_DAILY_LLM_BUDGET``, a positive value caps THIS run, and ``0``
+      disables the cap, the unlimited-import escape hatch. The same guard is injected
+      into the ingest graph, so it covers analyse, classify, curate and the retain pass.
+      * ``--dry-run`` lists what would be filed and writes or commits NOTHING, with no
+      LLM call and no vault pull: it iterates the walker and prints each planned filing.
+      * Otherwise the vault is pulled ONCE up front, each capture is ingested with
+      ``commit=False`` and ``as_is=--as-is``, and ``GitSync.commit`` runs every
+      ``--batch-size`` ingested files plus a final flush, rather than once per file. A
+      :class:`~thoth.git_sync.VaultConflictError` from a batch commit surfaces loudly
+      and stops the run, leaving the content filed locally and never forcing the push.
 
-    Per-file failures are isolated: a file whose ingest raises
-    :class:`~thoth.ingest.IngestError` (an unparseable/invalid model file-plan, a
-    rejected vault write) is logged, counted (``failed``), and skipped -- the run
-    carries on. The failing item is already durable in ``inbox/`` (pass 0b runs before
-    the failing classify/curate), so it is recoverable on a later run rather than
-    aborting a large import on one bad file. (A batch-commit
-    :class:`~thoth.git_sync.VaultConflictError` still stops the run -- a diverged remote
-    affects every file, not one.)
+    A per-file :class:`~thoth.ingest.IngestError` is logged, counted as ``failed`` and
+    skipped, so the run carries on, and the failing item is already durable in
+    ``inbox/`` for a later run. A batch-commit
+    :class:`~thoth.git_sync.VaultConflictError` still stops the run, because a diverged
+    remote affects every file rather than one.
 
-    Idempotency leans entirely on the existing ``raw/``/``inbox/`` SHA-256 machinery: a
-    second run over an unchanged tree re-derives the same slugs/digests and the raw
-    layer skips, so no page is duplicated.
+    Idempotency leans entirely on the existing ``raw/`` and ``inbox/`` SHA-256
+    machinery: a second run over an unchanged tree re-derives the same slugs and
+    digests, the raw layer skips, and no page is duplicated.
 
     Args:
-        namespace: The parsed args (``paths`` and the capture flags).
+        namespace: The parsed args, ``paths`` and the capture flags.
         config: The frozen runtime config.
     """
     from .alerts import make_alerter
@@ -440,25 +435,25 @@ def run_capture(namespace: Namespace, config: Config) -> None:
 
 @dataclass
 class _Graph:
-    """The constructed ingest/query collaborator graph for the Slack daemon."""
+    """The constructed ingest and query collaborator graph for the Slack daemon."""
 
     ingestor: Any
     query_engine: Any
 
 
 def _build_graph(config: Config, *, guard: Any | None = None) -> _Graph:
-    """Wire the full ingest/query collaborator graph from ``config``.
+    """Wire the full ingest and query collaborator graph from ``config``.
 
-    Delegates the construction to :func:`thoth.wiring.build_collaborators` (the shape
-    shared with :func:`thoth.mcp_server.run`), adding the Slack/CLI-side pieces: the
-    alerting budget guard and the liveness markers. All heavy imports are local to
+    Delegates the construction to :func:`thoth.wiring.build_collaborators`, the shape
+    shared with :func:`thoth.mcp_server.run`, and adds the Slack and CLI side pieces:
+    the alerting budget guard and the liveness markers. Every heavy import is local to
     this function.
 
-    ``guard`` lets a caller inject an already-built :class:`~thoth.budget.BudgetGuard`
-    so the same cap reaches both the LLM (classify/analyse/curate) and Hindsight
+    ``guard`` lets a caller inject an already-built :class:`~thoth.budget.BudgetGuard`,
+    so the same cap reaches both the LLM (classify, analyse, curate) and Hindsight
     (retain). The ``thoth capture`` handler passes one built with its ``--budget``
-    transient override (issue #80); ``None`` (the default) builds the standard
-    config-driven guard, so the Slack/MCP callers are unaffected.
+    transient override (issue #80), while ``None``, the default, builds the standard
+    config-driven guard, leaving the Slack and MCP callers unaffected.
     """
     from .alerts import make_alerter
     from .budget import make_budget_guard

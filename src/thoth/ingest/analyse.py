@@ -1,4 +1,4 @@
-"""Pass 0c: vision/PDF content analysis of a binary capture (issue #42)."""
+"""Pass 0c: vision and PDF content analysis of a binary capture (issue #42)."""
 
 from __future__ import annotations
 
@@ -27,54 +27,54 @@ _ANALYSE_KINDS: frozenset[CaptureKind] = frozenset({CaptureKind.IMAGE, CaptureKi
 
 
 class _AnalysePass(_IngestorBase):
-    """The analyse pass: OCR/vision/PDF enrichment that feeds classify and curate."""
+    """The analyse pass: OCR and vision enrichment that feeds classify and curate."""
 
     # ---- pass 0c: analyse (vision/PDF content extraction, issue #42) -------------
 
     def analyse(self, capture: Capture) -> _Analysed:
-        """OCR/vision/PDF-analyse a binary capture so it is routed + curated by content.
+        """Analyse a binary capture so content routes and curates it.
 
-        For an image or PDF capture the bytes are sent to a multimodal model (a vision
-        ``image`` block or a ``document`` block) and the returned OCR/extracted text,
-        description, and routing hints feed :meth:`classify` (so a whiteboard photo is
-        routed to ``notes/`` by its content, not the ``memories/`` default) and
-        :meth:`curate` (so the page body holds the real meaning). The asset is still
-        saved as a real binary and embedded with ``![[...]]`` -- analysis only enriches
-        and routes (ADR 0006).
+        For an image or PDF capture the bytes go to a multimodal model, as a vision
+        ``image`` block or a ``document`` block, and the returned extracted text,
+        description and routing hints feed :meth:`classify`, so a whiteboard photo
+        routes to ``notes/`` by its content rather than the ``memories/`` default, and
+        :meth:`curate`, so the page body holds the real meaning. The asset is still
+        saved as a real binary and embedded with ``![[...]]``, since analysis only
+        enriches and routes (ADR 0006).
 
         A **multi-image batch** (issue #84) is one unit of intent curated as one page,
-        so EVERY image -- the primary plus the extras on :attr:`Capture.extra_paths` --
-        is sent as a block in a **single** vision call producing one shared summary/tags
-        (issue #124), not just the first image. Because it is one call it counts as
-        exactly ONE charge against the daily budget guard; a safety cap
-        (``THOTH_MAX_ANALYSE_IMAGES``) bounds the payload (extras beyond the cap are
-        logged-and-skipped from the analyse call but still saved + embedded). A PDF
-        is always single-file and stays on its own document/extraction path -- it is
-        never bundled with image blocks. Non-binary kinds (text/URL/audio already carry
-        extracted text) return ``None`` and their paths are unchanged.
+        so EVERY image, the primary plus the extras on :attr:`Capture.extra_paths`,
+        travels as a block in a **single** vision call producing one shared summary and
+        tag set (issue #124), not just the first image. Being one call, it counts as
+        exactly ONE charge against the daily budget guard, and the
+        ``THOTH_MAX_ANALYSE_IMAGES`` safety cap bounds the payload, with extras beyond
+        the cap logged and skipped from the analyse call though still saved and
+        embedded. A PDF is always single-file and stays on its own document path, never
+        bundled with image blocks. A non-binary kind already carries extracted text, so
+        text, URL and audio return ``None`` with their paths unchanged.
 
-        The call goes through the injected :class:`~thoth.llm.LLM`, so it is charged
-        against the **same daily budget guard** as classify/curate (issue #16). Reusing
-        the decoupled-durability pattern, a *transport/availability* failure or a
-        budget-cap trip raises :class:`LLMUnavailableError` so the already-durable raw
-        asset is **deferred** (re-analysed on a later sweep) rather than lost -- exactly
-        like the classify/curate deferral. An *unparseable* analysis (a
-        :class:`~thoth.analyse.AnalyseError`) is non-fatal: the binary is filed without
-        enrichment (``None``) rather than aborting the capture.
+        The call goes through the injected :class:`~thoth.llm.LLM`, so the **same daily
+        budget guard** as classify and curate charges it (issue #16). Reusing the
+        decoupled-durability pattern, a *transport or availability* failure or a
+        budget-cap trip raises :class:`LLMUnavailableError`, so the already-durable raw
+        asset is **deferred** for a later sweep to re-analyse rather than lost, exactly
+        like the classify and curate deferral. An *unparseable* analysis, a
+        :class:`~thoth.analyse.AnalyseError`, is non-fatal: the binary is filed without
+        enrichment rather than aborting the capture.
 
         Args:
             capture: The inbound item.
 
         Returns:
             An :class:`_Analysed` carrying the :class:`~thoth.analyse.Analysis` for a
-            binary capture (``None`` for a non-binary kind, or when the analysis was
-            unparseable) plus -- for a URL binary -- the single
-            :class:`~thoth.extract.FetchedBinary` it downloaded, so :meth:`capture_raw`
-            reuses the same bytes for the asset write instead of fetching a second time.
+            binary capture, ``None`` for a non-binary kind or an unparseable analysis,
+            plus, for a URL binary, the single :class:`~thoth.extract.FetchedBinary` it
+            downloaded, so :meth:`capture_raw` reuses those bytes for the asset write
+            rather than fetches a second time.
 
         Raises:
-            LLMUnavailableError: if the analyse model call is unavailable or the daily
-                budget cap is reached (treated as a deferral by :meth:`ingest`).
+            LLMUnavailableError: when the analyse model call is unavailable or the daily
+                budget cap is reached, which :meth:`ingest` treats as a deferral.
             IngestError: on a failure to read the binary bytes.
         """
         kind = self._capture_kind(capture)
@@ -166,16 +166,15 @@ class _AnalysePass(_IngestorBase):
     ) -> str | None:
         """Best-effort derive the per-kind enhancement artifact (issue #68, ADR 0009).
 
-        For an IMAGE capture only (a PDF gets no derivation), a ``diagram``-kind image
-        is reconstructed as an editable Excalidraw scene via
-        :meth:`thoth.analyse.Analyser.reconstruct_excalidraw` (a second vision call).
+        For an IMAGE capture only, since a PDF gets no derivation,
+        :meth:`thoth.analyse.Analyser.reconstruct_excalidraw` reconstructs a
+        ``diagram``-kind image as an editable Excalidraw scene in a second vision call.
 
-        This is a pure *enhancement* saved alongside the kept original, so every failure
-        mode -- ``None``, a raised exception, or a budget trip -- is swallowed and
-        turned into ``None`` here: the primary capture is already durable, never
-        deferred or lost by a best-effort artifact (the second vision call already
-        returns ``None`` on its own failures, but any surprise is guarded too). Returns
-        ``excalidraw_md``.
+        This is a pure *enhancement* saved beside the kept original, so every failure
+        mode becomes ``None`` here, whether a returned ``None``, a raised exception or a
+        budget trip. The primary capture is already durable and a best-effort artifact
+        never defers nor loses it. The second vision call already returns ``None`` on
+        its own failures, and this guards any surprise too. Returns ``excalidraw_md``.
         """
         if kind is not CaptureKind.IMAGE or analysis is None:
             return None
@@ -191,18 +190,18 @@ class _AnalysePass(_IngestorBase):
     ) -> tuple[bytes, str, FetchedBinary | None]:
         """Return the inbound binary's bytes, bare extension, and any fetched binary.
 
-        Reads a server-resolvable ``path`` directly (the common Slack/MCP upload case,
-        which returns ``fetched=None``) or fetches a ``url`` binary server-side
-        **once**; the returned :class:`~thoth.extract.FetchedBinary` is threaded forward
-        so :meth:`capture_raw` reuses the same staged bytes for the asset write -- no
-        second network download and no leaked temp file (the staged tmp is consumed and
-        cleaned by the asset store).
+        Reads a server-resolvable ``path`` directly, the common Slack and MCP upload
+        case returning ``fetched=None``, or fetches a ``url`` binary server-side
+        **once**. The returned :class:`~thoth.extract.FetchedBinary` threads forward so
+        :meth:`capture_raw` reuses the same staged bytes for the asset write, with no
+        second network download and no leaked temp file, the asset store consuming and
+        cleaning the staged tmp.
 
-        An over-threshold **image** is downscaled here (issue #108): the reduced bytes
-        are returned for the vision call *and* the staged source file is rewritten in
-        place, so the same reduced bytes are what :meth:`capture_raw` later hashes and
-        commits to ``raw/assets/`` (a single resize covers both storage and analysis).
-        PDFs are not resized (downscaling a PDF is out of scope).
+        An over-threshold **image** is downscaled here (issue #108). The reduced bytes
+        return for the vision call *and* the staged source file is rewritten in place,
+        so the same reduced bytes are what :meth:`capture_raw` later hashes and commits
+        to ``raw/assets/``, one resize covering both storage and analysis. A PDF is not
+        resized, downscaling one being out of scope.
         """
         if capture.path is not None:
             name = capture.filename or capture.path.name
@@ -221,18 +220,19 @@ class _AnalysePass(_IngestorBase):
         """Read the extra images of a multi-image batch for one analyse call (#84/#124).
 
         A multi-image Slack batch carries its non-primary images on
-        :attr:`Capture.extra_paths` (all local, already-downloaded paths -- a batch is
-        never a URL fetch). Every image must reach the vision model so the one shared
-        summary/tags genuinely cover the WHOLE batch, not just the primary (issue #84,
-        criterion 3). They are sent as extra blocks in the SAME analyse call as the
-        primary, so the batch still costs exactly ONE budget-guarded call.
+        :attr:`Capture.extra_paths`, all local already-downloaded paths, since a batch
+        is never a URL fetch. Every image must reach the vision model so the one shared
+        summary and tag set genuinely covers the WHOLE batch, not just the primary
+        (issue #84, criterion 3). They travel as extra blocks in the SAME analyse call
+        as the primary, so the batch still costs exactly ONE budget-guarded call.
 
-        A safety cap (``THOTH_MAX_ANALYSE_IMAGES``, default 6) bounds the payload: the
-        primary already consumes one slot, so at most ``cap - 1`` extras are read;
-        any beyond that are logged-and-skipped from the analyse call (they are still
-        saved and embedded by :meth:`_append_extra_images`). A non-positive cap disables
-        the limit (analyse every image). Each extra is downscaled in place exactly like
-        the primary (issue #108), so the bytes analysed match the bytes later stored.
+        The ``THOTH_MAX_ANALYSE_IMAGES`` safety cap, 6 by default, bounds the payload.
+        The primary already consumes one slot, so at most ``cap - 1`` extras are read
+        and any beyond that are logged and skipped from the analyse call, though
+        :meth:`_append_extra_images` still saves and embeds them. A non-positive cap
+        disables the limit and analyses every image. Each extra is downscaled in place
+        exactly like the primary (issue #108), so the bytes analysed match the bytes
+        later stored.
         """
         if not capture.extra_paths:
             return []
@@ -264,13 +264,14 @@ class _AnalysePass(_IngestorBase):
     ) -> bytes:
         """Downscale an over-threshold image and rewrite its staged file (issue #108).
 
-        Only a :class:`CaptureKind.IMAGE` is resized (a PDF is left untouched). When the
-        reduced bytes differ from the input the staged source file (the Slack/MCP
-        download or the fetched tmp) is rewritten so the *same* reduced bytes flow on to
-        :meth:`capture_raw` -- the asset committed to ``raw/assets/`` is the downscaled
-        one and the bytes-SHA-256 idempotency keys on the reduced content. Resize is
-        best-effort (see :func:`thoth.images.downscale_if_oversized`): a missing Pillow
-        or an undecodable image returns the original bytes and writes nothing.
+        Only a :class:`CaptureKind.IMAGE` is resized, leaving a PDF untouched. When the
+        reduced bytes differ from the input, the staged source file, the Slack or MCP
+        download or the fetched tmp, is rewritten so the *same* reduced bytes flow on to
+        :meth:`capture_raw`. The asset committed to ``raw/assets/`` is therefore the
+        downscaled one, and the bytes-SHA-256 idempotency keys on the reduced content.
+        Resize is best-effort, as :func:`thoth.images.downscale_if_oversized` documents,
+        so a missing Pillow or an undecodable image returns the original bytes and
+        writes nothing.
         """
         # TODO(#108): the PDF analogue (re-rendering an over-limit PDF below Anthropic's
         # 32 MB / 100-page document limit) is out of scope here -- only images resize.
@@ -300,21 +301,22 @@ class _AnalysePass(_IngestorBase):
 
 
 def _is_permanent_vision_rejection(exc: Exception) -> bool:
-    """Is ``exc`` a PERMANENT vision/document rejection (not a transient outage)? (#70)
+    """Report whether ``exc`` is a PERMANENT vision rejection, not an outage (#70).
 
-    Anthropic's vision/document API rejects an over-limit or unsupported payload (an
-    image over the 5 MB / pixel limit, a PDF over the 32 MB / 100-page document limit)
-    with a permanent HTTP ``400`` ``invalid_request_error`` -- or, when the request
-    body itself exceeds the size limit, a ``413`` ``RequestTooLargeError`` -- the
-    *same* bytes will be rejected on every retry, so treating it as a deferrable outage
-    holds the raw in ``inbox/`` and re-sends the identical payload forever, burning a
-    budget-guarded call each sweep. A ``400`` / ``413`` / ``422`` is therefore
-    classified as permanent; every other status (``429`` rate-limit, ``5xx`` outage)
-    and any non-HTTP transport error stays transient and defers.
+    Anthropic's vision and document API rejects an over-limit or unsupported payload
+    with a permanent HTTP ``400`` ``invalid_request_error``, or a ``413``
+    ``RequestTooLargeError`` when the request body itself exceeds the size limit. That
+    covers an image over the 5 MB or pixel limit, and a PDF over the 32 MB or 100-page
+    document limit. The *same* bytes are rejected on every retry, so treating it as a
+    deferrable outage holds the raw in ``inbox/`` and re-sends the identical payload
+    forever, burning a budget-guarded call each sweep. A ``400``, ``413`` or ``422`` is
+    therefore classified as permanent, while every other status, such as a ``429``
+    rate-limit or a ``5xx`` outage, and any non-HTTP transport error, stays transient
+    and defers.
 
-    Classified by duck-typing the SDK exception's ``status_code`` (the ``anthropic``
-    ``APIStatusError`` surface) so :mod:`thoth.ingest` never imports the runtime-only
-    ``anthropic`` package; an exception with no ``status_code`` is treated as transient.
+    Classification duck-types the SDK exception's ``status_code``, the ``anthropic``
+    ``APIStatusError`` surface, so :mod:`thoth.ingest` never imports the runtime-only
+    ``anthropic`` package. An exception with no ``status_code`` counts as transient.
     """
     status = getattr(exc, "status_code", None)
     return isinstance(status, int) and status in (400, 413, 422)
@@ -323,10 +325,11 @@ def _is_permanent_vision_rejection(exc: Exception) -> bool:
 def _cleanup_fetched(fetched: FetchedBinary | None) -> None:
     """Unlink an analyse-pass URL binary's staged temp file when not consumed.
 
-    On the happy path :meth:`Ingestor.capture_raw` reuses and cleans up the staged tmp
-    (via the asset store's move/unlink). This guards the paths where ``capture_raw``
-    never runs -- a classify/curate/analyse deferral -- so the ``thoth-fetch-*`` temp
-    file is removed rather than leaked. A best-effort unlink: a missing file is fine.
+    On the happy path :meth:`Ingestor.capture_raw` reuses and cleans up the staged tmp,
+    through the asset store's move and unlink. This guards the paths where
+    ``capture_raw`` never runs, a classify, curate or analyse deferral, so the
+    ``thoth-fetch-*`` temp file is removed rather than leaked. The unlink is
+    best-effort, and a missing file is fine.
     """
     if fetched is None:
         return

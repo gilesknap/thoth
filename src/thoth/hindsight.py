@@ -3,32 +3,34 @@
 This module is the appliance's *only* path to Hindsight, and Hindsight is a
 **rebuildable derived index** over the canonical vault (SPEC sections 8 and 15),
 never the store of record. :class:`Hindsight` is a thin :class:`httpx.Client` over a
-long-running ``hindsight-api`` HTTP server (default ``http://127.0.0.1:8888``); it
+long-running ``hindsight-api`` HTTP server, ``http://127.0.0.1:8888`` by default. It
 never imports any ``hindsight`` Python package, so importing this module at pytest
-collection is always safe even on a bare checkout where the server and its
-Postgres/Gemini backend are absent. Only the standard library, :mod:`httpx`,
-:mod:`tenacity`, and :class:`thoth.config.Config` are imported at module top level.
+collection is always safe, even on a bare checkout lacking the server and its Postgres
+and Gemini backend. Module top level imports only the standard library, :mod:`httpx`,
+:mod:`tenacity` and :class:`thoth.config.Config`.
 
 The server exposes a REST surface under ``/v1/default/banks/{bank}``, where the **bank
 is a path segment** (env ``THOTH_HINDSIGHT_BANK``, default :data:`DEFAULT_BANK`):
 
-* ``retain`` -> ``POST .../memories`` with ``{"items": [...], "async": false}``; each
-  item carries the curated facts as ``content`` plus the vault path as ``document_id``
-  and ``context``, and the page type as ``tags``. (``async: false`` extracts facts
-  synchronously, so a 2xx means the page is indexed.)
-* ``recall`` -> ``POST .../memories/recall`` with ``{"query": ...}``; recall is sent
-  **unfiltered** (no tags filter -- a tag filter would *suppress* untagged hits) and the
-  page-type / path scope is applied client-side.
-* ``forget`` -> ``DELETE .../documents/{document_id}`` (a real per-document delete).
-* ``reset_bank`` -> ``DELETE .../{bank}`` (a full wipe for ``reindex --full-rebuild``).
+* ``retain`` maps to ``POST .../memories`` with ``{"items": [...], "async": false}``,
+  each item carrying the curated facts as ``content``, the vault path as
+  ``document_id`` and ``context``, and the page type as ``tags``. ``async: false``
+  extracts facts synchronously, so a 2xx means the page is indexed.
+* ``recall`` maps to ``POST .../memories/recall`` with ``{"query": ...}``, sent
+  **unfiltered** because a tags filter would *suppress* untagged hits, and the
+  page-type and path scope is applied client-side.
+* ``forget`` maps to ``DELETE .../documents/{document_id}``, a real per-document
+  delete.
+* ``reset_bank`` maps to ``DELETE .../{bank}``, a full wipe for
+  ``reindex --full-rebuild``.
 
-Provenance survives Hindsight's **LLM fact-extraction** (SPEC section 8): every recall
-hit carries the vault path, recovered via redundant channels — the full channel story
-lives on :func:`_path_for_hit`. The page type round-trips as the hit's ``tags`` and
-recall is scoped by it client-side (ADR 0004); the item's ``tags`` do **not** gate
+Provenance survives Hindsight's **LLM fact-extraction** (SPEC section 8), so every
+recall hit carries the vault path, recovered through redundant channels that
+:func:`_path_for_hit` documents. The page type round-trips as the hit's ``tags`` and
+recall is scoped by it client-side (ADR 0004). The item's ``tags`` do **not** gate
 recall, so a page type carried there stays fully recallable.
 
-The seam for tests is an injectable :class:`httpx.BaseTransport`: tests pass an
+The seam for tests is an injectable :class:`httpx.BaseTransport`. A test passes an
 :class:`httpx.MockTransport` that records each :class:`httpx.Request` and returns a
 canned :class:`httpx.Response`, so no socket is ever opened.
 """
@@ -82,17 +84,19 @@ _SOURCE_LINE_RE: re.Pattern[str] = re.compile(r"^SOURCE:\s*(\S+)", re.MULTILINE)
 class HindsightError(Exception):
     """Raised when a checked ``hindsight-api`` call fails permanently.
 
-    A permanent failure is an HTTP 4xx (bad request / auth) -- a retry can never fix it,
-    so it propagates immediately from the bounded retry in :class:`Hindsight`.
+    A permanent failure is an HTTP 4xx, a bad request or an auth error, which a retry
+    can never fix, so it propagates immediately from the bounded retry in
+    :class:`Hindsight`.
     """
 
 
 class HindsightTransientError(HindsightError):
     """A retryable ``hindsight-api`` failure.
 
-    Covers :class:`httpx.TransportError` (connect / timeout / read / write / pool) and
-    HTTP **5xx** responses. Distinguished from a permanent :class:`HindsightError` (HTTP
-    4xx) so the bounded retry re-attempts only failures a retry could fix.
+    Covers :class:`httpx.TransportError`, for a connect, timeout, read, write or pool
+    failure, and an HTTP **5xx** response. It stays distinct from a permanent
+    :class:`HindsightError`, an HTTP 4xx, so the bounded retry re-attempts only failures
+    a retry could fix.
     """
 
 
@@ -101,13 +105,13 @@ class RecallHit:
     """One recall result: the vault path recovered for the hit plus its raw text.
 
     Attributes:
-        path: The vault-relative path recovered for the hit, via the first provenance
-            channel that yielded one (see :func:`_path_for_hit`).
-        text: The raw fact text the hit carried (provenance for callers).
-        page_type: The page-type tag recovered for the hit (``entity``/``concept``/
-            ``memory``/...), or ``""`` when none was carried. Recall is scoped by this
-            tag client-side so knowledge Q&A stays precise while life-admin content is
-            indexed too (ADR 0004).
+        path: The vault-relative path recovered for the hit, through the first
+            provenance channel that yielded one, as :func:`_path_for_hit` documents.
+        text: The raw fact text the hit carried, the caller's provenance.
+        page_type: The page-type tag recovered for the hit, such as ``entity``,
+            ``concept`` or ``memory``, or ``""`` when none was carried. Recall is scoped
+            by this tag client-side, so knowledge Q&A stays precise while life-admin
+            content is indexed too (ADR 0004).
     """
 
     path: str
@@ -119,9 +123,8 @@ def retain_text(rel_path: str, facts: str) -> str:
     """Prefix the ``SOURCE:`` sentinel so recall can echo the vault path back.
 
     The returned blob is exactly one ``SOURCE: <rel_path>`` line, a blank line, then
-    ``facts``. This is the **final fallback** provenance channel (see
-    :func:`_path_for_hit` for the channel order and why the path also travels
-    out-of-band on the retained item).
+    ``facts``. This is the **final fallback** provenance channel, and
+    :func:`_path_for_hit` gives the channel order.
 
     Args:
         rel_path: The vault-relative path of the page these facts describe.
@@ -145,8 +148,8 @@ def _str_field(record: dict[str, object], *keys: str) -> str | None:
 def _iter_recall_records(payload: dict[str, object]) -> Iterable[dict[str, object]]:
     """Yield per-hit JSON records from a parsed recall payload.
 
-    The contract envelope nests hits under ``results``; a bare ``hits`` list is also
-    tolerated. Non-dict records are skipped.
+    The contract envelope nests hits under ``results``, and a bare ``hits`` list is
+    tolerated too. A non-dict record is skipped.
     """
     for key in ("results", "hits"):
         value = payload.get(key)
@@ -158,17 +161,17 @@ def _iter_recall_records(payload: dict[str, object]) -> Iterable[dict[str, objec
 
 
 def _hit_text(record: dict[str, object]) -> str:
-    """Return the fact text from a recall record (the ``text``/``content`` field)."""
+    """Return the fact text from a recall record's ``text`` or ``content`` field."""
     return _str_field(record, "text", "content") or ""
 
 
 def _path_for_hit(record: dict[str, object]) -> str | None:
     """Recover a vault path for one hit via the three provenance channels, in order.
 
-    1. ``document_id`` echoed on the hit (PRIMARY -- the item's ``document_id``, which
-       is the vault-relative path, and also the :meth:`Hindsight.forget` target).
-    2. ``context`` echoed on the hit (the item's ``context``, also the path).
-    3. a ``SOURCE: <rel-path>`` line surviving inside the hit text (final fallback).
+    1. ``document_id`` echoed on the hit. This is PRIMARY: the item's ``document_id`` is
+       the vault-relative path, and also the :meth:`Hindsight.forget` target.
+    2. ``context`` echoed on the hit, which is the item's ``context`` and also the path.
+    3. a ``SOURCE: <rel-path>`` line surviving inside the hit text, the final fallback.
 
     Returns the first path found, or ``None`` when no channel yields one.
     """
@@ -185,10 +188,10 @@ def _path_for_hit(record: dict[str, object]) -> str | None:
 def _page_type_for_hit(record: dict[str, object]) -> str:
     """Recover the page-type tag for one hit from its echoed ``tags``.
 
-    The retain item carries the page type in ``tags`` (the field Hindsight echoes onto
-    every extracted fact). Returns the first tag token that is **not** a vault path (a
-    path-shaped ``a/b.md`` tag is skipped so a belt-and-braces path tag never
-    masquerades as the page type), or ``""`` when none was carried.
+    The retain item carries the page type in ``tags``, the field Hindsight echoes onto
+    every extracted fact. Returns the first tag token that is **not** a vault path,
+    since skipping a path-shaped ``a/b.md`` tag stops a belt-and-braces path tag
+    masquerading as the page type, or ``""`` when none was carried.
     """
     tags = record.get("tags")
     if isinstance(tags, (list, tuple)):
@@ -206,19 +209,18 @@ def _is_path_tag(tag: str) -> bool:
 def parse_recall(payload: dict[str, object]) -> list[RecallHit]:
     """Parse a recall response payload into ordered, de-duped :class:`RecallHit` values.
 
-    ``payload`` is the **parsed JSON dict** of a ``memories/recall`` response: a
-    ``results`` list of hits. Each hit's vault path is recovered via
-    :func:`_path_for_hit`, and its page type via :func:`_page_type_for_hit` (the
-    hit's ``tags``). The first occurrence of each distinct path wins and later
-    duplicates are dropped, preserving first-seen order. Hits with no recoverable path
-    are skipped.
+    ``payload`` is the **parsed JSON dict** of a ``memories/recall`` response, holding a
+    ``results`` list of hits. :func:`_path_for_hit` recovers each hit's vault path, and
+    :func:`_page_type_for_hit` recovers its page type from the hit's ``tags``. The first
+    occurrence of each distinct path wins and later duplicates drop, preserving
+    first-seen order. A hit with no recoverable path is skipped.
 
     Args:
         payload: The parsed JSON dict of a recall response.
 
     Returns:
-        The de-duplicated :class:`RecallHit` list in first-seen order (``[]`` when no
-        path could be recovered).
+        The de-duplicated :class:`RecallHit` list in first-seen order, ``[]`` when no
+        path could be recovered.
     """
     hits: list[RecallHit] = []
     seen: set[str] = set()
@@ -241,19 +243,19 @@ def parse_recall(payload: dict[str, object]) -> list[RecallHit]:
 class Hindsight:
     """HTTP client over a standalone ``hindsight-api`` server.
 
-    Construct it from the frozen :class:`~thoth.config.Config` that owns the deployment;
-    the base URL defaults to ``config.hindsight_base_url``. The instance holds a
-    long-lived :class:`httpx.Client` bound to ``{base_url}``; the bank is a path segment
-    (env ``THOTH_HINDSIGHT_BANK``, overridable at construction) of every request URL.
-    No ``hindsight`` Python package is ever imported.
+    Construct it from the frozen :class:`~thoth.config.Config` that owns the deployment,
+    where the base URL defaults to ``config.hindsight_base_url``. The instance holds a
+    long-lived :class:`httpx.Client` bound to ``{base_url}``, and the bank is a path
+    segment of every request URL, from ``THOTH_HINDSIGHT_BANK`` and overridable at
+    construction. No ``hindsight`` Python package is ever imported.
 
-    The transport is injectable (``transport=``) so tests pass an
-    :class:`httpx.MockTransport` and no socket is opened. Checked calls (:meth:`retain`,
-    :meth:`recall`, :meth:`reset_bank`) are wrapped in a bounded retry
-    (:mod:`tenacity`): up to ``retries`` attempts with exponential backoff,
-    re-attempting only :class:`HindsightTransientError` (transport error / HTTP 5xx) and
-    failing fast on a permanent :class:`HindsightError` (HTTP 4xx). :meth:`forget` is
-    best-effort: one attempt that swallows every error and never raises.
+    The ``transport=`` seam is injectable, so a test passes an
+    :class:`httpx.MockTransport` and no socket is opened. The checked calls
+    :meth:`retain`, :meth:`recall` and :meth:`reset_bank` are wrapped in a bounded
+    :mod:`tenacity` retry of up to ``retries`` attempts with exponential backoff,
+    re-attempting only :class:`HindsightTransientError`, a transport error or HTTP 5xx,
+    and failing fast on a permanent :class:`HindsightError`, an HTTP 4xx. :meth:`forget`
+    is best-effort: one attempt that swallows every error and never raises.
     """
 
     def __init__(
@@ -272,26 +274,24 @@ class Hindsight:
         """Build a :class:`Hindsight` HTTP client.
 
         Args:
-            config: The frozen runtime configuration; supplies the default
-                ``base_url`` (``config.hindsight_base_url``).
-            bank: The Hindsight bank id (a path segment); defaults to
+            config: The frozen runtime configuration, supplying the default ``base_url``
+                from ``config.hindsight_base_url``.
+            bank: The Hindsight bank id, a path segment, defaulting to
                 ``THOTH_HINDSIGHT_BANK`` then :data:`DEFAULT_BANK`.
-            base_url: The ``hindsight-api`` base URL; defaults to
+            base_url: The ``hindsight-api`` base URL, defaulting to
                 ``config.hindsight_base_url``.
-            transport: An :class:`httpx.BaseTransport` seam for tests (an
-                :class:`httpx.MockTransport`); ``None`` uses the default network
-                transport.
+            transport: An :class:`httpx.BaseTransport` seam for tests, typically an
+                :class:`httpx.MockTransport`. ``None`` uses the default transport.
             timeout: Seconds to allow each HTTP call.
-            retries: Maximum attempts for a checked call (``1`` disables retry).
+            retries: Maximum attempts for a checked call, where ``1`` disables retry.
             retry_wait_initial: Initial exponential backoff in seconds.
             retry_wait_max: Cap on the exponential backoff in seconds.
-            guard: An optional daily-spend guard (:class:`thoth.budget.BudgetGuard`);
-                when wired, :meth:`retain` charges one Hindsight (Gemini
-                fact-extraction) call against the daily budget *before* the HTTP call
-                and raises :class:`thoth.budget.BudgetExceededError` at the cap
-                -- the guard for the ``reindex --full-rebuild`` cost burst (issue #16).
-                ``None`` (the default) disables the cap, so existing callers are
-                unaffected.
+            guard: An optional daily-spend :class:`thoth.budget.BudgetGuard`. When
+                wired, :meth:`retain` charges one Hindsight Gemini fact-extraction
+                call against the daily budget *before* the HTTP call, and raises
+                :class:`thoth.budget.BudgetExceededError` at the cap, guarding the
+                ``reindex --full-rebuild`` cost burst (issue #16). ``None``, the
+                default, disables the cap, leaving existing callers unaffected.
         """
         self._config = config
         self._guard = guard
@@ -326,7 +326,7 @@ class Hindsight:
         return self._base_url
 
     def close(self) -> None:
-        """Close the underlying :class:`httpx.Client` (idempotent)."""
+        """Close the underlying :class:`httpx.Client`, idempotently."""
         self._client.close()
 
     def __enter__(self) -> Hindsight:
@@ -342,27 +342,27 @@ class Hindsight:
     def retain(self, rel_path: str, facts: str, *, tags: Sequence[str] = ()) -> None:
         """Retain a curated page's facts, with the vault path carried as provenance.
 
-        POSTs one item to ``.../memories``: ``content`` is :func:`retain_text`,
-        ``document_id`` and ``context`` both carry ``rel_path`` (the provenance
-        channels — see :func:`_path_for_hit`), and ``tags`` carries the **page type
-        only** -- never the path. ``async`` is ``false`` so the call blocks until the
-        facts are extracted and indexed. A non-2xx is a hard failure so the ingest
-        pass can surface that the page did not land.
+        POSTs one item to ``.../memories``, where ``content`` is :func:`retain_text`,
+        ``document_id`` and ``context`` both carry ``rel_path`` as the provenance
+        channels, and ``tags`` carries the **page type only**, never the path. ``async``
+        is ``false``, so the call blocks until the facts are extracted and indexed. A
+        non-2xx is a hard failure, so the ingest pass can surface that the page did not
+        land.
 
         Args:
             rel_path: The vault-relative path of the page being retained.
-            facts: The curated fact text (the ``SOURCE:`` line is prepended for you).
-            tags: Page-type token(s) (typically ``[page_type]``). ``rel_path`` is
-                stripped out if present -- ``tags`` is the page-type axis only; the
-                path travels via ``document_id``/``context``. When no page-type token
-                remains, no ``tags`` key is sent.
+            facts: The curated fact text, to which the ``SOURCE:`` line is prepended.
+            tags: Page-type tokens, typically ``[page_type]``. ``rel_path`` is
+                stripped when present, because ``tags`` is the page-type axis and the
+                path travels through ``document_id`` and ``context``. With no
+                page-type token left, no ``tags`` key is sent.
 
         Raises:
-            HindsightError: on a non-2xx response, after the bounded retry on
-                transient failures (see the class docstring).
+            HindsightError: on a non-2xx response, after the bounded retry on transient
+                failures that the class docstring describes.
             thoth.budget.BudgetExceededError: when a budget guard is wired and the daily
-                call cap has been reached (raised before the HTTP call, so no Gemini
-                extraction is spent).
+                call cap is reached, raised before the HTTP call so no Gemini extraction
+                is spent.
         """
         if self._guard is not None:
             # Charge before the HTTP call so a cap-reached day defers the embedding
@@ -388,27 +388,28 @@ class Hindsight:
     ) -> list[RecallHit]:
         """Semantic recall; return vault paths recovered from each hit's provenance.
 
-        POSTs ``{"query": query}`` to ``.../memories/recall`` (unfiltered -- no tags
-        filter) and parses the JSON body with :func:`parse_recall`. An empty result set
-        is a normal outcome and returns ``[]``; only a non-2xx raises.
+        POSTs ``{"query": query}`` to ``.../memories/recall``, unfiltered with no tags
+        filter, and parses the JSON body with :func:`parse_recall`. An empty result set
+        is a normal outcome returning ``[]``, and only a non-2xx raises.
 
         Now that the index covers life-admin content too (ADR 0004), ``types`` scopes
-        recall by the hit's ``page_type`` **client-side**: only hits whose page type is
-        in ``types`` survive, so knowledge Q&A can filter to knowledge types and keep
-        its precision while "search my memories" can ask for life-admin types. The
-        filter runs *before* the ``limit`` cap. ``None`` (the default) keeps every hit,
-        so the retain-then-probe round-trip and any "search everything" caller are kept.
+        recall by the hit's ``page_type`` **client-side**, so only hits whose page type
+        is in ``types`` survive. Knowledge Q&A can therefore filter to knowledge types
+        and keep its precision, while "search my memories" can ask for life-admin types.
+        The filter runs *before* the ``limit`` cap. ``None``, the default, keeps every
+        hit, preserving the retain-then-probe round-trip and any "search everything"
+        caller.
 
         Args:
             query: The natural-language recall query.
-            limit: Maximum number of hits to return (applied client-side after parsing).
-            types: When given, keep only hits whose ``page_type`` is in this set (the
-                domain scope, e.g. :data:`thoth.vault.REFERENCE_TYPES`); ``None`` keeps
+            limit: Maximum hits to return, applied client-side after parsing.
+            types: When given, keeps only hits whose ``page_type`` is in this set, the
+                domain scope such as :data:`thoth.vault.REFERENCE_TYPES`. ``None`` keeps
                 all.
 
         Returns:
             The de-duplicated :class:`RecallHit` list, scoped by ``types`` and capped at
-            ``limit`` (``[]`` when nothing matched).
+            ``limit``, or ``[]`` when nothing matched.
 
         Raises:
             HindsightError: on a non-2xx response, as :meth:`retain`.
@@ -425,12 +426,12 @@ class Hindsight:
         """Best-effort per-document delete; never raises on failure.
 
         Issues a single ``DELETE .../documents/{rel_path}`` with check-disabled
-        semantics and **no retry**: a failed forget must not abort -- nor slow -- an
-        ingest or reindex pass, so every error (transport or HTTP status) is swallowed.
+        semantics and **no retry**, because a failed forget must neither abort nor slow
+        an ingest or reindex pass, so every transport or HTTP-status error is swallowed.
 
         Args:
-            rel_path: The vault-relative path whose document should be deleted (the
-                ``document_id`` set on :meth:`retain`).
+            rel_path: The vault-relative path whose document should be deleted, the
+                ``document_id`` set on :meth:`retain`.
         """
         try:
             self._client.request("DELETE", self._doc_path(rel_path))
@@ -442,8 +443,8 @@ class Hindsight:
     def reset_bank(self) -> None:
         """Wipe the whole bank (``DELETE .../{bank}``) for ``reindex --full-rebuild``.
 
-        A checked call with the same 4xx/5xx classification and bounded retry as
-        :meth:`retain`/:meth:`recall`.
+        A checked call with the same 4xx and 5xx classification and bounded retry as
+        :meth:`retain` and :meth:`recall`.
 
         Raises:
             HindsightError: on a non-2xx response, as :meth:`retain`.
@@ -454,17 +455,17 @@ class Hindsight:
         """Recall ``query`` and report whether ``rel_path`` is among the hits.
 
         This is the "did it land?" check the ingest retain pass runs after a
-        :meth:`retain`: it recalls and tests membership of the just-written path.
+        :meth:`retain`, recalling and testing membership of the just-written path.
 
         Args:
             rel_path: The vault-relative path expected to surface.
             query: The recall query to probe with.
 
         Returns:
-            ``True`` if ``rel_path`` is one of the recalled paths, else ``False``.
+            ``True`` when ``rel_path`` is one of the recalled paths, else ``False``.
 
         Raises:
-            HindsightError: if the underlying :meth:`recall` fails on a non-2xx.
+            HindsightError: when the underlying :meth:`recall` fails on a non-2xx.
         """
         return any(hit.path == rel_path for hit in self.recall(query))
 
@@ -477,8 +478,8 @@ class Hindsight:
     def _doc_path(self, rel_path: str) -> str:
         """Return the bank-relative ``/documents/{rel_path}`` path.
 
-        The ``document_id`` is the vault-relative path, so its ``/`` separators are kept
-        as path separators (only other reserved characters are percent-encoded).
+        The ``document_id`` is the vault-relative path, so its ``/`` separators stay
+        path separators and only other reserved characters are percent-encoded.
         """
         return f"{self._bank_prefix()}/documents/{quote(rel_path, safe='/')}"
 
@@ -493,25 +494,25 @@ class Hindsight:
     ) -> httpx.Response:
         """Issue a checked HTTP call with bounded retry on transient failures.
 
-        ``path`` is appended to the ``/v1/default/banks/{bank}`` prefix (an empty
-        ``path`` addresses the bank itself, for ``reset_bank``). Re-attempts
-        only :class:`HindsightTransientError` (transport error / HTTP 5xx) up to
-        ``retries`` times with exponential backoff; a permanent :class:`HindsightError`
-        (HTTP 4xx) propagates immediately.
+        ``path`` is appended to the ``/v1/default/banks/{bank}`` prefix, and an empty
+        ``path`` addresses the bank itself, for ``reset_bank``. It re-attempts only
+        :class:`HindsightTransientError`, a transport error or HTTP 5xx, up to
+        ``retries`` times with exponential backoff, while a permanent
+        :class:`HindsightError`, an HTTP 4xx, propagates immediately.
 
         Args:
-            op: The operation name for diagnostics (``"retain"`` / ``"recall"`` / ...).
-            subject: The path or query the call concerns (for the error message).
+            op: The operation name, ``"retain"`` or ``"recall"``, for diagnostics.
+            subject: The path or query the call concerns, for the error message.
             method: The HTTP method.
-            path: The bank-relative path (``""`` for the bank itself).
+            path: The bank-relative path, ``""`` for the bank itself.
             json: An optional JSON body.
 
         Returns:
-            The successful (2xx) response.
+            The successful 2xx response.
 
         Raises:
-            HindsightError: the last failure once attempts are exhausted (transient) or
-                immediately (permanent).
+            HindsightError: the last transient failure once attempts are exhausted, or a
+                permanent failure immediately.
         """
         url = f"{self._bank_prefix()}{path}"
         retrying = Retrying(
@@ -532,11 +533,11 @@ class Hindsight:
         url: str,
         json: object | None,
     ) -> httpx.Response:
-        """Issue one HTTP call and classify the outcome (one retry attempt).
+        """Issue one HTTP call, one retry attempt, and classify the outcome.
 
         Raises:
             HindsightTransientError: on a transport error or an HTTP 5xx response.
-            HindsightError: on an HTTP 4xx response (bad request / auth).
+            HindsightError: on an HTTP 4xx response, a bad request or an auth error.
         """
         try:
             response = self._client.request(method, url, json=json)
@@ -555,7 +556,7 @@ class Hindsight:
 
     @staticmethod
     def _format_failure(op: str, subject: str, response: httpx.Response) -> str:
-        """Build a diagnostic message embedding the op, subject, status, and body."""
+        """Build a diagnostic message embedding the op, subject, status and body."""
         return (
             f"hindsight {op} for {subject!r} failed "
             f"(HTTP {response.status_code}). body: {response.text.strip()!r}"
@@ -563,7 +564,7 @@ class Hindsight:
 
 
 def _response_json(response: httpx.Response) -> dict[str, object]:
-    """Decode a body to a JSON dict (empty dict on a non-object / decode error)."""
+    """Decode a body to a JSON dict, empty on a non-object or a decode error."""
     try:
         payload = response.json()
     except ValueError:

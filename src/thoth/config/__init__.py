@@ -1,56 +1,56 @@
 """Load and validate thoth's runtime configuration.
 
-This package is the Phase-0 foundation that every later module imports. It is the
-single source of truth for the environment-variable names, documented defaults, the
-resolved vault path, the ``~/.thoth`` home locations, and the ``obsidian://`` deep-link
-format. No other module re-reads :data:`os.environ` for these values; callers invoke
-:func:`load_config` once (typically near process entry) and pass the frozen
-:class:`Config` down. This keeps the closed-surface promise auditable in one place.
+This package is the Phase-0 foundation every later module imports, and the single source
+of truth for the environment-variable names, documented defaults, the resolved vault
+path, the ``~/.thoth`` home locations and the ``obsidian://`` deep-link format. No other
+module re-reads :data:`os.environ` for these values: a caller invokes
+:func:`load_config` once, typically near process entry, and passes the frozen
+:class:`Config` down, which keeps the closed-surface promise auditable in one place.
 
-Configuration is read from environment variables, optionally seeded from a ``.env``
-file via ``python-dotenv``. Seeding is non-mutating: file values only fill gaps that the
-real environment does not already provide, and :data:`os.environ` is never written to.
+Configuration comes from environment variables, optionally seeded from a ``.env`` file
+through ``python-dotenv``. Seeding is non-mutating, so a file value fills only a gap the
+real environment does not already provide, and nothing ever writes to
+:data:`os.environ`.
 
-The package imports only the standard library at top level; ``python-dotenv`` is
-imported lazily inside :func:`_read_dotenv` so the package stays import-safe even when
-the dependency is not resolved (for example during doctest collection on a bare
-checkout).
+Module top level imports only the standard library, and :func:`_read_dotenv` imports
+``python-dotenv`` lazily, so the package stays import-safe even with that dependency
+unresolved, as during doctest collection on a bare checkout.
 
 Documented defaults (the single source of truth):
 
 * ``OBSIDIAN_VAULT_NAME`` defaults to :data:`DEFAULT_OBSIDIAN_VAULT_NAME`
   (``pkm-vault``).
 * ``THOTH_HOME`` defaults to :data:`DEFAULT_THOTH_HOME` (``~/.thoth``).
-* ``THOTH_TIMEZONE`` defaults to :data:`DEFAULT_TIMEZONE` (``Europe/London``) -- the
-  IANA timezone for every calendar-date computation (day boundary, schedules, lint
-  freshness, and the curate relative-date resolution). A bogus name fails fast.
+* ``THOTH_TIMEZONE`` defaults to :data:`DEFAULT_TIMEZONE` (``Europe/London``), the IANA
+  timezone for every calendar-date computation: the day boundary, schedules, lint
+  freshness and the curate relative-date resolution. A bogus name fails fast.
 * ``ANTHROPIC_MODEL`` defaults to :data:`DEFAULT_ANTHROPIC_MODEL`
   (``claude-sonnet-4-6``).
-* ``THOTH_ANALYSE_MODEL`` defaults to ``None`` -- the folded analyse/kind/transcription
-  vision call (issue #68) then resolves to :data:`DEFAULT_ANTHROPIC_MODEL` via the LLM.
-  Set it to drop the analyse call to a cheaper model (a Haiku) for document A/B work
+* ``THOTH_ANALYSE_MODEL`` defaults to ``None``, so the folded analyse, kind and
+  transcription vision call (issue #68) resolves to :data:`DEFAULT_ANTHROPIC_MODEL`
+  through the LLM. Set it to drop that call to a cheaper Haiku for document A/B work
   without changing the default model used everywhere else.
-* ``THOTH_DIAGRAM_MODEL`` defaults to ``None`` -- the Excalidraw reconstruction call
-  (issue #68, hand-drawn diagram -> editable scene) then resolves to
-  :data:`DEFAULT_ANTHROPIC_MODEL` via the LLM. That call needs spatial reasoning plus
-  valid JSON, so it is worth pinning to a stronger model (Sonnet/Opus) independently.
-* ``THOTH_INTENT_MODEL`` defaults to ``None`` -- the free-text intent gate (issue #5)
-  then falls back to :data:`thoth.intent.DEFAULT_INTENT_MODEL` (a cheap Haiku). The gate
-  is a one-shot routing call, so a cheap model is the point; override it to re-tier the
-  gate without a redeploy.
+* ``THOTH_DIAGRAM_MODEL`` defaults to ``None``, so the Excalidraw reconstruction call
+  (issue #68, a hand-drawn diagram into an editable scene) resolves to
+  :data:`DEFAULT_ANTHROPIC_MODEL` through the LLM. That call needs spatial reasoning and
+  valid JSON, so pinning it independently to a stronger Sonnet or Opus is worthwhile.
+* ``THOTH_INTENT_MODEL`` defaults to ``None``, so the free-text intent gate (issue #5)
+  falls back to :data:`thoth.intent.DEFAULT_INTENT_MODEL`, a cheap Haiku. The gate is a
+  one-shot routing call, so a cheap model is the point, and this override re-tiers it
+  without a redeploy.
 * ``THOTH_HINDSIGHT_BASE_URL`` defaults to :data:`DEFAULT_HINDSIGHT_BASE_URL`
-  (``http://127.0.0.1:8888``) -- the standalone ``hindsight-api`` server the
+  (``http://127.0.0.1:8888``), the standalone ``hindsight-api`` server the
   :mod:`thoth.hindsight` HTTP client talks to.
-* ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``); the daemon
-  entrypoint passes it to :func:`logging.basicConfig` so the appliance is no longer
+* ``THOTH_LOG_LEVEL`` defaults to :data:`DEFAULT_LOG_LEVEL` (``INFO``), and the daemon
+  entrypoint passes it to :func:`logging.basicConfig`, so the appliance is no longer
   silent on the happy path (issue #52).
-* ``SLACK_ALERT_CHANNEL`` is the unattended error/heartbeat alert target (issue #15);
-  when unset, :meth:`Config.alert_target` falls back to the first
+* ``SLACK_ALERT_CHANNEL`` is the unattended error and heartbeat alert target (issue
+  #15). When unset, :meth:`Config.alert_target` falls back to the first
   ``SLACK_ALLOWED_USERS`` id as a DM target.
 * ``SLACK_CAPTURE_CHANNEL`` is the dedicated private channel the Slack daemon listens
-  and replies in (issue #61); it is required to start ``thoth slack`` (a pure cutover
-  from the old ``message.im`` DM flow, no DM fallback) and is read via
-  :meth:`Config.require_slack_capture_channel`.
+  and replies in (issue #61). ``thoth slack`` requires it, a pure cutover from the old
+  ``message.im`` DM flow with no DM fallback, and
+  :meth:`Config.require_slack_capture_channel` reads it.
 
 Only ``PKM_VAULT`` is hard-required in Phase 0 (see :data:`REQUIRED_VARS`).
 """
@@ -155,16 +155,16 @@ def load_config(
 ) -> Config:
     """Build a :class:`Config` from ``env`` (defaults to :data:`os.environ`).
 
-    Resolution order (highest precedence first): the explicit ``env`` mapping (or the
-    real :data:`os.environ`) wins, then values read from ``env_file`` (or
-    ``<THOTH_HOME>/.env`` when ``use_dotenv`` is true and that file exists), then the
+    Resolution runs highest precedence first: the explicit ``env`` mapping, or the real
+    :data:`os.environ`, wins, then values read from ``env_file``, or
+    ``<THOTH_HOME>/.env`` when ``use_dotenv`` is true and that file exists, then the
     documented defaults. The function never mutates :data:`os.environ`.
 
     Args:
-        env: Mapping of environment variables. Defaults to :data:`os.environ`.
-        env_file: Explicit ``.env`` path to seed from. When ``None`` and
-            ``use_dotenv`` is true, ``<THOTH_HOME>/.env`` is used if it exists.
-        use_dotenv: When false, no ``.env`` file is read even if present.
+        env: Mapping of environment variables, defaulting to :data:`os.environ`.
+        env_file: Explicit ``.env`` path to seed from. With ``None`` and ``use_dotenv``
+            true, ``<THOTH_HOME>/.env`` is used when it exists.
+        use_dotenv: When false, reads no ``.env`` file even if one is present.
 
     Returns:
         A validated, frozen :class:`Config`.
@@ -283,9 +283,9 @@ def load_config(
 def _read_dotenv(path: Path) -> dict[str, str]:
     """Return key/value pairs from a .env file, ``{}`` if it is absent.
 
-    ``python-dotenv`` is imported here (not at module scope) to keep the package
-    import-safe when the dependency is unresolved. Keys whose value is ``None`` (a
-    bare ``KEY`` line) are dropped so the merge layer only ever holds ``str`` values.
+    ``python-dotenv`` is imported here rather than at module scope, to keep the package
+    import-safe when the dependency is unresolved. A key whose value is ``None``, from a
+    bare ``KEY`` line, is dropped, so the merge layer only ever holds ``str`` values.
     """
     if not path.is_file():
         return {}
@@ -301,7 +301,7 @@ def _resolve_path(value: str) -> Path:
 
 
 def _opt(value: str | None) -> str | None:
-    """Treat an empty string as unset (shell/.env habit: blank means absent)."""
+    """Treat an empty string as unset, the shell and .env habit that blank is absent."""
     return value or None
 
 
@@ -309,14 +309,14 @@ def _tz_opt(value: str | None) -> ZoneInfo:
     """Resolve an optional IANA timezone name, falling back to :data:`DEFAULT_TIMEZONE`.
 
     Args:
-        value: The raw ``THOTH_TIMEZONE`` value (already ``None`` when unset/blank).
+        value: The raw ``THOTH_TIMEZONE`` value, already ``None`` when unset or blank.
 
     Returns:
-        The resolved :class:`zoneinfo.ZoneInfo` (the owner's locale when unset).
+        The resolved :class:`zoneinfo.ZoneInfo`, the owner's locale when unset.
 
     Raises:
         ConfigError: when ``value`` names a timezone the ``tzdata`` database does not
-            know, so a typo fails fast at startup rather than silently mis-dating.
+            know, so a typo fails fast at startup rather than silently mis-dates.
     """
     name = value or DEFAULT_TIMEZONE
     try:
@@ -331,7 +331,8 @@ def _int_opt(value: str | None, *, default: int, name: str) -> int:
     """Parse an optional integer env value, falling back to ``default`` when unset.
 
     Args:
-        value: The raw string value (already ``None`` when unset/blank via ``lookup``).
+        value: The raw string value, which ``lookup`` already made ``None`` when unset
+            or blank.
         default: The documented default to use when ``value`` is ``None``.
         name: The variable name, for a clear :class:`ConfigError` on a non-integer.
 

@@ -1,4 +1,4 @@
-"""Constants, the error type and the frozen digest item types for the summary scans."""
+"""Constants, the error type and the frozen digest item types of the summary scans."""
 
 from __future__ import annotations
 
@@ -56,12 +56,12 @@ _REVIEW_STATUS: str = "review"
 
 
 class SummaryError(Exception):
-    """Raised when a digest cannot be composed (for example a missing vault root)."""
+    """Raised when a digest cannot be composed, as with a missing vault root."""
 
 
 @dataclass(frozen=True, slots=True)
 class ActionItem:
-    """One life-admin action surfaced in a digest (parsed from its frontmatter)."""
+    """One life-admin action surfaced in a digest, parsed from its frontmatter."""
 
     path: str
     """The vault-relative path of the action page (e.g. ``actions/fix-fence.md``)."""
@@ -81,7 +81,7 @@ class ActionItem:
 
 @dataclass(frozen=True, slots=True)
 class MediaItem:
-    """One media-backlog item surfaced in a digest (parsed from its frontmatter)."""
+    """One media-backlog item surfaced in a digest, parsed from its frontmatter."""
 
     path: str
     """The vault-relative path of the media page (e.g. ``media/ddia.md``)."""
@@ -99,7 +99,7 @@ class MediaItem:
 
 @dataclass(frozen=True, slots=True)
 class PageRef:
-    """A curated page surfaced in a digest (recent ingest or review-flagged)."""
+    """A curated page surfaced in a digest, a recent ingest or review-flagged."""
 
     path: str
     """The vault-relative path of the page (e.g. ``concepts/distributed.md``)."""

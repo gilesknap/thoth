@@ -22,19 +22,19 @@ from .tools_query import pkm_recent, pkm_search, pkm_todos
 def build_server(ctx: ToolContext) -> Any:
     """Lazily import ``FastMCP``, build the server, and register the ``pkm_*`` tools.
 
-    ``mcp`` is imported **inside** this function so module import stays CI-safe. A
-    :class:`FastMCP` named :data:`SERVER_NAME` is created and one tool per
+    ``mcp`` is imported **inside** this function, so module import stays CI-safe. A
+    :class:`FastMCP` named :data:`SERVER_NAME` is created, and one tool per
     :data:`TOOL_NAMES` is registered, each forwarding to the matching ``pkm_*`` function
-    bound to ``ctx`` (so the registered callables carry the same keyword arguments the
-    pure functions do). The server is returned but **not** started -- :func:`run` does
-    that.
+    bound to ``ctx``, so the registered callables carry the same keyword arguments the
+    pure functions do. The server is returned but **not** started, which :func:`run`
+    does.
 
     Args:
         ctx: The injected collaborator bundle every registered tool delegates through.
 
     Returns:
-        The configured ``FastMCP`` instance (typed ``Any`` to avoid a top-level import
-        of the optional ``mcp`` dependency).
+        The configured ``FastMCP`` instance, typed ``Any`` to avoid a top-level import
+        of the optional ``mcp`` dependency.
     """
     from mcp.server.fastmcp import FastMCP
 
@@ -128,40 +128,41 @@ def run(
     host: str = DEFAULT_MCP_HOST,
     port: int = DEFAULT_MCP_PORT,
 ) -> None:
-    """Wire a real :class:`ToolContext` (if needed) and serve over the chosen transport.
+    """Wire a real :class:`ToolContext` when needed, then serve over the transport.
 
-    This is the production entry point (``thoth mcp``). When ``ctx`` is ``None`` it
-    wires the full collaborator graph via :func:`thoth.wiring.build_collaborators`
-    (the same construction shape ``slack_app.run`` uses) -- then builds the server via
+    This is the ``thoth mcp`` production entry point. With ``ctx`` as ``None`` it wires
+    the full collaborator graph through :func:`thoth.wiring.build_collaborators`, the
+    same construction shape ``slack_app.run`` uses, then builds the server through
     :func:`build_server` and runs it.
 
     The ``transport`` selects how the server is exposed (issue #103):
 
-    * ``"stdio"`` (the default) -- the byte-for-byte-unchanged spawn-as-a-child model
-      Claude Code uses locally: ``host``/``port`` are ignored and no socket is bound.
-    * ``"http"`` -- the streamable-HTTP transport bound to ``host``:``port``
-      (loopback by default; network exposure is delegated to cloudflared + Cloudflare
-      Access, ADR 0011). Tier-1 bearer auth is mandatory: the server **fails fast** at
-      startup if ``THOTH_MCP_API_KEYS`` is unset (never binding an unauthenticated
-      socket), and -- when ``THOTH_MCP_CF_ACCESS_*`` are set -- also enforces the
-      Cf-Access JWT. See :func:`_run_http`.
+    * ``"stdio"``, the default, is the byte-for-byte-unchanged spawn-as-a-child model
+      Claude Code uses locally. ``host`` and ``port`` are ignored, and no socket is
+      bound.
+    * ``"http"`` is the streamable-HTTP transport bound to ``host``:``port``, loopback
+      by default, with network exposure delegated to cloudflared and Cloudflare Access
+      (ADR 0011). Tier-1 bearer auth is mandatory, so the server **fails fast** at
+      startup when ``THOTH_MCP_API_KEYS`` is unset, never binding an unauthenticated
+      socket, and it also enforces the Cf-Access JWT when ``THOTH_MCP_CF_ACCESS_*`` are
+      set. See :func:`_run_http`.
 
     The collaborator construction and the lazy ``mcp`` import happen only here, so
-    importing this module stays light. This is never unit-tested live (CI has no stdio
-    and no ``mcp`` package).
+    importing this module stays light. Nothing unit-tests this live, CI having neither
+    stdio nor the ``mcp`` package.
 
     Args:
         config: The frozen runtime config.
-        ctx: An already-wired context (for tests/embedding); built from ``config`` when
-            ``None``.
-        transport: ``"stdio"`` (default) or ``"http"``.
-        host: HTTP bind address (ignored for stdio).
-        port: HTTP listen port (ignored for stdio).
+        ctx: An already-wired context, for a test or an embedding. Built from ``config``
+            when ``None``.
+        transport: ``"stdio"``, the default, or ``"http"``.
+        host: The HTTP bind address, ignored for stdio.
+        port: The HTTP listen port, ignored for stdio.
 
     Raises:
-        ValueError: if ``transport`` is not ``"stdio"`` or ``"http"``.
-        ConfigError: (HTTP only) if ``THOTH_MCP_API_KEYS`` is unset/empty -- refusing to
-            bind an unauthenticated socket.
+        ValueError: when ``transport`` is neither ``"stdio"`` nor ``"http"``.
+        ConfigError: on HTTP only, when ``THOTH_MCP_API_KEYS`` is unset or empty,
+            refusing to bind an unauthenticated socket.
     """
     if transport not in ("stdio", "http"):
         raise ValueError(

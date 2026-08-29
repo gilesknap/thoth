@@ -44,61 +44,55 @@ class Ingestor(
     ) -> IngestReport:
         """Run the bounded passes and return a structured report.
 
-        ``commit`` and ``as_is`` are the two seams the ``thoth capture`` backfill (issue
-        #80) drives; both default to the Slack/MCP behaviour, so existing callers are
-        unaffected:
+        ``commit`` and ``as_is`` are the two seams the ``thoth capture`` backfill drives
+        (issue #80), and both default to the Slack and MCP behaviour, so existing
+        callers are unaffected:
 
-        * ``commit=False`` defers the git work to the caller. The per-call orient
-          (:meth:`_orient` pull) is skipped -- the batch caller pulls **once** up front
-          -- and the commit pass writes/logs to disk but does **not** call
+        * ``commit=False`` defers the git work to the caller. The per-call
+          :meth:`_orient` pull is skipped, because the batch caller pulls **once** up
+          front, and the commit pass writes and logs to disk but does **not** call
           :meth:`thoth.git_sync.GitSync.commit`, so staged changes accumulate in the
           working tree for one batched commit. The returned report has
-          ``committed=False``. The deferred (LLM-unavailable) path honours it too.
-        * ``as_is=True`` is the low-touch import mode (ADR 0010): the cheap classify
-          call still runs (for routing only), but the expensive **curate** is SKIPPED.
-          The page is filed ONCE with the original body verbatim and a minimal derived
-          frontmatter into the classify-chosen folder, then indexed through the SAME
-          retain pass. No file-plan, no reshaping, no wikilink/dedup-merge, no summary
-          synthesis -- "files + indexes, skips curate" literally.
+          ``committed=False``, and the deferred LLM-unavailable path honours it too.
+        * ``as_is=True`` is the low-touch import mode (ADR 0010), where the cheap
+          classify call still runs for routing but the expensive **curate** is SKIPPED.
+          :meth:`_file_as_is` documents what it files.
 
-        Capture durability is **decoupled from the classify LLM call** (per issue #14):
-        the inbound item is extracted and persisted to a durable ``inbox/`` holding page
-        (idempotent on the body SHA-256) *before* any LLM call, so an Anthropic outage
-        can never lose a capture. Classify/curate then run as a best-effort second
-        stage; if the LLM is unavailable (a :class:`LLMUnavailableError`) the held raw
-        is already safe, the holding page is committed, and a *deferred-curation* report
-        is returned for a later reindex/sweep to re-curate. On success the (now
-        superseded) holding page is removed and the curated/raw/navigation/retain passes
-        run as before.
+        Capture durability is **decoupled from the classify LLM call** (issue #14), as
+        the package docstring's pass 0b describes. When the LLM is unavailable, raising
+        :class:`LLMUnavailableError`, the held raw is already safe, the holding page is
+        committed, and a *deferred-curation* report returns for a later sweep.
 
-        The **validation gate is preserved**: a rejected plan (bad type/slug, an
-        unparseable or schema-invalid output) still raises :class:`IngestError`; only a
-        *transport* failure defers. A rebase conflict at commit is surfaced as
-        :attr:`IngestReport.conflict` (content filed locally; no ``--force``).
+        The **validation gate is preserved**. A rejected plan, from a bad type or slug
+        or an unparseable or schema-invalid output, still raises :class:`IngestError`,
+        and only a *transport* failure defers. A rebase conflict at commit surfaces as
+        :attr:`IngestReport.conflict`, leaving content filed locally with no
+        ``--force``.
 
         Args:
             capture: The inbound item to ingest.
             on_phase: Optional best-effort progress callback (issue #137), invoked
-                with a short label (with the model where applicable) **before** each
-                user-meaningful pass runs -- ``"reading image (<model>)"``,
-                ``"classifying (<model>)"``, ``"curating (<model>)"`` (curate path
-                only), ``"indexing"``. The Slack handler threads it through to edit
-                the "Filing…" placeholder live; non-Slack callers (MCP, the ``thoth
-                capture`` backfill) leave it ``None`` (a no-op). It is fired only on
-                phase transitions, never in a tight loop, and a raising callback is
-                swallowed so progress reporting can never break or abort an ingest.
+                with a short label, naming the model where applicable, **before** each
+                user-meaningful pass runs: ``"reading image (<model>)"``,
+                ``"classifying (<model>)"``, ``"curating (<model>)"`` on the curate path
+                only, and ``"indexing"``. The Slack handler threads it through to edit
+                the "Filing…" placeholder live, while a non-Slack caller such as MCP
+                or the
+                ``thoth capture`` backfill leaves it ``None`` for a no-op. It fires only
+                on phase transitions, never in a tight loop, and a raising callback is
+                swallowed, so progress reporting can never break nor abort an ingest.
 
         Returns:
             The :class:`IngestReport` describing every file touched.
 
         Raises:
-            IngestError: on an extraction, validation, or non-conflict git failure (an
-                LLM-availability failure is reported as deferred, not raised).
+            IngestError: on an extraction, validation or non-conflict git failure. An
+                LLM-availability failure is reported as deferred rather than raised.
         """
         started = time.monotonic()
 
         def phase(label: str) -> None:
-            """Fire the progress callback guarded (best-effort, never breaks ingest)."""
+            """Fire the progress callback guarded: best-effort, never breaks ingest."""
             if on_phase is None:
                 return
             try:
@@ -253,20 +247,20 @@ class Ingestor(
     ) -> str | None:
         """Return the existing curated path when this is a no-op re-run, else ``None``.
 
-        The skip-on-unchanged short-circuit (issue #95, task D) is only taken when BOTH
+        The skip-on-unchanged short-circuit (issue #95, task D) is taken only when BOTH
         conditions hold, so it never skips genuine work:
 
-        * the raw-capture pass reported ``skipped_unchanged`` -- the source body was
-          byte-identical to an existing raw page. Because that raw path embeds the slug
-          (``raw/<subdir>/<slug>.md``), a match guarantees classify reproduced the prior
-          run's slug; a drifted slug would have created a fresh raw page instead.
+        * the raw-capture pass reported ``skipped_unchanged``, meaning the source body
+          was byte-identical to an existing raw page. That raw path embeds the slug, as
+          ``raw/<subdir>/<slug>.md``, so a match guarantees classify reproduced the
+          prior run's slug, a drifted slug having created a fresh raw page instead.
         * a curated page already exists at the classify-routed ``<folder>/<slug>.md``.
 
-        A type with no content folder (only ``inbox`` is excluded from
-        :data:`_TYPE_FOLDER`) or a missing curated page returns ``None`` so the caller
-        falls through to the normal curate/as-is pass -- the short-circuit is purely an
-        optimisation and is conservative by construction (a false negative just re-runs
-        curate; it never wrongly skips an absent page).
+        A type with no content folder, and only ``inbox`` is excluded from
+        :data:`_TYPE_FOLDER`, or a missing curated page, returns ``None``, so the caller
+        falls through to the normal curate or as-is pass. The short-circuit is purely an
+        optimisation and conservative by construction: a false negative merely re-runs
+        curate, and it never wrongly skips an absent page.
         """
         if raw.disposition != "skipped_unchanged":
             return None
@@ -285,16 +279,15 @@ class Ingestor(
     ) -> IngestReport:
         """Terminal path for a no-op re-run: unchanged content already curated (#95 D).
 
-        Removes the (now superseded) holding page written this run by
-        :meth:`persist_inbound` -- exactly like the success path -- then returns an
-        ``unchanged`` report WITHOUT running the curate, navigation-log, or Hindsight
-        retain passes. So neither the curated page's ``updated:`` date nor the
-        ``log.md`` is churned and no LLM/index budget is re-spent for content already on
-        disk; the page stays searchable from its original retain. The holding-removal
-        deletion is committed (or, for the ``commit=False`` batch path, staged for the
-        caller's batched commit) just like a normal success, and the capture liveness
-        marker is recorded on a clean (non-conflict) run since the pipeline ran
-        healthily.
+        Removes the now-superseded holding page :meth:`persist_inbound` wrote this run,
+        exactly like the success path, then returns an ``unchanged`` report WITHOUT
+        running the curate, navigation-log or Hindsight retain passes. Neither the
+        curated page's ``updated:`` date nor the ``log.md`` is therefore churned, and no
+        LLM or index budget is re-spent for content already on disk, the page staying
+        searchable from its original retain. The holding-removal deletion is committed,
+        or staged for the caller's batched commit on the ``commit=False`` batch path,
+        just like a normal success, and the capture liveness marker is recorded on a
+        clean, non-conflict run, since the pipeline ran healthily.
         """
         hold_rel = holding.result.raw_path
         if hold_rel is not None:

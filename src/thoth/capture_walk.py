@@ -1,31 +1,32 @@
 """Walk a file or directory tree into :class:`~thoth.ingest.Capture` items (issue #80).
 
-This is the thin file/folder primitive underneath the ``thoth capture <path>...``
-subcommand: point it at a single file or a directory and it yields one
-:class:`~thoth.ingest.Capture` per eligible file, ready to feed through the existing
-:meth:`thoth.ingest.Ingestor.ingest` pipeline. A Markdown/text file becomes a ``text``
-capture (its bytes ARE the body, per the issue #57 upload path); an image/PDF/audio file
-becomes a ``path`` capture the server reads; every capture carries ``source="import"``.
+This is the thin file and folder primitive underneath the ``thoth capture <path>...``
+subcommand. Point it at a single file or a directory and it yields one
+:class:`~thoth.ingest.Capture` per eligible file, ready for the existing
+:meth:`thoth.ingest.Ingestor.ingest` pipeline. A Markdown or text file becomes a
+``text`` capture, its bytes being the body as on the issue #57 upload path, an image,
+PDF or audio file becomes a ``path`` capture the server reads, and every capture carries
+``source="import"``.
 
 The walk is deliberately conservative for a vault import:
 
 * **Machinery is skipped.** The ``.obsidian/``, ``.git/`` and ``_bases/`` directories
-  and thoth's own spine files (``index.md`` / ``SCHEMA.md`` / ``log.md``) are never
-  captured, so re-importing thoth's *own* vault does not re-ingest dashboards or log.
-* **Unknown extensions are skipped, not guessed.** Unlike the Slack/MCP upload path --
-  which defaults an unrecognised binary to an image (a phone photo is the common case)
-  -- a bulk import skips a file whose extension is not a known text/image/PDF/audio
-  kind, so a stray binary in the tree never triggers a surprise (paid) analyse call.
-  Each skip is logged at debug so a ``--dry-run`` operator can see what was passed over.
-* **Globs filter on the relative path.** ``include``/``exclude`` are :mod:`fnmatch`
-  patterns matched against each file's path *relative to the walk root* (so
-  ``drafts/*`` excludes a subtree and ``*.md`` includes only Markdown); ``--limit`` caps
-  the total number of captures yielded across all roots.
+  and thoth's own spine files (``index.md``, ``SCHEMA.md``, ``log.md``) are never
+  captured, so re-importing thoth's *own* vault re-ingests neither dashboards nor log. *
+  **Unknown extensions are skipped, not guessed.** The Slack and MCP upload path
+  defaults an unrecognised binary to an image, a phone photo being the common case, but
+  a bulk import instead skips a file whose extension is not a known text, image, PDF or
+  audio kind, so a stray binary never triggers a surprise paid analyse call. Each skip
+  is logged at debug, so a ``--dry-run`` operator sees what was passed over. * **Globs
+  filter on the relative path.** ``include`` and ``exclude`` are :mod:`fnmatch` patterns
+  matched against each file's path *relative to the walk root*, so ``drafts/*`` excludes
+  a subtree and ``*.md`` includes only Markdown, and ``--limit`` caps the total captures
+  yielded across all roots.
 
-Only the standard library, the shared :mod:`thoth.filetypes` extension sets, plus a
-single deferred import of :data:`thoth.ingest.Capture` (inside the generator body, so
-the heavy ``thoth.ingest`` module is not pulled in merely by importing this module) are
-used, honouring the package's import-safety contract.
+This module uses only the standard library, the shared :mod:`thoth.filetypes` extension
+sets and one deferred import of :data:`thoth.ingest.Capture`, placed inside the
+generator body so importing this module does not pull in the heavy ``thoth.ingest``,
+honouring the package's import-safety contract.
 """
 
 from __future__ import annotations
@@ -76,26 +77,22 @@ def walk_captures(
 ) -> Iterator[Capture]:
     """Yield one :class:`~thoth.ingest.Capture` per eligible file under ``paths``.
 
-    Each entry in ``paths`` is a single file (yields at most one capture) or a directory
-    (recursively walked in sorted order for a deterministic import). Markdown/text files
-    become ``text`` captures (bytes read as the body, decoded with ``errors="replace"``
-    so a stray non-UTF-8 byte never aborts the walk); image/PDF/audio files become
-    ``path`` captures the ingest server reads. Every capture carries
-    ``source="import"`` and the original ``filename``.
+    Each entry in ``paths`` is a single file, yielding at most one capture, or a
+    directory, walked recursively in sorted order for a deterministic import. A Markdown
+    or text file becomes a ``text`` capture whose bytes are read as the body and decoded
+    with ``errors="replace"``, so a stray non-UTF-8 byte never aborts the walk, while an
+    image, PDF or audio file becomes a ``path`` capture the ingest server reads. Every
+    capture carries ``source="import"`` and the original ``filename``.
 
-    Machinery directories (``.obsidian``/``.git``/``_bases``) and the spine files
-    (``index.md``/``SCHEMA.md``/``log.md``) are always skipped; a file whose extension
-    is not a known text/image/PDF/audio kind is skipped (logged at debug). ``include``
-    and ``exclude`` are :mod:`fnmatch` globs matched against each file's path relative
-    to its walk root; ``limit`` caps the total number of captures yielded.
+    The module docstring gives the skip and glob rules this applies.
 
     Args:
-        paths: One or more files/directories to walk.
-        include: If non-empty, only files whose relative path matches one of these globs
-            are captured.
-        exclude: Files whose relative path matches one of these globs are skipped (in
-            addition to the always-skipped machinery/spine).
-        limit: Stop after yielding this many captures (``None`` = no cap).
+        paths: One or more files or directories to walk.
+        include: When non-empty, captures only files whose relative path matches one of
+            these globs.
+        exclude: Skips files whose relative path matches one of these globs, on top of
+            the always-skipped machinery and spine.
+        limit: Stop after yielding this many captures. ``None`` means no cap.
 
     Yields:
         A :class:`~thoth.ingest.Capture` for each eligible file, in walk order.
@@ -121,11 +118,11 @@ def walk_captures(
 def _iter_files(root: Path) -> Iterator[tuple[Path, str]]:
     """Yield ``(file_path, relative_path)`` for each file under ``root`` in walk order.
 
-    A single file yields itself (relative path = its name). A directory is walked
-    recursively in sorted order, pruning the machinery directories and the spine files
-    so a thoth vault re-import never touches its own dashboards/log. ``relative`` is the
-    POSIX path relative to ``root`` (the directory itself, or the file's parent), so the
-    include/exclude globs match on a stable, separator-normalised key.
+    A single file yields itself, its relative path being its name. A directory is walked
+    recursively in sorted order, pruning the machinery directories and the spine files,
+    so a thoth vault re-import never touches its own dashboards or log. ``relative`` is
+    the POSIX path relative to ``root``, the directory itself or the file's parent, so
+    the include and exclude globs match on a stable, separator-normalised key.
     """
     if root.is_file():
         if root.name not in _SPINE_FILES:
@@ -157,9 +154,9 @@ def _passes_globs(
 ) -> bool:
     """Return whether ``relative`` survives the include/exclude glob filters.
 
-    ``exclude`` wins over ``include``: a path matching any exclude glob is dropped even
-    if it also matches an include glob. An empty ``include`` means "include everything
-    not excluded".
+    ``exclude`` wins over ``include``, so a path matching any exclude glob is dropped
+    even when it also matches an include glob. An empty ``include`` means "include
+    everything not excluded".
     """
     if any(fnmatch(relative, pattern) for pattern in exclude):
         return False
@@ -171,11 +168,11 @@ def _passes_globs(
 def _build_capture(file_path: Path, capture_cls: type[Capture]) -> Capture | None:
     """Build the :class:`~thoth.ingest.Capture` for ``file_path`` by its extension.
 
-    A text/Markdown file is read inline as the capture ``text`` (decoded with
-    ``errors="replace"`` so a stray byte never aborts the walk); an image/PDF/audio file
-    becomes a ``path`` capture the ingest server reads itself. Returns ``None`` for an
-    unrecognised extension (the caller skips it) so a bulk import never guesses a binary
-    kind and triggers a surprise analyse spend.
+    A text or Markdown file is read inline as the capture ``text``, decoded with
+    ``errors="replace"`` so a stray byte never aborts the walk, while an image, PDF or
+    audio file becomes a ``path`` capture the ingest server reads itself. Returns
+    ``None`` for an unrecognised extension, which the caller skips, so a bulk import
+    never guesses a binary kind and triggers a surprise analyse spend.
     """
     ext = file_path.suffix.lstrip(".").lower()
     if ext in _TEXT_EXTS:

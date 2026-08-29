@@ -1,12 +1,12 @@
-"""Frontmatter / metadata checks: 3 (summary gloss), 4 (frontmatter), 6
-(contradictions), 8 (quality signals) and 10 (tag audit), plus the frontmatter
-vocabularies they validate against.
+"""Frontmatter and metadata checks 3, 4, 6, 8 and 10, plus their vocabularies.
 
-Each check is a pure function over the parsed pages handed to it by
-:class:`thoth.lint.LintEngine`. The folder / type / slug contract constants AND the
-status / priority / media_type vocabularies are imported from
-:mod:`thoth.vault` (the single source, ADR 0013); the per-type mappings below only
-shape them for the check loop.
+Check 3 is the summary gloss, check 4 frontmatter, check 6 contradictions, check 8
+quality signals and check 10 the tag audit, and the frontmatter vocabularies they
+validate against live here too. Each check is a pure function over the parsed pages
+that :class:`thoth.lint.LintEngine` hands it. Every folder, type and slug contract
+constant, AND the ``status``, ``priority`` and ``media_type`` vocabularies, are
+imported from :mod:`thoth.vault`, the single source (ADR 0013), and the per-type
+mappings below only shape them for the check loop.
 """
 
 from __future__ import annotations

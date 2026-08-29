@@ -12,12 +12,12 @@ from .types import ActionItem, MediaItem, PageRef
 
 
 def _date_key(d: date | None, path: str) -> tuple[int, date, str]:
-    """Sort key: dated items first (date ascending), undated last, then by path."""
+    """Sort key: dated items first by ascending date, undated last, then by path."""
     return (1, date.max, path) if d is None else (0, d, path)
 
 
 def _sort_actions(items: list[ActionItem]) -> list[ActionItem]:
-    """Sort actions by due date (no-date last), then path, stably."""
+    """Sort actions stably by due date, with no-date last, then by path."""
     return sorted(items, key=lambda item: _date_key(item.due_date, item.path))
 
 
@@ -58,8 +58,8 @@ def _render(
 ) -> str:
     """Assemble the title line, sections, and an optional footer into the body.
 
-    The ``footer`` (the liveness heartbeat) is appended whether or not the digest is
-    empty, so the "still alive -- last ... at T" line is present even on a quiet day
+    The ``footer``, the liveness heartbeat, is appended whether or not the digest is
+    empty, so the "still alive, last ... at T" line is present even on a quiet day
     (issue #15).
     """
     if is_empty:
@@ -72,5 +72,5 @@ def _render(
 
 
 def _format_day(day: date) -> str:
-    """Format a date as ``Mon 2026-06-01`` (weekday abbreviation + ISO date)."""
+    """Format a date as ``Mon 2026-06-01``: a weekday abbreviation, then ISO."""
     return f"{day.strftime('%a')} {day.isoformat()}"

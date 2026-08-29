@@ -11,8 +11,8 @@ from thoth.render import SlackPoster
 class SlackClientLike(SlackPoster, Protocol):
     """The slice of the Bolt web client used by the handlers.
 
-    Extends the shared :class:`thoth.render.SlackPoster` with the in-place edit used
-    by the placeholder flow.
+    Extends the shared :class:`thoth.render.SlackPoster` with the in-place edit the
+    placeholder flow uses.
     """
 
     def chat_update(  # noqa: N802 - Slack SDK method name
@@ -32,25 +32,25 @@ _ASK_PLACEHOLDER: str = ":mag: Looking…"
 class Responder:
     """The reply seam for one message: an immediate placeholder, then a final edit.
 
-    A multi-second capture/answer (a ``git pull`` -> classify -> extract -> curate ->
-    Hindsight retain+probe -> commit+push chain, easily 5-15s) shows nothing until done
-    if the handler only ``say()``s once at the end. This object (issue #34, Slice B)
-    posts an immediate placeholder via the Slack web client, remembers its message
-    ``ts``, and edits that same message in place with the final render (``chat.update``)
-    -- so the user sees "Filing…" within ~1s and it resolves to the report, with no
-    second message.
+    A multi-second capture or answer shows nothing until done when the handler only
+    ``say()``s once at the end. That chain runs ``git pull``, classify, extract, curate,
+    Hindsight retain and probe, then commit and push, easily 5 to 15 seconds. This
+    object (issue #34, Slice B) posts an immediate placeholder through the Slack web
+    client, remembers its message ``ts``, and edits that same message in place with the
+    final render through ``chat.update``. The user therefore sees "Filing…" within about
+    a second, and it resolves to the report with no second message.
 
-    Every reply is posted **in the conversation thread** (issue #61): the placeholder
-    carries ``thread_ts`` and the bare-``say`` fallback threads its reply too, so a
-    reply lands under the originating top-level message, not at channel top level. The
-    in-place edit (``chat.update``) targets the placeholder's own ``ts`` and so stays in
-    the thread automatically.
+    Every reply is posted **in the conversation thread** (issue #61). The placeholder
+    carries ``thread_ts``, and the bare-``say`` fallback threads its reply too, so a
+    reply lands under the originating top-level message rather than at channel top
+    level. The in-place ``chat.update`` edit targets the placeholder's own ``ts``, so it
+    stays in the thread automatically.
 
-    It degrades cleanly: when no web ``client`` or ``channel`` is available (the
-    text-only/test paths that pass only a bare ``say``), :meth:`progress` posts nothing
-    and :meth:`finish` falls back to a single ``say(text)`` (still threaded) -- the
-    exact pre-#34 behaviour. So the placeholder+update is best-effort UX over the
-    existing single-``say`` contract, never a hard dependency on the client.
+    It degrades cleanly. With no web ``client`` or ``channel`` available, on the
+    text-only and test paths that pass only a bare ``say``, :meth:`progress` posts
+    nothing and :meth:`finish` falls back to a single, still-threaded ``say(text)``, the
+    exact pre-#34 behaviour. The placeholder and update are therefore best-effort UX
+    over the existing single-``say`` contract, never a hard dependency on the client.
     """
 
     def __init__(
@@ -64,15 +64,16 @@ class Responder:
         """Build a responder over a ``say`` callable and an optional web client+channel.
 
         Args:
-            say: The Bolt ``say`` callable that posts a reply to the conversation; it
-                accepts an optional ``thread_ts`` keyword so a reply can be threaded.
-            client: The Slack web client used to post + edit the placeholder; ``None``
-                disables the placeholder (the single-``say`` fallback).
-            channel: The conversation id the placeholder is posted to / edited in; an
+            say: The Bolt ``say`` callable posting a reply to the conversation. It
+                accepts an optional ``thread_ts`` keyword, so a reply can be threaded.
+            client: The Slack web client used to post and edit the placeholder. ``None``
+                disables the placeholder, leaving the single-``say`` fallback.
+            channel: The conversation id the placeholder is posted to and edited in. An
                 empty id also disables the placeholder.
-            thread_ts: The thread root to post replies under (``thread_ts or ts`` of the
-                originating message, issue #61). Empty means post at channel top level
-                (the test/edge paths); production always supplies it.
+            thread_ts: The thread root to post replies under, the ``thread_ts or ts`` of
+                the originating message (issue #61). Empty posts at channel top
+                level, on the test and edge paths, and production always supplies
+                it.
         """
         self._say = say
         self._client = client
@@ -89,23 +90,24 @@ class Responder:
         return {"thread_ts": self._thread_ts} if self._thread_ts else {}
 
     def say(self, text: str) -> None:
-        """Post ``text`` as a plain threaded reply (early conflict/error/refusal)."""
+        """Post ``text`` as a plain threaded reply, for an early error or refusal."""
         self._emit(text)
 
     def progress(self, placeholder: str) -> None:
-        """Post an immediate placeholder (best-effort); remember its ts for the edit.
+        """Post an immediate placeholder, best-effort, remembering its ts for the edit.
 
-        Posts into the conversation thread (``thread_ts``) so the working signal appears
-        under the originating message. With no client/channel, or if the post fails for
-        any reason, this no-ops and a later :meth:`finish` falls back to a single
-        ``say`` -- the placeholder must never be able to swallow the real reply.
+        Posts into the conversation thread through ``thread_ts``, so the working signal
+        appears under the originating message. With no client or channel, or when the
+        post fails for any reason, this no-ops and a later :meth:`finish` falls back to
+        a single ``say``, because the placeholder must never be able to swallow the real
+        reply.
 
-        The ts is read by duck-typing ``response.get("ts")`` rather than requiring a
-        ``dict``: the real ``slack_sdk`` ``WebClient`` returns a ``SlackResponse`` (a
-        dict-*like* object that is **not** a ``dict`` subclass), so an ``isinstance(...,
-        dict)`` guard would silently drop the ts against the live client -- leaving
-        :meth:`update`/:meth:`finish` with no placeholder to edit and degrading every
-        in-place edit to a separate message.
+        The ts is read by duck-typing ``response.get("ts")`` rather than by requiring a
+        ``dict``. The real ``slack_sdk`` ``WebClient`` returns a ``SlackResponse``, a
+        dict-*like* object that is **not** a ``dict`` subclass, so an ``isinstance(...,
+        dict)`` guard would silently drop the ts against the live client. That would
+        leave :meth:`update` and :meth:`finish` with no placeholder to edit, and degrade
+        every in-place edit to a separate message.
         """
         if self._client is None or not self._channel:
             return
@@ -122,16 +124,16 @@ class Responder:
     def update(self, text: str) -> None:
         """Edit the placeholder in place with intermediate progress (best-effort).
 
-        Used to stream per-phase progress (issue #137) into the same "Filing…"
-        message as ingest moves through its passes -- the placeholder ts captured by
-        :meth:`progress` is re-edited via ``chat.update`` so the user sees a live
-        phase line without any extra messages.
+        Streams per-phase progress (issue #137) into the same "Filing…" message as
+        ingest moves through its passes. The placeholder ts that :meth:`progress`
+        captured is re-edited through ``chat.update``, so the user sees a live phase
+        line with no extra messages.
 
         Unlike :meth:`finish`, an intermediate update **never** falls back to a fresh
-        ``say``: with no client/channel/ts (a client-less/test path, or the placeholder
-        post failed) it no-ops, and a failed edit is swallowed. An intermediate update
-        must never be able to spam the thread or break ingest -- only the placeholder
-        edit, best-effort.
+        ``say``. With no client, channel or ts, whether on a client-less or test path or
+        after a failed placeholder post, it no-ops, and a failed edit is swallowed. An
+        intermediate update must never be able to spam the thread nor break ingest, only
+        edit the placeholder, best-effort.
         """
         if self._client is None or not self._channel or self._ts is None:
             return
@@ -143,12 +145,12 @@ class Responder:
     def finish(self, text: str) -> None:
         """Deliver the final reply: edit the placeholder in place, else a fresh ``say``.
 
-        When a placeholder ts was captured the message is edited via ``chat.update`` (so
-        the "Filing…" line becomes the report; the edit stays in-thread by targeting
-        that ts). When there is no placeholder -- no client, the post failed, or a
-        client-less path -- it falls back to a threaded ``say(text)``, the single-reply
-        pre-#34 behaviour. A failed edit also falls back to ``say`` so the user always
-        gets the reply.
+        When a placeholder ts was captured, the message is edited through
+        ``chat.update``, so the "Filing…" line becomes the report and the edit stays
+        in-thread by targeting that ts. With no placeholder, whether from no client, a
+        failed post or a client-less path, it falls back to a threaded ``say(text)``,
+        the single-reply pre-#34 behaviour. A failed edit also falls back to ``say``, so
+        the user always gets the reply.
         """
         if self._client is not None and self._channel and self._ts is not None:
             try:

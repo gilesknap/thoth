@@ -26,15 +26,15 @@ COUNTED_KINDS: tuple[str, ...] = (KIND_ANTHROPIC, KIND_HINDSIGHT)
 class BudgetAlerterLike(Protocol):
     """The one-method slice of :class:`thoth.alerts.Alerter` the guard posts through.
 
-    Typing the guard's notification seam structurally (rather than the concrete
-    :class:`~thoth.alerts.Alerter`) lets a test inject a tiny recorder without building
-    a real alerter; the real :class:`~thoth.alerts.Alerter` satisfies it.
+    Typing the guard's notification seam structurally, rather than as the concrete
+    :class:`~thoth.alerts.Alerter`, lets a test inject a tiny recorder without building
+    a real alerter. The real :class:`~thoth.alerts.Alerter` satisfies it.
     """
 
     def alert_budget_exceeded(
         self, *, day: str, limit: int, breakdown: dict[str, int]
     ) -> bool:
-        """Post the one-per-day cap-reached alert; return whether it was delivered."""
+        """Post the one-per-day cap-reached alert, and report if it was delivered."""
         ...
 
 
@@ -42,13 +42,13 @@ class BudgetGuardLike(Protocol):
     """The one-method slice of the budget guard the model chokepoints depend on.
 
     :meth:`thoth.llm.LLM.complete` and :meth:`thoth.hindsight.Hindsight.retain` take an
-    optional guard typed by this Protocol and call :meth:`charge` before spending, so a
-    test can inject a tiny fake (or ``None`` to disable) without building a real
-    :class:`BudgetStore`. :class:`BudgetGuard` satisfies it.
+    optional guard typed by this Protocol, and call :meth:`charge` before they spend. A
+    test can therefore inject a tiny fake, or ``None`` to disable, without building a
+    real :class:`BudgetStore`. :class:`BudgetGuard` satisfies it.
     """
 
     def charge(self, kind: str) -> None:
-        """Account one ``kind`` call; raise :class:`BudgetExceededError` if over cap."""
+        """Account one ``kind`` call, raising :class:`BudgetExceededError` over cap."""
         ...
 
 
@@ -56,10 +56,10 @@ class BudgetExceededError(Exception):
     """Raised by :meth:`BudgetGuard.charge` when the day's combined budget is spent.
 
     It is raised *before* the model call, so nothing is spent. Both model chokepoints
-    are positioned so this surfaces as a *deferral*, never a lost capture: in
-    :meth:`thoth.llm.LLM.complete` it is caught by the ingest classify/curate passes and
-    reported as deferred curation; in :meth:`thoth.hindsight.Hindsight.retain` the
-    already-durable page is left on disk for the next reindex.
+    sit where this surfaces as a *deferral*, never a lost capture. In
+    :meth:`thoth.llm.LLM.complete` the ingest classify and curate passes catch it and
+    report deferred curation. In :meth:`thoth.hindsight.Hindsight.retain` the
+    already-durable page stays on disk for the next reindex.
     """
 
 
@@ -67,14 +67,13 @@ class BudgetGuard:
     """The daily call-count circuit-breaker checked before every model call (issue #16).
 
     Construct it with a :class:`BudgetStore`, the combined daily ``limit``, an optional
-    :class:`thoth.alerts.Alerter` (the one-per-day notification seam), and an injectable
-    clock. :meth:`charge` is the single entry point: each model chokepoint calls it with
-    its counter name *before* spending, and it raises :class:`BudgetExceededError` once
-    the day's combined count has reached ``limit``.
+    :class:`thoth.alerts.Alerter` as the one-per-day notification seam, and an
+    injectable clock. :meth:`charge` is the single entry point, called by each model
+    chokepoint *before* it spends.
 
-    A non-positive ``limit`` disables the guard entirely (``charge`` becomes a no-op),
-    so a deployment can opt out of the cap without removing the wiring, and so existing
-    callers that pass no guard are unaffected.
+    A non-positive ``limit`` disables the guard entirely, making ``charge`` a no-op. A
+    deployment can therefore opt out of the cap without removing the wiring, and an
+    existing caller that passes no guard is unaffected.
     """
 
     def __init__(
@@ -88,14 +87,15 @@ class BudgetGuard:
         """Store the counter backend, the cap, the alert seam, and the clock.
 
         Args:
-            store: The :class:`BudgetStore` holding the per-day counters + alert claim.
-            limit: The combined daily call budget; ``<= 0`` disables the guard.
+            store: The :class:`BudgetStore` holding the per-day counters and the alert
+                claim.
+            limit: The combined daily call budget. ``<= 0`` disables the guard.
             alerter: The errors-to-Slack seam for the one-per-day cap notification, or
-                ``None`` (the cap still blocks, just silently -- e.g. the MCP server,
-                which has no Slack target).
-            clock: A source of the current tz-aware :class:`~datetime.datetime`;
-                defaults to :func:`datetime.now` in UTC. Used to derive the London day
-                key and to stamp the alert claim.
+                ``None``, where the cap still blocks but silently. The MCP server passes
+                ``None``, having no Slack target.
+            clock: A source of the current tz-aware :class:`~datetime.datetime`,
+                defaulting to :func:`datetime.now` in UTC. Derives the London day key
+                and stamps the alert claim.
         """
         self._store = store
         self._limit = limit
@@ -104,7 +104,7 @@ class BudgetGuard:
 
     @property
     def enabled(self) -> bool:
-        """``True`` iff a positive budget is configured (the guard will block)."""
+        """``True`` only when a positive budget is configured, so the guard blocks."""
         return self._limit > 0
 
     def today(self) -> str:
@@ -112,18 +112,18 @@ class BudgetGuard:
         return self._clock().astimezone(LONDON).date().isoformat()
 
     def charge(self, kind: str) -> None:
-        """Account one ``kind`` call against today's budget; raise if the cap is hit.
+        """Account one ``kind`` call against today's budget, and raise at the cap.
 
-        Checks *before* incrementing so the call that would exceed the cap is blocked
-        and **not** counted (the day admits exactly ``limit`` calls). On reaching the
-        cap it fires the one-per-day alert (best-effort) and raises
-        :class:`BudgetExceededError`; otherwise it records the call and returns. Every
-        attempt counts, so a retried flapping dependency cannot burn past the cap
-        (issue #16 pairs with the #11 retry).
+        Checks *before* it increments, so the call that would exceed the cap is blocked
+        and **not** counted, and the day admits exactly ``limit`` calls. On reaching the
+        cap it fires the one-per-day alert, best-effort, and raises
+        :class:`BudgetExceededError`. Otherwise it records the call and returns. Every
+        attempt counts, so a retried flapping dependency cannot burn past the cap, which
+        is how issue #16 pairs with the #11 retry.
 
         Args:
-            kind: The counter to charge (:data:`KIND_ANTHROPIC` /
-                :data:`KIND_HINDSIGHT`).
+            kind: The counter to charge, :data:`KIND_ANTHROPIC` or
+                :data:`KIND_HINDSIGHT`.
 
         Raises:
             BudgetExceededError: when today's combined count has reached the budget.
@@ -155,7 +155,7 @@ class BudgetGuard:
         )
 
     def _maybe_alert(self, day: str) -> None:
-        """Post the cap-tripped alert at most once per day (best-effort).
+        """Post the cap-tripped alert at most once per day, best-effort.
 
         The atomic per-day claim in :meth:`BudgetStore.claim_alert` guarantees a single
         notification even though every blocked call routes through here.

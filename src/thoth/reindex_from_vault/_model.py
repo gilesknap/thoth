@@ -1,4 +1,4 @@
-"""Reindex vocabulary and pure helpers (folders, result types, page parsing)."""
+"""Reindex vocabulary and pure helpers: folders, result types and page parsing."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ not curated knowledge.
 
 
 class ReindexError(Exception):
-    """Raised when a reindex step fails hard (a checked retain or a bank reset)."""
+    """Raised when a reindex step fails hard, on a checked retain or a bank reset."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,15 +48,15 @@ class ReindexResult:
     """Counts summarising one :meth:`Reindexer.run` pass.
 
     Attributes:
-        changed: Pages retained this run (new or body-changed, or every live page on a
-            full rebuild).
+        changed: Pages retained this run, whether new, body-changed, or every live page
+            on a full rebuild.
         skipped: Live pages whose body hash matched the manifest and were not retained.
         pruned: Manifest entries for pages no longer present that were forgotten.
         live_pages: Distinct curated pages seen on disk this run.
         full_rebuild: Whether this pass wiped the bank and re-retained every page.
-        aborted: Whether the daily LLM budget (issue #16) was hit mid-walk, so the run
-            stopped early; the pages retained before the cap are recorded in the
-            manifest, but pruning is skipped (the walk is incomplete) and no liveness
+        aborted: Whether the daily LLM budget (issue #16) was hit mid-walk, stopping the
+            run early. The pages retained before the cap are recorded in the manifest,
+            but pruning is skipped because the walk is incomplete, and no liveness
             marker is recorded. ``False`` on a normal complete pass.
     """
 
@@ -71,12 +71,12 @@ class ReindexResult:
 def manifest_path(config: Config) -> Path:
     """Return the index-side manifest path for ``config``.
 
-    The manifest lives outside the vault under the Hindsight state dir
-    (``<thoth_home>/hindsight/reindex-manifest.json``) and is ``.gitignore``d, so the
+    The manifest lives outside the vault, under the Hindsight state dir at
+    ``<thoth_home>/hindsight/reindex-manifest.json``, and is ``.gitignore``d, so the
     reindex never touches the canonical vault to track its own bookkeeping.
 
     Args:
-        config: The frozen runtime configuration (supplies ``thoth_home``).
+        config: The frozen runtime configuration, supplying ``thoth_home``.
 
     Returns:
         The absolute path to ``reindex-manifest.json``.
@@ -87,17 +87,17 @@ def manifest_path(config: Config) -> Path:
 def page_type(markdown: str) -> str:
     """Return the leading frontmatter ``type:`` value, or ``"page"`` when absent.
 
-    This is used only to tag a retained fact for recall filtering (alongside the vault
-    path), never for any confinement or contract decision, so a missing, empty, or
-    unparseable type degrades to the neutral ``"page"`` rather than raising.
+    This only tags a retained fact for recall filtering, alongside the vault path, and
+    never drives a confinement or contract decision, so a missing, empty or unparseable
+    type degrades to the neutral ``"page"`` rather than raises.
 
     Args:
-        markdown: The full page text (frontmatter + body).
+        markdown: The full page text, frontmatter and body.
 
     Returns:
-        The ``type`` value (for example ``"entity"``; non-string YAML scalars are
-        coerced with :class:`str`) or ``"page"`` when the leading frontmatter block
-        has no non-empty ``type`` key.
+        The ``type`` value, such as ``"entity"``, with a non-string YAML scalar coerced
+        by :class:`str`, or ``"page"`` when the leading frontmatter block has no
+        non-empty ``type`` key.
     """
     try:
         value = frontmatter.loads(markdown).get("type")
@@ -111,15 +111,15 @@ def page_type(markdown: str) -> str:
 def _split_body(markdown: str) -> str:
     """Strip a leading YAML frontmatter block, returning the body text.
 
-    This delegates to ``python-frontmatter`` (the same parser
-    :meth:`thoth.vault.Vault.read_page` uses), so the body fed to
+    This delegates to ``python-frontmatter``, the same parser
+    :meth:`thoth.vault.Vault.read_page` uses, so the body fed to
     :meth:`thoth.vault.Vault.body_sha256` here is byte-identical to
-    ``read_page(...).body`` for the same file -- guaranteeing the body-hash idempotency
-    key is consistent across the whole appliance. A document with no leading frontmatter
-    block yields its full text as the body.
+    ``read_page(...).body`` for the same file. That guarantees the body-hash idempotency
+    key stays consistent across the whole appliance. A document with no leading
+    frontmatter block yields its full text as the body.
 
     Args:
-        markdown: The full page text (frontmatter + body), or a bare body.
+        markdown: The full page text, frontmatter and body, or a bare body.
 
     Returns:
         The body with any single leading frontmatter block removed.
@@ -128,5 +128,5 @@ def _split_body(markdown: str) -> str:
 
 
 def _now_iso() -> str:
-    """Return the current UTC instant as an ISO-8601 string (manifest timestamp)."""
+    """Return the current UTC instant as an ISO-8601 manifest timestamp string."""
     return datetime.now(UTC).isoformat()

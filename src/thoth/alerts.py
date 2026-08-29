@@ -1,36 +1,31 @@
 """Errors-to-Slack: the unattended appliance's only failure signal (issue #15).
 
-thoth runs unattended on an isolated VPS, so a failure that no human sees is a silent
-failure. This module is the **errors-to-Slack** surface (SPEC section 10 supervision):
-a small :class:`Alerter` that formats and posts an error / alert to a dedicated Slack
-target via the **same injectable** ``chat.postMessage`` seam the rest of the app uses
-(:class:`thoth.summary.SlackPoster`). It is wired into:
+thoth runs unattended on an isolated VPS, so a failure nobody sees is a silent failure.
+This module is the **errors-to-Slack** surface (SPEC section 10 supervision): a small
+:class:`Alerter` that formats an error and posts it to a dedicated Slack target through
+the **same injectable** ``chat.postMessage`` seam the rest of the app uses
+(:class:`thoth.summary.SlackPoster`). Three callers wire it in: the Slack daemon loop's
+top-level handler (:func:`thoth.slack_app.run`), the cron entrypoints
+(:func:`thoth.__main__.run_reindex` and ``run_summary``), and the unpushed-divergence
+alert (:meth:`Alerter.alert_unpushed_divergence`), raised when a vault commit hits a
+rebase conflict (``VaultConflictError`` or ``GitSyncError``) and the push is refused.
+Each reports to Slack what would otherwise die into a log file nobody reads.
 
-* the top-level handler of the Slack daemon loop (:func:`thoth.slack_app.run`), so an
-  unhandled daemon exception is reported before the process exits and systemd restarts
-  it;
-* the cron entrypoints (:func:`thoth.__main__.run_reindex` / ``run_summary``), so a
-  reindex / summary crash surfaces in Slack instead of dying only into a log file; and
-* the unpushed-divergence alert (:meth:`Alerter.alert_unpushed_divergence`) raised when
-  a vault commit hits a rebase conflict (``VaultConflictError`` / ``GitSyncError``) and
-  the push is refused -- it reports "N commits unpushed since T -- vault conflict needs
-  resolving in Obsidian", with N computed from git.
+Design constraints, the same closed-surface rules as the rest of the app:
 
-Design constraints (the same closed-surface rules as the rest of the app):
+* Configuration resolves the alert **target**, never a hard-coded id:
+  :meth:`thoth.config.Config.alert_target` returns ``SLACK_ALERT_CHANNEL``, or the first
+  allow-listed user id as a DM. With neither set the alerter **no-ops** rather than
+  raises, because an alert path must not crash the caller.
+* Every post is best-effort and **swallows transport errors**, logging through the
+  injected logger and returning ``False``, because reporting a failure must never raise
+  a *new* failure out of an exception handler.
+* ``slack_sdk`` and ``slack_bolt`` are **never** imported at module top level, since CI
+  lacks them: :func:`make_alerter` builds the real ``WebClient`` lazily, and the
+  testable :class:`Alerter` takes an injected poster.
 
-* The alert **target** is resolved from configuration -- :meth:`thoth.config.Config.
-  alert_target` returns ``SLACK_ALERT_CHANNEL`` or, failing that, the first allow-listed
-  user id as a DM target -- never a hard-coded id. When neither is set the alerter
-  **no-ops** rather than raising: an alert path must not itself crash the caller.
-* Every post is best-effort and **swallows transport errors** (a failed alert post is
-  logged via the injected logger and returns ``False``); reporting a failure must never
-  raise a *new* failure out of an exception handler.
-* ``slack_sdk`` / ``slack_bolt`` are **never** imported at module top level (absent in
-  CI). The real Slack ``WebClient`` is built lazily by :func:`make_alerter` only when a
-  target is configured; the testable :class:`Alerter` logic takes an injected poster.
-
-Only the standard library plus ``thoth._time`` and :mod:`thoth.config` is imported at
-module level, so this module is always import-safe under pytest collection.
+Module level imports only the standard library, ``thoth._time`` and :mod:`thoth.config`,
+so this module is always import-safe under pytest collection.
 """
 
 from __future__ import annotations
@@ -49,17 +44,17 @@ __all__ = ["AlertPoster", "Alerter", "make_alerter"]
 
 _LOG = logging.getLogger("thoth.alerts")
 
-# Cap how much of a formatted traceback / message is posted so a runaway exception
-# cannot post a multi-megabyte Slack message; the tail (the actual error line) is kept.
+# Cap the posted traceback, so a runaway exception cannot post a multi-megabyte Slack
+# message. The tail holds the actual error line, so keep that end.
 _MAX_DETAIL_CHARS: int = 1500
 
 
 class Alerter:
-    """Format and post unattended error / divergence alerts to one Slack target.
+    """Format and post unattended error and divergence alerts to one Slack target.
 
-    Construct with a resolved ``target`` (a channel or DM id) and an injected
-    :class:`AlertPoster`; both are ``None``-safe -- a missing target or poster turns
-    every method into a logged no-op so the alert path can never crash the caller. The
+    Construct with a resolved ``target``, a channel or DM id, and an injected
+    :class:`AlertPoster`. Both are ``None``-safe, so a missing target or poster turns
+    every method into a logged no-op and the alert path can never crash the caller. The
     clock is injectable for deterministic tests.
     """
 
@@ -73,11 +68,11 @@ class Alerter:
         """Store the resolved target, the delivery seam, and the clock.
 
         Args:
-            target: The Slack channel / DM id to post alerts to, or ``None`` when no
-                alert target is configured (every method then no-ops).
-            poster: The injected ``chat.postMessage`` seam, or ``None`` (no-op).
-            clock: A source of the current :class:`~datetime.datetime` used only to
-                stamp an alert; defaults to :func:`datetime.now` in UTC.
+            target: The Slack channel or DM id to post alerts to, or ``None`` when no
+                alert target is configured, which makes every method no-op.
+            poster: The injected ``chat.postMessage`` seam, or ``None`` for a no-op.
+            clock: A source of the current :class:`~datetime.datetime`, used only to
+                stamp an alert. Defaults to :func:`datetime.now` in UTC.
         """
         self._target = target
         self._poster = poster
@@ -85,18 +80,18 @@ class Alerter:
 
     @property
     def enabled(self) -> bool:
-        """``True`` iff a target and a poster are both wired (alerts will be posted)."""
+        """``True`` only when a target and a poster are both wired, so alerts post."""
         return self._target is not None and self._poster is not None
 
     def post(self, text: str) -> bool:
-        """Post ``text`` to the alert target, swallowing any transport error.
+        """Post ``text`` to the alert target, and swallow any transport error.
 
         Args:
             text: The pre-formatted ``mrkdwn`` alert body.
 
         Returns:
-            ``True`` if a message was posted, ``False`` if it was a no-op (no target /
-            poster) or the post raised (the error is logged, never re-raised).
+            ``True`` when a message was posted. ``False`` for a no-op, with no target or
+            poster, or when the post raised, which is logged and never re-raised.
         """
         if self._target is None or self._poster is None:
             _LOG.debug("alert suppressed (no target/poster configured): %s", text)
@@ -112,8 +107,8 @@ class Alerter:
         """Format and post an unhandled-exception alert from context ``where``.
 
         Args:
-            where: A short human label for the failing context (e.g. ``"slack daemon"``
-                or ``"cron: reindex"``).
+            where: A short human label for the failing context, such as
+                ``"slack daemon"`` or ``"cron: reindex"``.
             exc: The caught exception.
 
         Returns:
@@ -124,19 +119,20 @@ class Alerter:
     def alert_unpushed_divergence(
         self, *, commits_ahead: int, since: datetime | None, detail: str = ""
     ) -> bool:
-        """Post the "N commits unpushed -- vault conflict" divergence alert (issue #15).
+        """Post the "N commits unpushed, vault conflict" divergence alert (issue #15).
 
-        Raised when a vault commit landed locally but the push was refused by a rebase
-        conflict, so the local branch is ahead of the remote and Obsidian holds a
-        conflicting change that must be resolved by hand.
+        A vault commit landed locally but a rebase conflict refused the push, so the
+        branch is ahead of the remote and Obsidian holds a conflicting change that needs
+        resolving by hand.
 
         Args:
-            commits_ahead: How many local commits are unpushed (``git rev-list --count``
-                of local-ahead-of-remote); a negative/unknown count is reported as
-                "one or more".
-            since: The author/commit time of the oldest unpushed commit, used to say
-                "since T"; ``None`` when it could not be determined.
-            detail: An optional short tail (e.g. the conflicting path), appended as-is.
+            commits_ahead: How many local commits are unpushed, from
+                ``git rev-list --count`` of local-ahead-of-remote. A negative or unknown
+                count reports as "one or more".
+            since: The commit time of the oldest unpushed commit, used to say "since T",
+                or ``None`` when it could not be determined.
+            detail: An optional short tail, such as the conflicting path, appended as
+                is.
 
         Returns:
             Whatever :meth:`post` returns.
@@ -152,17 +148,17 @@ class Alerter:
     ) -> bool:
         """Post the one-per-day "daily LLM budget reached" alert (issue #16).
 
-        Emitted once, by the first model call that the :class:`thoth.budget.BudgetGuard`
-        blocks on a given Europe/London day, so the operator learns the appliance has
-        gone fail-safe (deferring captures, aborting reindex) rather than silently
-        burning the cap. The per-day de-duplication lives in the guard's store; this
-        method just formats and posts.
+        The first model call that :class:`thoth.budget.BudgetGuard` blocks on a given
+        Europe/London day emits this once, so the operator learns the appliance has gone
+        fail-safe, deferring captures and aborting reindex, rather than silently burnt
+        the cap. The guard's store holds the per-day de-duplication, and this method
+        only formats and posts.
 
         Args:
             day: The Europe/London calendar day the cap was reached on (``YYYY-MM-DD``).
             limit: The configured combined daily call budget.
-            breakdown: The per-counter call counts (e.g. ``{"anthropic": 198,
-                "hindsight": 2}``) for the alert detail.
+            breakdown: The per-counter call counts for the alert detail, such as
+                ``{"anthropic": 198, "hindsight": 2}``.
 
         Returns:
             Whatever :meth:`post` returns.
@@ -214,7 +210,7 @@ class Alerter:
         )
 
     def _stamp(self) -> str:
-        """Format the current time (from the injected clock) for an alert line."""
+        """Format the current time, from the injected clock, for an alert line."""
         return _iso(self._clock())
 
 
@@ -224,23 +220,23 @@ def make_alerter(
     poster_factory: Callable[[Config], AlertPoster] | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> Alerter:
-    """Build an :class:`Alerter` from ``config``, resolving the target + the poster.
+    """Build an :class:`Alerter` from ``config``, resolving the target and the poster.
 
-    The target is :meth:`thoth.config.Config.alert_target` (``SLACK_ALERT_CHANNEL`` or
-    the first allow-listed user DM). The poster is built **only when a target resolves
-    and a bot token is present**, via ``poster_factory`` (defaults to a real Slack
-    ``WebClient`` builder that imports ``slack_sdk`` lazily). With no target -- or no
-    bot token -- the returned alerter is a no-op (``enabled`` is ``False``), so a box
-    without Slack configured neither crashes nor posts.
+    :meth:`thoth.config.Config.alert_target` gives the target: ``SLACK_ALERT_CHANNEL``,
+    or the first allow-listed user DM. ``poster_factory`` builds the poster **only when
+    a target resolves and a bot token is present**, defaulting to a real Slack
+    ``WebClient`` builder that imports ``slack_sdk`` lazily. Without either, the
+    alerter is a no-op with ``enabled`` ``False``, so a box with no Slack configured
+    neither crashes nor posts.
 
     Args:
         config: The frozen runtime configuration.
-        poster_factory: Builds an :class:`AlertPoster` from ``config``; injectable so a
+        poster_factory: Builds an :class:`AlertPoster` from ``config``, injectable so a
             test never needs the Slack SDK. Defaults to :func:`_make_web_client`.
         clock: Injectable current-time source forwarded to the :class:`Alerter`.
 
     Returns:
-        A wired (or deliberately no-op) :class:`Alerter`.
+        A wired, or deliberately no-op, :class:`Alerter`.
     """
     target = config.alert_target()
     if target is None or config.slack_bot_token is None:
@@ -251,10 +247,10 @@ def make_alerter(
 
 
 def _make_web_client(config: Config) -> AlertPoster:
-    """Build a Slack ``WebClient`` from ``config.slack_bot_token`` (lazy import).
+    """Build a Slack ``WebClient`` from ``config.slack_bot_token``, with a lazy import.
 
-    ``slack_sdk`` ships with ``slack_bolt`` (a runtime-only optional dependency absent
-    in CI), so it is imported here, never at module top level.
+    ``slack_sdk`` ships with ``slack_bolt``, a runtime-only optional dependency that CI
+    lacks, so the import sits here rather than at module top level.
     """
     bot_token, _ = config.require_slack()
     from slack_sdk import WebClient
@@ -266,19 +262,20 @@ def _make_web_client(config: Config) -> AlertPoster:
 def _cron_alerting(where: str, config: Config) -> Iterator[None]:
     """Report a cron-entrypoint crash to the errors-to-Slack target, then re-raise.
 
-    A one-shot cron job that dies only writes to its ``/var/log`` file, which nobody
-    watches on an isolated VPS (issue #15). This wraps the job body so an unhandled
-    exception is posted to the alert target (:class:`Alerter`, best-effort)
-    before being re-raised -- so the cron log still records the non-zero exit, and a
-    human gets a Slack message. Building the alerter is itself guarded: a failure to
-    even construct it must not mask the original error.
+    A one-shot cron job that dies writes only to its ``/var/log`` file, which nobody
+    watches on an isolated VPS (issue #15). This wraps the job body, so an unhandled
+    exception reaches the alert target through :class:`Alerter`, best-effort, before it
+    is re-raised: the cron log still records the non-zero exit, and a human still gets
+    a Slack message. Building the alerter is itself guarded, because a failure to
+    construct it must not mask the original error.
 
     Args:
-        where: A short label for the failing entrypoint (e.g. ``"cron: reindex"``).
-        config: The frozen runtime config (resolves the alert target + bot token).
+        where: A short label for the failing entrypoint, such as ``"cron: reindex"``.
+        config: The frozen runtime config, which resolves the alert target and bot
+            token.
 
     Yields:
-        ``None``; the caller runs its job body inside the ``with`` block.
+        ``None``. The caller runs its job body inside the ``with`` block.
     """
     try:
         yield
@@ -291,14 +288,14 @@ def _cron_alerting(where: str, config: Config) -> Iterator[None]:
 
 
 def _iso(when: datetime) -> str:
-    """Format ``when`` as a compact ``YYYY-MM-DD HH:MMZ``-style string."""
+    """Format ``when`` as a compact ``YYYY-MM-DD HH:MMZ`` string."""
     if when.tzinfo is None:
         return when.strftime("%Y-%m-%d %H:%M")
     return when.strftime("%Y-%m-%d %H:%M %Z").strip()
 
 
 def _tail(text: str, limit: int) -> str:
-    """Return at most the last ``limit`` chars of ``text`` (keeping the error line)."""
+    """Return at most the last ``limit`` chars of ``text``, keeping the error line."""
     if len(text) <= limit:
         return text
     return "..." + text[-limit:]

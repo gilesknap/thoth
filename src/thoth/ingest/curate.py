@@ -1,4 +1,4 @@
-"""Passes 3-4: candidate fetch, the curate file-plan call, and the as-is path."""
+"""Passes 3-4: candidate fetch, the curate file-plan call and the as-is path."""
 
 from __future__ import annotations
 
@@ -119,12 +119,12 @@ _SUBMIT_FILE_PLAN_CHOICE: dict[str, Any] = {
 
 
 class _CuratePass(_IngestorBase):
-    """Passes 3-4: candidate fetch plus the validated curate / as-is file path."""
+    """Passes 3-4: candidate fetch plus the validated curate or as-is file path."""
 
     # ---- pass 3: fetch candidates ------------------------------------------------
 
     def fetch_candidates(self, cls: Classification) -> list[str]:
-        """Find existing pages that the curate pass may update (read-only).
+        """Find, read-only, the existing pages that the curate pass may update.
 
         Runs :meth:`search_vault` for each named entity and concept and returns the
         de-duplicated, order-preserving list of candidate vault paths.
@@ -156,42 +156,42 @@ class _CuratePass(_IngestorBase):
     ) -> dict[str, Any]:
         """Run the curate call, validate the file-plan, and write every page.
 
-        A second LLM call returns a file-plan; it is validated by
-        :func:`thoth.llm.validate_file_plan` (which reuses the same vault validators)
-        then each page is written through :meth:`thoth.vault.Vault.write_page`, which
-        re-validates the folder/type/slug contract and confines the path. A plan that
-        tries to escape the vault root or violates the contract is rejected and nothing
-        is written for the offending page.
+        A second LLM call returns a file-plan, which
+        :func:`thoth.llm.validate_file_plan` validates by reusing the same vault
+        validators. Each page is then written through
+        :meth:`thoth.vault.Vault.write_page`, which re-validates the folder, type and
+        slug contract and confines the path. A plan that tries to escape the vault root,
+        or violates the contract, is rejected and nothing is written for the offending
+        page.
 
-        When ``analysis`` is supplied (a binary capture, issue #42), the OCR'd/extracted
-        text + description are given to the model so the curated page **body holds the
-        real meaning** of the asset (and cross-links it), instead of a blind stub around
-        the asset embed.
+        Given ``analysis``, a binary capture (issue #42), the extracted text and
+        description reach the model, so the curated page **body holds the real meaning**
+        of the asset and cross-links it, instead of a blind stub around the asset embed.
 
         ``extracted_body`` plays the same role for a *text-bearing* capture whose body
-        was extracted before classify -- an audio transcript or a URL article's markdown
-        (it lives in ``raw/`` but the model cannot read files, only the prompt). Without
-        it an audio capture reached the model as a bare ``File: clip.m4a`` line and got
-        filed as a content-free "no transcript yet" stub, even though whisper had
-        transcribed it. Inlined only when the capture has no inline ``text`` (which is
-        already shown), so a plain-text capture is never duplicated.
+        was extracted before classify, an audio transcript or a URL article's markdown.
+        That body lives in ``raw/``, but the model can read only the prompt, not files.
+        Without it an audio capture reached the model as a bare ``File: clip.m4a`` line
+        and was filed as a content-free "no transcript yet" stub, even though whisper
+        had transcribed it. It is inlined only when the capture has no inline ``text``,
+        which is already shown, so a plain-text capture is never duplicated.
 
         Args:
-            capture: The inbound item (for context).
+            capture: The inbound item, for context.
             cls: The validated classification.
-            raw: The raw-capture result (its path/embeds are offered to the model).
+            raw: The raw-capture result, whose path and embeds the model is offered.
             candidates: Existing candidate page paths.
-            analysis: Optional content analysis of a binary capture (image/PDF).
-            extracted_body: Optional pre-extracted text body (audio transcript / URL
-                article markdown) to inline so curate sees the real content.
+            analysis: Optional content analysis of a binary image or PDF capture.
+            extracted_body: Optional pre-extracted text body, an audio transcript or
+                a URL article's markdown, inlined so curate sees the real content.
 
         Returns:
-            The validated file-plan object (with a private list of written page paths
-            attached under ``"_written"``).
+            The validated file-plan object, carrying a private list of written page
+            paths under ``"_written"``.
 
         Raises:
-            IngestError: if the model output is unparseable, the plan fails validation,
-                or a vault write rejects a page.
+            IngestError: when the model output is unparseable, the plan fails
+                validation, or a vault write rejects a page.
         """
         prompt = self._curate_prompt(
             capture,
@@ -257,35 +257,37 @@ class _CuratePass(_IngestorBase):
     ) -> dict[str, Any]:
         """File one page with the original body verbatim, skipping the curate LLM call.
 
-        The low-touch import mode (ADR 0010): the cheap classify call has already chosen
-        the routing (``type``/``slug``/``title``), so this writes ONE page into that
-        type's content folder with the **original body verbatim** and a minimal derived
-        frontmatter (``title``/``type``/``source``/``tags``/``personal``, plus a
-        ``status`` default on an actionable action/media page) -- no second (curate)
-        LLM call, no
-        reshaping, no wikilink/dedup-merge, no summary synthesis. Any saved
-        asset is embedded and any analysed OCR text appended (the same enrichment the
-        curated path applies), so a binary import is still searchable on its content.
+        The low-touch import mode (ADR 0010). The cheap classify call has already chosen
+        the routing, the ``type``, ``slug`` and ``title``, so this writes ONE page into
+        that type's content folder with the **original body verbatim** and a minimal
+        derived frontmatter of ``title``, ``type``, ``source``, ``tags`` and
+        ``personal``, plus a ``status`` default on an actionable action or media page.
+        There is no second curate LLM call, no reshaping, no wikilink or dedup merge,
+        and no summary synthesis. Any saved asset is embedded and any analysed OCR text
+        appended, the same enrichment the curated path applies, so a binary import stays
+        searchable on its content.
 
-        Returns a file-plan-shaped dict (with ``_written`` and a single ``pages`` entry)
-        so the shared navigation/report tail in :meth:`ingest` treats it like a curate
-        plan; the page itself is written here through the confined
-        :meth:`thoth.vault.Vault.write_page`, which re-validates the folder/type/slug
-        contract.
+        Returns a file-plan-shaped dict, with ``_written`` and a single ``pages`` entry,
+        so the shared navigation and report tail in :meth:`ingest` treats it like a
+        curate plan. The page itself is written here through the confined
+        :meth:`thoth.vault.Vault.write_page`, which re-validates the folder, type and
+        slug contract.
 
         Args:
-            capture: The inbound item (its ``text``/``source`` are the body/provenance).
-            cls: The validated classification (supplies folder routing, slug, title).
-            raw: The raw-capture result (its asset embeds are appended).
-            extracted_body: A pre-extracted text body (URL article / audio transcript)
-                used as the page body when the capture has no inline ``text``.
+            capture: The inbound item, whose ``text`` and ``source`` are the body and
+                provenance.
+            cls: The validated classification, supplying folder routing, slug and title.
+            raw: The raw-capture result, whose asset embeds are appended.
+            extracted_body: A pre-extracted text body, a URL article or audio
+                transcript, used as the page body when the capture has no inline
+                ``text``.
 
         Returns:
             A file-plan-shaped dict whose ``_written`` lists the single filed page path.
 
         Raises:
-            IngestError: if the classification routes to an unknown type/folder or the
-                vault rejects the write.
+            IngestError: when the classification routes to an unknown type or folder, or
+                the vault rejects the write.
         """
         folder = _TYPE_FOLDER.get(cls.page_type)
         if folder is None:
@@ -329,10 +331,10 @@ class _CuratePass(_IngestorBase):
     ) -> str:
         """Build the verbatim page body for an as-is import (no model reshaping).
 
-        Prefers the inline ``text`` (the Markdown/text upload case -- the body IS the
-        file), then a pre-extracted body (URL article / audio transcript), then a stub
-        naming the kept asset for a binary with no text. The saved-asset embeds are
-        appended (relative to ``folder``) so the binary renders in Obsidian.
+        Prefers the inline ``text``, the Markdown or text upload case where the body IS
+        the file, then a pre-extracted body from a URL article or audio transcript, then
+        a stub naming the kept asset for a binary with no text. The saved-asset embeds
+        are appended relative to ``folder``, so the binary renders in Obsidian.
         """
         if capture.text is not None:
             body = capture.text
@@ -348,17 +350,17 @@ class _CuratePass(_IngestorBase):
         """Read the curate tool-use plan and validate it against the file-plan contract.
 
         The curate pass FORCES the ``submit_file_plan`` tool, so the plan arrives as a
-        structured ``tool_use.input`` dict (escaping handled by the SDK -- no more
-        invalid-JSON aborts, issue #110). A response with no such tool call is treated
-        like a parse failure: recoverable by the repair loop. A ``pages`` value the
-        model stochastically JSON-encoded as a STRING (a known slip despite the array
-        schema) is deterministically unwrapped here rather than burning the corrective
-        retry. ``validate_file_plan`` stays the authoritative gate (tool-use guarantees
-        valid JSON, not a valid plan).
+        structured ``tool_use.input`` dict whose escaping the SDK handles, ending the
+        invalid-JSON aborts (issue #110). A response with no such tool call counts as a
+        parse failure, which the repair loop recovers. A ``pages`` value the model
+        stochastically JSON-encoded as a STRING, a known slip despite the array schema,
+        is unwrapped deterministically here rather than burning the corrective retry.
+        ``validate_file_plan`` stays the authoritative gate, because tool use guarantees
+        valid JSON, not a valid plan.
 
         Raises:
-            IngestError: if the model did not call the tool or the plan fails
-                validation; the message names every offending field so :meth:`curate`
+            IngestError: when the model did not call the tool, or the plan fails
+                validation. The message names every offending field, so :meth:`curate`
                 can feed it back to the model on the corrective retry.
         """
         plan = extract_tool_use(response, "submit_file_plan")
@@ -382,10 +384,10 @@ class _CuratePass(_IngestorBase):
     # ---- read-only create-vs-update helper --------------------------------------
 
     def search_vault(self, query: str, *, limit: int = 10) -> list[str]:
-        """Scan the curated folders for ``query`` in filenames and bodies (read-only).
+        """Scan the curated folders, read-only, for ``query`` in filenames and bodies.
 
-        A case-insensitive lexical scan over ``*.md`` in the curated layer
-        (:data:`_CANDIDATE_DIRS`). No LLM, no network; pure disk read. Used to decide
+        A case-insensitive lexical scan over ``*.md`` in the curated layer,
+        :data:`_CANDIDATE_DIRS`. No LLM and no network, just a disk read. It decides
         whether a named term already has a page to update.
 
         Args:
@@ -426,14 +428,14 @@ class _CuratePass(_IngestorBase):
     ) -> str:
         """Write one validated file-plan page through the confined vault helper.
 
-        ``write_page`` re-validates the folder/type/slug contract and confines the path,
-        so a plan that slipped a bad folder or an escaping slug past the schema check is
-        still rejected here. A reference page's per-plan ``summary`` (issue #72) is
-        routed into its frontmatter -- the canonical, rebuildable one-line gloss that
-        replaces the old ``index.md`` catalog (ADR 0008) and which :meth:`thoth.query`
+        ``write_page`` re-validates the folder, type and slug contract and confines the
+        path, so a plan that slipped a bad folder or an escaping slug past the schema
+        check is still rejected here. A reference page's per-plan ``summary`` (issue
+        #72) routes into its frontmatter, the canonical rebuildable one-line gloss that
+        replaced the old ``index.md`` catalog (ADR 0008) and that :meth:`thoth.query`
         grep then absorbs transparently. For a binary capture the asset's analysed OCR
-        text is ensured present in the body (issue #42) so the page is searchable on the
-        real content even if the model's body did not transcribe it.
+        text is ensured present in the body (issue #42), so the page is searchable on
+        the real content even when the model's body did not transcribe it.
         """
         folder = page["folder"]
         slug = page["slug"]
@@ -466,14 +468,14 @@ class _CuratePass(_IngestorBase):
     def _apply_summary(frontmatter: dict[str, Any], page: dict[str, Any]) -> None:
         """Route a content page's per-plan ``summary`` into its frontmatter (#72).
 
-        The curate plan carries a one-line ``summary`` per page; for every content page
-        (:data:`~thoth.vault.SUMMARY_TYPES`: all four types, including ``action`` since
-        ADR 0013) it is the canonical, rebuildable gloss and is written into
-        frontmatter as ``summary:`` so :meth:`thoth.query.QueryEngine.grep` (which
-        scans the whole file including frontmatter) finds it and the Bases dashboards
-        can show a Summary column -- the page owns its gloss instead of an ``index.md``
-        catalog (ADR 0008). A blank/whitespace summary, an ``inbox`` hold, or a page
-        that already carries its own ``summary`` frontmatter is left untouched.
+        The curate plan carries a one-line ``summary`` per page. For every content page
+        in :data:`~thoth.vault.SUMMARY_TYPES`, all four types including ``action`` since
+        ADR 0013, it is the canonical rebuildable gloss, written into frontmatter as
+        ``summary:`` so :meth:`thoth.query.QueryEngine.grep`, which scans the whole file
+        including frontmatter, finds it and the Bases dashboards can show a Summary
+        column. The page therefore owns its gloss instead of an ``index.md`` catalog
+        (ADR 0008). A blank or whitespace summary, an ``inbox`` hold, and a page that
+        already carries its own ``summary`` frontmatter are left untouched.
         """
         if "summary" in frontmatter:
             return
@@ -488,12 +490,12 @@ class _CuratePass(_IngestorBase):
     def _ensure_analysis_text(
         body: str, raw: RawCaptureResult, analysis: Analysis | None
     ) -> str:
-        """Append the analysed OCR/extracted text to an asset-bearing page if absent.
+        """Append the analysed extracted text to an asset-bearing page when absent.
 
-        Only the page(s) carrying the saved asset get the extracted text, so a
-        multi-page plan does not duplicate the transcript onto unrelated pages. The text
-        is appended only when the model's body does not already contain it (the model
-        may have transcribed it itself), so there is no double-paste.
+        Only a page carrying the saved asset gets the extracted text, so a multi-page
+        plan does not duplicate the transcript onto unrelated pages. The text is
+        appended only when the model's body does not already contain it, since the model
+        may have transcribed it itself, so there is no double-paste.
         """
         if analysis is None or not raw.asset_paths or not analysis.text.strip():
             return body
@@ -507,13 +509,14 @@ class _CuratePass(_IngestorBase):
         """Append standard markdown image embeds for saved assets not already in body.
 
         Each saved asset is embedded with the OKF ``![](relative/path)`` form (issue
-        #189), the path computed relative to the page's ``folder`` (a ``memories/`` page
-        embeds ``../raw/assets/photo.png``) and URL-escaped. An Excalidraw drawing
-        (``<slug>.excalidraw.md`` on disk) is the one exception: only the Obsidian
-        ``![[<slug>.excalidraw]]`` wiki embed renders the drawing (the plugin keys on
-        that basename, issue #68) and there is no standard-markdown equivalent, so it
-        keeps the wiki form -- a model-written ``![[<slug>.excalidraw.md]]`` is
-        normalised to it first. An embed already in the model's body is not duplicated.
+        #189), the path computed relative to the page's ``folder``, so a ``memories/``
+        page embeds ``../raw/assets/photo.png``, and URL-escaped. An Excalidraw drawing,
+        stored as ``<slug>.excalidraw.md`` on disk, is the one exception. Only the
+        Obsidian ``![[<slug>.excalidraw]]`` wiki embed renders the drawing, the plugin
+        keying on that basename (issue #68), and there is no standard-markdown
+        equivalent, so it keeps the wiki form and a model-written
+        ``![[<slug>.excalidraw.md]]`` is normalised to it first. An embed already in the
+        model's body is not duplicated.
         """
         additions: list[str] = []
         for asset_rel in raw.asset_paths:
@@ -546,18 +549,18 @@ class _CuratePass(_IngestorBase):
         analysis: Analysis | None = None,
         extracted_body: str | None = None,
     ) -> str:
-        """Build the curate-call prompt (the file-plan contract + classification + raw).
+        """Build the curate-call prompt: the file-plan contract, classification and raw.
 
-        The model returns the plan by CALLING the ``submit_file_plan`` tool (forced via
-        ``tool_choice``), so the plan is a structured ``tool_use.input`` dict the SDK
-        escapes -- it can never break JSON parsing (issue #110). The exact field/enum
-        contract is embedded verbatim from :func:`thoth.llm.file_plan_contract_text`
-        (rendered from the same constants the validator enforces) so the model knows the
-        shape the tool input must satisfy; ``validate_file_plan`` remains the gate. A
-        binary capture's analysis (issue #42) is included so the curated body holds the
-        asset's real OCR'd/extracted content; ``extracted_body`` does the same for an
-        audio transcript / URL article body (which the model cannot read off the raw
-        page path).
+        The model returns the plan by CALLING the ``submit_file_plan`` tool, forced
+        through ``tool_choice``, so the plan is a structured ``tool_use.input`` dict the
+        SDK escapes and it can never break JSON parsing (issue #110). The exact field
+        and enum contract is embedded verbatim from
+        :func:`thoth.llm.file_plan_contract_text`, rendered from the same constants the
+        validator enforces, so the model knows the shape the tool input must satisfy,
+        and ``validate_file_plan`` remains the gate. A binary capture's analysis is
+        included (issue #42), so the curated body holds the asset's real extracted
+        content, and ``extracted_body`` does the same for an audio transcript or URL
+        article body, which the model cannot read off the raw page path.
         """
         candidate_block = "\n".join(f"- {path}" for path in candidates) or "(none)"
         raw_block = raw.raw_path or "(no raw page)"
@@ -588,11 +591,11 @@ def _embed_name(asset_filename: str) -> str:
     """Map an asset filename to the name Obsidian must embed to *render* it (issue #68).
 
     For an Excalidraw drawing stored as ``<slug>.excalidraw.md``, the trailing ``.md``
-    must be dropped: Obsidian's basename for that file is ``<slug>.excalidraw``, and the
-    Excalidraw plugin only renders the *drawing* for an ``![[<slug>.excalidraw]]`` embed
-    -- ``![[<slug>.excalidraw.md]]`` embeds the markdown note instead, showing the raw
-    scene JSON (the issue #68 live-verify failure). Every other asset embeds by its bare
-    filename unchanged.
+    must be dropped. Obsidian's basename for that file is ``<slug>.excalidraw``, and the
+    Excalidraw plugin renders the *drawing* only for an ``![[<slug>.excalidraw]]``
+    embed. ``![[<slug>.excalidraw.md]]`` embeds the markdown note instead, showing the
+    raw scene JSON, which was the issue #68 live-verify failure. Every other asset
+    embeds by its bare filename unchanged.
     """
     if asset_filename.endswith(".excalidraw.md"):
         return asset_filename[: -len(".md")]
@@ -603,8 +606,8 @@ def _relative_asset_href(asset_rel: str, folder: str) -> str:
     """Build a page-relative, URL-escaped href for a vault-relative asset path (#189).
 
     Content folders are one level deep, so an asset at ``raw/assets/photo.png`` becomes
-    ``../raw/assets/photo.png`` from any content page. Spaces and other unsafe chars are
-    percent-encoded so the markdown ``![](...)`` link is well-formed.
+    ``../raw/assets/photo.png`` from any content page. A space or other unsafe character
+    is percent-encoded, so the markdown ``![](...)`` link is well-formed.
     """
     rel = posixpath.relpath(asset_rel, folder) if folder else asset_rel
     return quote(rel, safe="/")
@@ -613,11 +616,11 @@ def _relative_asset_href(asset_rel: str, folder: str) -> str:
 def _curate_repair_prompt(problems: str) -> str:
     """Build the corrective retry prompt that feeds the problems back to the model.
 
-    Sent as the follow-up user turn after a rejected plan (the prior assistant turn
-    carries the model's ``submit_file_plan`` tool call), so the model sees exactly what
-    failed and fixes it rather than the capture aborting. The problem string may be a
-    :func:`validate_file_plan` message OR "curate did not call submit_file_plan tool"
-    (the model failed to call the tool at all), so the wording stays generic and
+    Sent as the follow-up user turn after a rejected plan, where the prior assistant
+    turn carries the model's ``submit_file_plan`` tool call, so the model sees exactly
+    what failed and fixes it rather than the capture aborting. The problem string may be
+    a :func:`validate_file_plan` message OR "curate did not call submit_file_plan tool",
+    meaning the model failed to call the tool at all, so the wording stays generic and
     references the tool either way.
     """
     return (
@@ -633,19 +636,19 @@ def _curate_repair_turn(response: Any, problems: str) -> Message:
 
     The shape depends on how the prior assistant turn ended (issue #110 reviewer fix):
 
-    * If the assistant CALLED ``submit_file_plan`` (the normal forced-tool path, where
-      the plan merely failed :func:`validate_file_plan`), the Messages API requires the
+    * When the assistant CALLED ``submit_file_plan``, the normal forced-tool path where
+      the plan merely failed :func:`validate_file_plan`, the Messages API requires the
       next user turn to OPEN with a ``tool_result`` block keyed to that ``tool_use``
-      block's id -- a plain-text turn after a ``tool_use`` block is a 400
-      ("tool_use ids were found without tool_result blocks immediately after"). So the
+      block's id. A plain-text turn after a ``tool_use`` block is a 400, reporting
+      "tool_use ids were found without tool_result blocks immediately after", so the
       turn leads with ``tool_result(tool_use_id, repair_text, is_error=True)``.
-    * If the assistant did NOT call the tool (the "did not call submit_file_plan" case),
-      its turn is plain text, so a plain-text user follow-up is valid and no
+    * When the assistant did NOT call the tool, the "did not call submit_file_plan"
+      case, its turn is plain text, so a plain-text user follow-up is valid and no
       ``tool_result`` is owed.
 
     Args:
-        response: The rejected curate response (its assistant turn was just echoed).
-        problems: The validation/parse problems to feed back.
+        response: The rejected curate response, whose assistant turn was just echoed.
+        problems: The validation and parse problems to feed back.
 
     Returns:
         A user :class:`Message` whose content is API-valid for the echoed assistant

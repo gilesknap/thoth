@@ -10,15 +10,14 @@ from ._db import _StateStore
 class EventStore(_StateStore):
     """Durable, single-writer store of processed Slack event ids (``processed_events``).
 
-    Backs :class:`thoth.slack_app.EventDedupe` so a Slack redelivery that straddles a
-    daemon restart is still recognised as already-processed (the in-memory TTL set is
-    lost on restart; this table survives it). The table is
-    ``processed_events(event_id TEXT PRIMARY KEY, ts REAL)`` where ``ts`` is the
-    wall-clock seconds the id was first recorded, used to prune past the TTL.
+    Backs :class:`thoth.slack_app.EventDedupe`. A restart loses the in-memory TTL set
+    but not this table, so a Slack redelivery straddling a daemon restart still counts
+    as already processed. The table is
+    ``processed_events(event_id TEXT PRIMARY KEY, ts REAL)``, where ``ts`` is when the
+    id was first recorded and the prune drops an id past the TTL.
 
-    The connection-per-operation lifecycle, the no-op ``close`` / context-manager
-    protocol, and the injectable clock come from the shared ``_StateStore`` base in
-    :mod:`thoth.state`.
+    The shared ``_StateStore`` base in :mod:`thoth.state` supplies the
+    connection-per-operation lifecycle and the injectable clock.
     """
 
     _SCHEMAS = (
@@ -29,20 +28,20 @@ class EventStore(_StateStore):
     # ---- processed_events operations ---------------------------------------------
 
     def seen(self, event_id: str, *, ttl_seconds: float) -> bool:
-        """Record ``event_id`` if new and report whether it was already processed.
+        """Record ``event_id`` when new, and report whether it was already processed.
 
-        Prunes entries older than ``ttl_seconds`` first (so a long-expired id is treated
-        as fresh after redelivery, matching the in-memory set), then: an unknown id is
-        inserted with the current timestamp and ``False`` is returned (process it); a
-        known, un-pruned id returns ``True`` (drop the redelivery). An empty
-        ``event_id`` is never recorded and returns ``False`` (cannot dedupe a missing).
+        Prunes past ``ttl_seconds`` first, so a long-expired id counts as fresh on
+        redelivery, matching the in-memory set. An unknown id then gains a row stamped
+        with the current time and returns ``False``, to process it, while a known,
+        un-pruned id returns ``True``, to drop the redelivery. An empty id cannot be
+        deduped, so it gains no row and returns ``False``.
 
         Args:
-            event_id: The Slack event id (or client message id).
+            event_id: The Slack event id, or the client message id.
             ttl_seconds: How long a recorded id is remembered before pruning.
 
         Returns:
-            ``True`` if this id was already recorded (and still within the TTL), else
+            ``True`` when this id was already recorded and still within the TTL, else
             ``False``.
         """
         if not event_id:
@@ -61,10 +60,10 @@ class EventStore(_StateStore):
             return cursor.rowcount == 0
 
     def mark(self, event_id: str, *, ttl_seconds: float) -> None:
-        """Record ``event_id`` as processed now (no-op for an empty id).
+        """Record ``event_id`` as processed now. An empty id does nothing.
 
-        Prunes past the TTL first, then upserts the id with the current timestamp so a
-        later :meth:`seen` reports it as already processed.
+        Prunes past the TTL, then upserts the id with the current timestamp so a later
+        :meth:`seen` reports it as already processed.
         """
         if not event_id:
             return
@@ -81,8 +80,8 @@ class EventStore(_StateStore):
         """Delete every recorded id older than ``ttl_seconds`` from now.
 
         Args:
-            ttl_seconds: The retention window; ids with ``ts`` before
-                ``now - ttl_seconds`` are removed.
+            ttl_seconds: The retention window, deleting every id whose ``ts`` falls
+                before ``now - ttl_seconds``.
 
         Returns:
             The number of rows deleted.
@@ -92,7 +91,7 @@ class EventStore(_StateStore):
 
     @staticmethod
     def _prune(conn: sqlite3.Connection, *, cutoff: float) -> int:
-        """Delete rows with ``ts < cutoff`` on an open connection; return the count."""
+        """Delete rows with ``ts < cutoff`` on an open connection. Return the count."""
         cursor = conn.execute("DELETE FROM processed_events WHERE ts < ?", (cutoff,))
         conn.commit()
         return cursor.rowcount

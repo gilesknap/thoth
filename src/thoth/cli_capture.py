@@ -1,10 +1,9 @@
 """Per-item helpers for ``thoth capture``, split out of :mod:`thoth.__main__`.
 
-These back the :func:`thoth.__main__.run_capture` loop shared by the file-walk (#80)
-and inbox-drain (#105) branches: tally one capture's disposition, and commit one
-batch of imported files. Import safety: only the standard library is imported at
-module top level; the ingest/git exception types are imported lazily inside each
-helper body.
+These helpers back the :func:`thoth.__main__.run_capture` loop that the file-walk (#80)
+and inbox-drain (#105) branches share, one tallying a capture's disposition and one
+committing a batch. Import safety: the module top level imports only the standard
+library, and each helper body imports the ingest and git exception types lazily.
 """
 
 from __future__ import annotations
@@ -38,17 +37,20 @@ def _ingest_one(
     index: int,
     counts: _CaptureCounts,
 ) -> str:
-    """Ingest one capture (commit deferred), tally its disposition, print a line.
+    """Ingest one capture, defer the commit, tally the disposition and print a line.
 
-    Shared by the file-walk (#80) and inbox-drain (#105) branches. Per-item failures are
-    isolated: an :class:`~thoth.ingest.IngestError` is logged, counted, and skipped
-    (the item stays durable in ``inbox/``). A drain hold is retired (with the deletion
-    staged into the next batch) once its content is durably curated -- on a genuine file
-    (``page_paths`` non-empty) AND on an ``unchanged`` skip, since ``unchanged`` is only
-    reported when the curated page provably already exists (#113); such a hold is a
-    duplicate of already-filed content. A deferred/skipped hold stays (recoverable,
-    idempotent) so a budget re-trip never silently deletes un-filed content. Returns the
-    disposition string.
+    The file-walk (#80) and inbox-drain (#105) branches share this helper. A per-item
+    failure stays isolated: the helper logs an :class:`~thoth.ingest.IngestError`,
+    counts it and skips the item, which stays durable in ``inbox/``.
+
+    A drain hold retires once durably curated, with the deletion staged into the next
+    batch: a genuine file with ``page_paths`` non-empty, or an ``unchanged`` skip. Only
+    a provably existing curated page reports ``unchanged`` (#113), so such a hold
+    duplicates already-filed content. A deferred or skipped hold stays, recoverable and
+    idempotent, so a budget re-trip never deletes un-filed content.
+
+    Returns:
+        The disposition string.
     """
     from .ingest import IngestError
 
@@ -62,7 +64,7 @@ def _ingest_one(
         counts.deferred += 1
         disposition = "deferred"
     elif report.unchanged:
-        # Skip-on-unchanged (#95 task D): already curated, nothing re-spent/re-stamped.
+        # Skip on unchanged (#95 task D): already curated, so nothing is re-spent.
         counts.unchanged += 1
         disposition = "unchanged"
     elif report.page_paths:
@@ -71,14 +73,11 @@ def _ingest_one(
     else:
         counts.skipped += 1
         disposition = "skipped"
-    # Retire a drained hold once its content is durably curated -- both on a genuine
-    # file AND on an `unchanged` skip (#113). `unchanged` is only reported when the
-    # classify-routed curated page provably already exists on disk (see
-    # Ingestor._unchanged_curated), so the hold is a duplicate of already-filed content
-    # and would otherwise linger in inbox/ forever, re-spending a classify call each
-    # run. Never drop a `deferred`/`skipped`/`failed` hold (data-loss guard).
-    # remove_page is idempotent + path-confined; the removal stages into the same batch
-    # as the new page.
+    # Ingestor._unchanged_curated proves the curated page exists before it reports
+    # `unchanged`, so retiring the hold here cannot lose content (#113). Left alone it
+    # would linger in inbox/ forever and re-spend a classify call each run. remove_page
+    # is idempotent and path-confined, and the removal stages into the same batch as
+    # the new page.
     if disposition in ("filed", "unchanged") and hold_rel is not None:
         vault.remove_page(hold_rel)
     print(
@@ -89,13 +88,13 @@ def _ingest_one(
 
 
 def _commit_capture_batch(git: Any, count: int) -> None:
-    """Commit + push one batch of imported files; surface a conflict loudly and stop.
+    """Commit and push one batch of imported files. Surface a conflict loudly and stop.
 
-    :meth:`thoth.git_sync.GitSync.commit` does add -A + commit + rebase + push in one
-    call and returns ``committed=False`` on "nothing to commit", so a flush with no
-    pending changes is a safe no-op. A :class:`~thoth.git_sync.VaultConflictError`
-    aborts the import (the content is filed locally; the operator re-runs once the
-    remote is reconciled -- the run is idempotent) rather than ever forcing the push.
+    :meth:`thoth.git_sync.GitSync.commit` does add -A, commit, rebase and push in one
+    call, returning ``committed=False`` for "nothing to commit", so an empty flush is a
+    safe no-op. A :class:`~thoth.git_sync.VaultConflictError` aborts the import rather
+    than ever force the push. The content is filed locally and the run is idempotent, so
+    the operator re-runs once the remote is reconciled.
     """
     from .git_sync import VaultConflictError
 

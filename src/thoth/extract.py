@@ -1,24 +1,24 @@
-"""URL/PDF/image/audio extraction with an SSRF guard and injectable boundaries.
+"""URL, PDF, image and audio extraction, with an SSRF guard and injectable seams.
 
 This module is the appliance's read-only window onto the outside world (SPEC
-sections 6 and 7.1). It turns a URL into clean markdown via Firecrawl, fetches a
-binary (a PDF or an image) to a temporary file *server-side* for
-:meth:`thoth.vault.Vault.save_asset` (never base64), and shells out to a local
+sections 6 and 7.1). It turns a URL into clean markdown through Firecrawl, fetches
+a binary, a PDF or an image, to a temporary file *server-side* for
+:meth:`thoth.vault.Vault.save_asset` and never as base64, and shells out to a local
 ``whisper`` CLI for optional speech-to-text.
 
-Every network entry point passes through a single SSRF gate
-(:func:`assert_url_allowed`) **before** any client or socket is touched: the URL
-scheme must be ``http``/``https`` and every resolved IP must be public unless
-``allow_private_urls`` is set. This blocks ``file://``/``data:``/``gopher://``
-schemes and loopback/private/link-local/reserved/multicast/unspecified targets
-(for example the ``169.254.169.254`` cloud-metadata address).
+Every network entry point passes through the single SSRF gate
+:func:`assert_url_allowed` **before** any client or socket is touched: the URL
+scheme must be ``http`` or ``https``, and every resolved IP must be public unless
+``allow_private_urls`` is set. That blocks the ``file://``, ``data:`` and
+``gopher://`` schemes, and loopback, private, link-local, reserved, multicast and
+unspecified targets, such as the ``169.254.169.254`` cloud-metadata address.
 
-Import safety (the pytest-collection trap): only the standard library, ``httpx``,
-and :mod:`thoth.config` are imported at module top level. The Firecrawl client is
-imported **lazily** inside :attr:`Extractor.firecrawl`, and ``whisper`` is never
-imported at all — it is a subprocess. So importing this module (and pytest
-collecting it) never requires a heavy or absent dependency. All external
-boundaries are injectable so tests do zero real network, DNS, or subprocess work.
+Import safety, the pytest-collection trap: module top level imports only the
+standard library, ``httpx`` and :mod:`thoth.config`. :attr:`Extractor.firecrawl`
+imports the Firecrawl client **lazily**, and nothing imports ``whisper`` at all,
+because it is a subprocess. Importing this module, and pytest collecting it,
+therefore never needs a heavy or absent dependency. Every external boundary is
+injectable, so a test does no real network, DNS or subprocess work.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ class ExtractError(Exception):
 
 
 class SsrfError(ExtractError):
-    """Raised when a URL is blocked by the SSRF guard (bad scheme or private IP)."""
+    """Raised when the SSRF guard blocks a URL: a bad scheme, or a private IP."""
 
 
 class FetchError(ExtractError):
@@ -110,16 +110,17 @@ class FirecrawlLike(Protocol):
         """Scrape ``url`` and return a result carrying markdown (duck-typed).
 
         ``firecrawl-py`` 4.x replaced ``scrape_url(url, params={...})`` with
-        ``scrape(url, formats=[...])`` returning a ``Document`` (``.markdown`` /
-        ``.metadata``). ``formats`` is ``Any`` so the real client (whose parameter is
-        typed ``list[FormatOption]``) satisfies this Protocol structurally.
+        ``scrape(url, formats=[...])``, which returns a ``Document`` carrying
+        ``.markdown`` and ``.metadata``. ``formats`` is ``Any``, so the real client,
+        whose parameter is typed ``list[FormatOption]``, satisfies this Protocol
+        structurally.
         """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class ExtractedDoc:
-    """Clean markdown plus provenance for a fetched URL (feeds ``Vault.write_raw``)."""
+    """Clean markdown plus provenance for a fetched URL, feeding ``Vault.write_raw``."""
 
     source_url: str
     """The URL that was extracted."""
@@ -131,7 +132,7 @@ class ExtractedDoc:
 
 @dataclass(frozen=True, slots=True)
 class FetchedBinary:
-    """A downloaded binary staged in a temp file (feeds ``Vault.save_asset``)."""
+    """A downloaded binary staged in a temp file, feeding ``Vault.save_asset``."""
 
     source_url: str
     """The URL the bytes were fetched from."""
@@ -147,17 +148,17 @@ def _resolve_ips(host: str) -> list[str]:
     """Resolve ``host`` to its IP-address strings (the monkeypatchable DNS seam).
 
     Wraps :func:`socket.getaddrinfo` and returns the unique address strings from
-    every returned ``sockaddr``. Tests monkeypatch this function to return chosen
-    IPs so the SSRF guard is exercised without any real DNS lookup.
+    every returned ``sockaddr``. A test monkeypatches this function to return chosen
+    IPs, so the SSRF guard runs without any real DNS lookup.
 
     Args:
-        host: The hostname (or already-literal IP) to resolve.
+        host: The hostname, or already-literal IP, to resolve.
 
     Returns:
-        A list of resolved IP-address strings (order preserved, de-duplicated).
+        A list of resolved IP-address strings, de-duplicated in order.
 
     Raises:
-        SsrfError: if the host cannot be resolved.
+        SsrfError: when the host cannot be resolved.
     """
     try:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
@@ -177,14 +178,15 @@ def _resolve_ips(host: str) -> list[str]:
 def _ip_is_public(ip_text: str) -> bool:
     """Return ``True`` only if ``ip_text`` is a routable public address.
 
-    Treats loopback, private, link-local, reserved, multicast, and unspecified
-    addresses (IPv4 and IPv6) as non-public. An unparseable string is non-public.
+    Treats a loopback, private, link-local, reserved, multicast or unspecified
+    address as non-public, for both IPv4 and IPv6. An unparseable string is
+    non-public too.
 
     Args:
         ip_text: An IP-address string.
 
     Returns:
-        ``True`` if the address is global/public, ``False`` otherwise.
+        ``True`` when the address is global, else ``False``.
     """
     try:
         ip = ipaddress.ip_address(ip_text)
@@ -201,20 +203,18 @@ def _ip_is_public(ip_text: str) -> bool:
 
 
 def is_url_allowed(url: str, *, allow_private_urls: bool = False) -> bool:
-    """Return ``True`` iff the URL is safe to fetch under the SSRF policy.
+    """Return ``True`` only when the URL is safe to fetch under the SSRF policy.
 
-    The URL must use an ``http``/``https`` scheme and have a host. Unless
-    ``allow_private_urls`` is set, every IP the host resolves to (via the
-    :func:`_resolve_ips` seam) must be public; a single private/loopback/
-    link-local/reserved/multicast/unspecified address fails the check.
+    The module docstring gives the policy. :func:`_resolve_ips` is the DNS seam it
+    resolves through.
 
     Args:
         url: The URL to evaluate.
-        allow_private_urls: When ``True``, skip the resolved-IP public check (the
-            scheme/host requirement still applies). Defaults to ``False``.
+        allow_private_urls: When ``True``, skips the resolved-IP public check, though
+            the scheme and host requirement still applies. Defaults to ``False``.
 
     Returns:
-        ``True`` if the URL passes the policy, ``False`` otherwise.
+        ``True`` when the URL passes the policy, else ``False``.
     """
     parsed = urlparse(url)
     if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
@@ -233,17 +233,13 @@ def is_url_allowed(url: str, *, allow_private_urls: bool = False) -> bool:
 def assert_url_allowed(url: str, *, allow_private_urls: bool = False) -> None:
     """Raise :class:`SsrfError` unless ``url`` passes :func:`is_url_allowed`.
 
-    This is the single guard gate every network entry point calls *before* any
-    client or socket is touched, so a blocked URL never reaches Firecrawl or
-    ``httpx``.
-
     Args:
         url: The URL to validate.
         allow_private_urls: Forwarded to :func:`is_url_allowed`.
 
     Raises:
-        SsrfError: if the scheme is not ``http``/``https`` or (unless allowed) any
-            resolved IP is non-public.
+        SsrfError: when the scheme is neither ``http`` nor ``https``, or when a
+            resolved IP is non-public and private URLs are not allowed.
     """
     if not is_url_allowed(url, allow_private_urls=allow_private_urls):
         raise SsrfError(f"URL blocked by SSRF guard: {url!r}")
@@ -252,34 +248,34 @@ def assert_url_allowed(url: str, *, allow_private_urls: bool = False) -> None:
 def _content_type_to_ext(content_type: str) -> str:
     """Map a bare lowercased content type to a bare lowercase extension.
 
-    Normalisation (parameter stripping + lowercasing) is owned by
-    :meth:`Extractor._stream_to_fd`; this is a plain lookup in
-    :data:`_IMAGE_EXT_BY_CONTENT_TYPE`, falling back to :data:`_DEFAULT_BINARY_EXT`.
+    :meth:`Extractor._stream_to_fd` owns the normalisation, stripping parameters and
+    lowercasing, so this is a plain lookup in :data:`_IMAGE_EXT_BY_CONTENT_TYPE` that
+    falls back to :data:`_DEFAULT_BINARY_EXT`.
 
     Args:
-        content_type: The bare, lowercased content type (may be empty).
+        content_type: The bare, lowercased content type, possibly empty.
 
     Returns:
-        A bare lowercase extension (no leading dot).
+        A bare lowercase extension, with no leading dot.
     """
     return _IMAGE_EXT_BY_CONTENT_TYPE.get(content_type, _DEFAULT_BINARY_EXT)
 
 
 def _field(obj: Any, name: str) -> Any:
-    """Return ``obj[name]`` (dict) or ``obj.name`` (object), defaulting to ``None``."""
+    """Return ``obj[name]`` for a dict or ``obj.name`` for an object, else ``None``."""
     if isinstance(obj, dict):
         return obj.get(name)
     return getattr(obj, name, None)
 
 
 class Extractor:
-    """URL/PDF/image/STT extraction behind injected clients and the SSRF guard.
+    """URL, PDF, image and speech extraction behind injected clients and the SSRF guard.
 
-    All external boundaries are injectable: a :class:`FirecrawlLike` client (created
-    lazily from :class:`~thoth.config.Config` keys only when first used), an
-    :class:`httpx.Client` (back it with :class:`httpx.MockTransport` in tests), and
-    the ``whisper`` CLI name (shelled out via :func:`subprocess.run`). The SSRF gate
-    runs inside :meth:`web_extract` and :meth:`fetch_binary` before any of those
+    Every external boundary is injectable: a :class:`FirecrawlLike` client, created
+    lazily from :class:`~thoth.config.Config` keys only on first use, an
+    :class:`httpx.Client`, which a test backs with :class:`httpx.MockTransport`, and
+    the ``whisper`` CLI name, shelled out through :func:`subprocess.run`. The SSRF
+    gate runs inside :meth:`web_extract` and :meth:`fetch_binary` before any of those
     boundaries is touched.
     """
 
@@ -296,15 +292,15 @@ class Extractor:
 
         Args:
             config: The frozen runtime config supplying the Firecrawl API key.
-            firecrawl: An optional injected Firecrawl client; created lazily on first
-                use of :attr:`firecrawl` when ``None``.
-            http_client: An optional injected :class:`httpx.Client`; a default
-                client is created lazily on first use of :attr:`http_client` when
-                ``None``. Inject one backed by :class:`httpx.MockTransport` in tests.
+            firecrawl: An optional injected Firecrawl client. With ``None``,
+                :attr:`firecrawl` creates one lazily on first use.
+            http_client: An optional injected :class:`httpx.Client`. With ``None``,
+                :attr:`http_client` creates a default client lazily on first use. A test
+                injects one backed by :class:`httpx.MockTransport`.
             allow_private_urls: When ``True``, the SSRF guard skips the resolved-IP
-                public check (the scheme requirement still applies). Defaults to
-                ``False`` per SPEC section 12.
-            whisper_bin: The ``whisper`` executable name/path for :meth:`transcribe`.
+                public check, though the scheme requirement still applies. Defaults to
+                ``False``, per SPEC section 12.
+            whisper_bin: The ``whisper`` executable name or path for :meth:`transcribe`.
         """
         self._config = config
         self._firecrawl = firecrawl
@@ -319,7 +315,7 @@ class Extractor:
 
     @property
     def http_client(self) -> httpx.Client:
-        """The ``httpx`` client, created lazily (default timeout) on first use."""
+        """The ``httpx`` client, created lazily on first use at the default timeout."""
         if self._http_client is None:
             self._http_client = httpx.Client(timeout=_DEFAULT_HTTP_TIMEOUT)
         return self._http_client
@@ -329,7 +325,7 @@ class Extractor:
         """The Firecrawl client, importing the SDK and key lazily on first use.
 
         Raises:
-            ExtractError: if ``FIRECRAWL_API_KEY`` is not configured.
+            ExtractError: when ``FIRECRAWL_API_KEY`` is not configured.
         """
         if self._firecrawl is None:
             if self._config.firecrawl_api_key is None:
@@ -342,11 +338,10 @@ class Extractor:
         return self._firecrawl
 
     def web_extract(self, url: str) -> ExtractedDoc:
-        """Fetch ``url`` and return its clean markdown via Firecrawl (SSRF-guarded).
+        """Fetch ``url`` and return its clean markdown through Firecrawl, SSRF-guarded.
 
-        :func:`assert_url_allowed` runs first, so a blocked URL never reaches the
-        Firecrawl client. The Firecrawl result is duck-typed for ``markdown`` and a
-        title under ``metadata``/``title``.
+        The Firecrawl result is duck-typed for ``markdown`` and for a title under
+        ``metadata`` or ``title``.
 
         Args:
             url: The URL to extract.
@@ -355,8 +350,8 @@ class Extractor:
             An :class:`ExtractedDoc` with ``source_url``, ``title`` and ``markdown``.
 
         Raises:
-            SsrfError: if the URL is blocked by the SSRF guard.
-            ExtractError: if extraction fails or returns no markdown.
+            SsrfError: when the SSRF guard blocks the URL.
+            ExtractError: when extraction fails or returns no markdown.
         """
         assert_url_allowed(url, allow_private_urls=self._allow_private_urls)
         try:
@@ -375,7 +370,7 @@ class Extractor:
 
     @staticmethod
     def _extract_markdown(result: Any) -> str:
-        """Pull the ``markdown`` field out of a Firecrawl result (dict or object)."""
+        """Pull the ``markdown`` field out of a Firecrawl result, dict or object."""
         value = _field(result, "markdown")
         return value if isinstance(value, str) else ""
 
@@ -384,8 +379,8 @@ class Extractor:
         """Pull a title from a Firecrawl result's ``metadata.title`` or ``title``.
 
         ``firecrawl-py`` 4.x returns a ``Document`` whose ``metadata`` is a
-        ``DocumentMetadata`` *object* (``.title``), not a dict, so both shapes are
-        accepted here.
+        ``DocumentMetadata`` *object* carrying ``.title``, not a dict, so this accepts
+        both shapes.
         """
         meta_title = _field(_field(result, "metadata"), "title")
         if isinstance(meta_title, str):
@@ -394,23 +389,22 @@ class Extractor:
         return title if isinstance(title, str) else ""
 
     def fetch_binary(self, url: str) -> FetchedBinary:
-        """Stream ``url`` to a temp file server-side, size-capped (SSRF-guarded).
+        """Stream ``url`` to a size-capped temp file server-side, SSRF-guarded.
 
-        :func:`assert_url_allowed` runs first, so a blocked URL never issues an
-        ``httpx`` request. The body is streamed in chunks; if it exceeds
-        :data:`MAX_DOWNLOAD_BYTES` the partial temp file is removed and
-        :class:`FetchError` is raised. The bytes are never base64-encoded; the
-        returned temp path is handed straight to :meth:`thoth.vault.Vault.save_asset`.
+        The body streams in chunks, and exceeding :data:`MAX_DOWNLOAD_BYTES` removes
+        the partial temp file and raises :class:`FetchError`. The bytes are never
+        base64-encoded, and the returned temp path goes straight to
+        :meth:`thoth.vault.Vault.save_asset`.
 
         Args:
             url: The URL to download.
 
         Returns:
-            A :class:`FetchedBinary` with the temp path, content type, and a
-            suggested extension.
+            A :class:`FetchedBinary` with the temp path, content type and a suggested
+            extension.
 
         Raises:
-            SsrfError: if the URL is blocked by the SSRF guard.
+            SsrfError: when the SSRF guard blocks the URL.
             FetchError: on a network error, a non-success status, or a size-cap breach.
         """
         assert_url_allowed(url, allow_private_urls=self._allow_private_urls)
@@ -432,17 +426,17 @@ class Extractor:
         )
 
     def _stream_to_fd(self, url: str, fd: int) -> str:
-        """Stream ``url`` into the open file descriptor ``fd``; return the content type.
+        """Stream ``url`` into the open descriptor ``fd``, and return the content type.
 
-        Raises :class:`FetchError` on a non-success status or when the running total
+        Raises :class:`FetchError` on a non-success status, or when the running total
         exceeds :data:`MAX_DOWNLOAD_BYTES`. The descriptor is always closed.
 
         Args:
-            url: The URL to download (already SSRF-checked by the caller).
+            url: The URL to download, already SSRF-checked by the caller.
             fd: An open, writable OS file descriptor for the temp file.
 
         Returns:
-            The response ``Content-Type`` header (without parameters), lowercased.
+            The response ``Content-Type`` header, lowercased and without parameters.
         """
         total = 0
         content_type = ""
@@ -471,30 +465,33 @@ class Extractor:
     def transcribe(self, audio_path: Path, *, model: str = "base") -> str:
         """Transcribe an audio file by shelling out to the ``whisper`` CLI.
 
-        The binary named by ``whisper_bin`` is invoked with ``--model`` and
-        ``--output_format txt`` into a throwaway ``--output_dir`` temp directory, and
-        the transcript is read back from the ``<stem>.txt`` file it writes there. We do
-        NOT scrape stdout: the whisper CLI's stdout is the verbose timestamped segment
-        dump, and it always writes its real output to a file. Directing that file to a
-        temp dir (rather than letting it default to the process cwd) is what makes this
-        work on the appliance, where the systemd unit runs with ``WorkingDirectory``
-        under a ``ProtectSystem=strict`` read-only mount: a default-cwd write would fail
-        with ``OSError: Read-only file system`` -- and whisper *catches* that, logs
-        ``Skipping ...``, and still exits 0, so the failure would otherwise pass
-        silently as an empty transcript. No ``whisper`` Python package is imported (it
-        stays a subprocess), so this code path is import-safe in CI. Tests monkeypatch
+        This invokes the binary named by ``whisper_bin`` with ``--model`` and
+        ``--output_format txt`` into a throwaway ``--output_dir`` temp directory, then
+        reads the transcript back from the ``<stem>.txt`` file it writes there. It does
+        NOT scrape stdout, because the whisper CLI's stdout is the verbose timestamped
+        segment dump and it always writes its real output to a file.
+
+        Directing that file to a temp dir, rather than letting it default to the process
+        cwd, is what makes this work on the appliance, where the systemd unit runs with
+        ``WorkingDirectory`` under a ``ProtectSystem=strict`` read-only mount. A
+        default-cwd write would fail with ``OSError: Read-only file system``, and
+        whisper *catches* that, logs ``Skipping ...`` and still exits 0, so the failure
+        would otherwise pass silently as an empty transcript.
+
+        Nothing imports the ``whisper`` Python package, since it stays a subprocess, so
+        this code path is import-safe in CI. A test monkeypatches
         :func:`subprocess.run`.
 
         Args:
             audio_path: Path to the local audio file to transcribe.
-            model: The whisper model size to request (default ``"base"``).
+            model: The whisper model size to request, ``"base"`` by default.
 
         Returns:
-            The transcript text (stdout, stripped of trailing whitespace).
+            The transcript text from stdout, stripped of trailing whitespace.
 
         Raises:
-            TranscriptionError: if ``whisper`` is not installed (``FileNotFoundError``)
-                or exits non-zero (stderr surfaced in the message).
+            TranscriptionError: when ``whisper`` is not installed, raising
+                ``FileNotFoundError``, or exits non-zero, with stderr in the message.
         """
         with tempfile.TemporaryDirectory(prefix="thoth-whisper-") as out_dir:
             argv = [

@@ -1,9 +1,9 @@
-"""Link-graph checks: orphan pages (1), broken links (2), image hygiene (11), OKF
-link style (14).
+"""Link-graph checks 1, 2, 11 and 14: orphans, broken links, images and style.
 
-Each check is a pure function over the parsed pages handed to it by
-:class:`thoth.lint.LintEngine`; the engine's thin ``check_*`` methods gather the
-pages (and asset filename sets) and delegate here.
+Check 1 is orphan pages, check 2 broken links, check 11 image hygiene and check 14
+OKF link style. Each is a pure function over the parsed pages that
+:class:`thoth.lint.LintEngine` hands it, the engine's thin ``check_*`` methods
+gathering the pages and asset filename sets and delegating here.
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ def _check_broken_links(pages: list[_Page]) -> list[Finding]:
     """Flag ``[text](path.md)`` links resolving to no page, honouring aliases (check 2).
 
     Recognises both the OKF standard markdown link form and any residual
-    ``[[wikilink]]`` (the extractor unions both). A target resolves if its bare stem
-    matches a page's slug, full path or one of its aliases.
+    ``[[wikilink]]``, since the extractor unions both. A target resolves when its bare
+    stem matches a page's slug, its full path, or one of its aliases.
     """
     resolvable = _resolvable_targets(pages)
     findings: list[Finding] = []
@@ -73,13 +73,13 @@ def _check_broken_links(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_link_style(pages: list[_Page]) -> list[Finding]:
-    """Flag legacy Obsidian wiki links/embeds; OKF wants standard markdown (check 14).
+    """Flag a legacy Obsidian wiki link or embed, since OKF wants markdown (check 14).
 
     A ``[[wikilink]]`` is non-portable and not the ``[text](path.md)`` form OKF requires
-    (issue #189), so each is flagged ``Severity.STYLE``. Wiki *image* embeds
-    (``![[photo.png]]``) are likewise flagged in favour of ``![alt](path)``, but Bases
-    (``.base``) and Excalidraw (``.excalidraw``) embeds -- which have no markdown
-    equivalent -- are exempt.
+    (issue #189), so each is flagged ``Severity.STYLE``. A wiki *image* embed such as
+    ``![[photo.png]]`` is likewise flagged in favour of ``![alt](path)``, but a Bases
+    (``.base``) or Excalidraw (``.excalidraw``) embed is exempt, having no markdown
+    equivalent.
     """
     findings: list[Finding] = []
     for page in pages:
@@ -156,8 +156,8 @@ def _check_image_hygiene(
 def _inbound_targets(pages: list[_Page]) -> set[str]:
     """Return the set of normalised link targets across ``pages``.
 
-    Self-links (a page linking to its own slug) are excluded so a page cannot rescue
-    itself from the orphan check.
+    A self-link, where a page links to its own slug, is excluded, so a page cannot
+    rescue itself from the orphan check.
     """
     inbound: set[str] = set()
     for page in pages:
@@ -170,7 +170,7 @@ def _inbound_targets(pages: list[_Page]) -> set[str]:
 
 
 def _resolvable_targets(pages: list[_Page]) -> set[str]:
-    """Return every handle a link may resolve to: slug, path, and aliases."""
+    """Return every handle a link may resolve to: the slug, path and aliases."""
     resolvable: set[str] = set()
     for page in pages:
         resolvable.add(page.slug)
