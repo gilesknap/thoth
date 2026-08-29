@@ -96,6 +96,8 @@ The narrative is the part that bloats, so that is where you cut. Never economise
 
 **Docstring prose is one block.** Blank lines are only 7% of docstring lines in the corpus and just 18% of docstrings carry a second paragraph, so reserve a break for a genuinely separate point. Splitting every idea out is a docs-register habit that adds lines inside a docstring without removing words.
 
+**A list is not prose, and it keeps its bullets.** That measurement comes from function docstrings, which is where it holds. A module docstring that enumerates a fixed set the reader will scan or count - the 13 lint checks, the 7 tools a server registers, the ordered passes of a pipeline - is clearer numbered than as a paragraph of clauses, and flattening one destroys the count. So keep the list, and cut the words inside each item instead. Reach for prose when the "items" are really sentences of argument that happen to have been bulleted.
+
 Open with a capitalised third-person verb and stop:
 
     """Farms a single media download off to the thread pool."""
@@ -145,7 +147,7 @@ Leave LLM-facing prompt strings and tool-description docstrings alone, because a
 
 `scripts/codesame.py <ref> <path>...` strips docstrings and attribute docstrings from both sides and compares the ASTs, so "nothing behavioural changed" is proved rather than asserted. Run it on every file you touch.
 
-`scripts/degoogle.py <path>...` normalises what you wrote: it matches each function's `Args:` and `Returns:` to the ref's own layout, collapses prose to one block, and refuses to touch a `.tool`-decorated docstring. A function absent from the ref is new, so its sections are left alone, and a file absent from the ref is skipped entirely. It is idempotent, so re-running it is free.
+`scripts/degoogle.py <path>...` normalises what you wrote: it matches each function's `Args:` and `Returns:` to the ref's own layout, collapses adjacent prose paragraphs into one block, and refuses to touch a `.tool`-decorated docstring. A bulleted or numbered block survives verbatim, keeping its line breaks and its hanging indent, so the enumerations above are safe to write. A function absent from the ref is new, so its sections are left alone, and a file absent from the ref is skipped entirely. It is idempotent, so re-running it is free.
 
 None of them replaces reading the file. The last two stop the failures that judgement alone did not.
 
@@ -163,6 +165,6 @@ Spoken: inside 100 words per minute. Read it aloud, and rewrite it if it sounds 
 
 Docs: `you` outnumbers `I`, contractions near zero, and every costly caveat sits in a `!!! warning`.
 
-Code: narrative median near 17 to 20 words with nothing over 120. `Args:` and `Returns:` follow Google style rather than appearing everywhere, and no entry restates a type. Docstring prose is one block unless a second point earns the break.
+Code: narrative median near 17 to 20 words with nothing over 120. `Args:` and `Returns:` follow Google style rather than appearing everywhere, and no entry restates a type. Docstring prose is one block unless a second point earns the break, and any enumeration of a fixed set is still a list.
 
 Count the lines, not only the words. A rewrite that cuts words but grows the diff has moved the verbosity rather than removed it.

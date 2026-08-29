@@ -2,7 +2,11 @@
 
 Sections are matched to the git ref's own Google-style layout, so a helper the ref left
 bare stays bare and one it documented keeps its block, and a function the ref gave no
-sections at all stays a bare one-liner. Prose is collapsed to a single block.
+sections at all stays a bare one-liner.
+
+Adjacent prose paragraphs collapse into one block. A bulleted or numbered list survives
+verbatim, because an enumeration of a fixed set reads better as a list than as a
+paragraph of clauses, and collapsing one destroys information the reader counts on.
 
 A docstring decorated with .tool is never touched, because a model reads it at runtime.
 
@@ -20,6 +24,9 @@ from pathlib import Path
 
 WIDTH = 88
 SECT = re.compile(r"^(Args|Returns|Yields|Raises|Attributes):\s*$")
+# a line opening a list item: "- ", "* ", "1. ", "0b. ". a block holding one is an
+# enumeration, not prose, so it is never collapsed
+ITEM = re.compile(r"^\s*(?:[-*+]|\d+[a-z]?\.)\s+\S")
 
 
 def sections(doc: str) -> set[str]:
@@ -67,20 +74,58 @@ def split_doc(doc: str) -> tuple[list[str], list[tuple[str, list[str]]]]:
     return prose, blocks
 
 
+def paragraphs(lines: list[str]) -> list[list[str]]:
+    """Splits lines into the blank-line-separated blocks they already form."""
+    out: list[list[str]] = []
+    cur: list[str] = []
+    for line in lines:
+        if line.strip():
+            cur.append(line)
+        elif cur:
+            out.append(cur)
+            cur = []
+    if cur:
+        out.append(cur)
+    return out
+
+
 def rebuild(doc: str, keep: set[str], indent: str) -> str:
     prose, blocks = split_doc(doc)
     text = [p for p in prose if p.strip()]
     if not text:
         return doc
     summary = text[0].strip()
-    rest = " ".join(p.strip() for p in text[1:])
+    width = WIDTH - len(indent)
+
+    def unindent(line: str) -> str:
+        """Drops the docstring's own indent, keeping any indent relative to it."""
+        if line.startswith(indent):
+            return line[len(indent) :]
+        blanks = len(line) - len(line.lstrip(" "))
+        return line[min(blanks, len(indent)) :]
 
     out = [summary]
-    if rest:
-        wrapped = textwrap.wrap(rest, width=WIDTH - len(indent), break_on_hyphens=False)
-        # keep a paragraph break only when the collapsed block is genuinely long
+    pending: list[str] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        joined = " ".join(p.strip() for p in pending)
         out.append("")
-        out.extend(wrapped)
+        out.extend(textwrap.wrap(joined, width=width, break_on_hyphens=False))
+        pending.clear()
+
+    # everything after the summary line, keeping the blank lines that mark its blocks
+    for block in paragraphs(prose[prose.index(text[0]) + 1 :]):
+        if any(ITEM.match(line) for line in block):
+            # a list keeps its own line breaks and its relative indentation, so only
+            # the docstring's own indent comes off
+            flush()
+            out.append("")
+            out.extend(unindent(line) for line in block)
+        else:
+            pending.extend(block)
+    flush()
     for name, body in blocks:
         if name not in keep:
             continue
@@ -89,9 +134,7 @@ def rebuild(doc: str, keep: set[str], indent: str) -> str:
             continue
         out.append("")
         out.append(f"{name}:")
-        out.extend(
-            b[len(indent) :] if b.startswith(indent) else b.lstrip() for b in trimmed
-        )
+        out.extend(unindent(b) for b in trimmed)
     return "\n".join(out)
 
 
