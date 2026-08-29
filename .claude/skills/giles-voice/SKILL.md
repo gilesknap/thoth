@@ -10,7 +10,7 @@ Spoken: gilesknap/claude-chat transcript.md. One 15 minute talk, 914 words, whic
 
 Docs: the epics-containers subtree of the DLS developer-guide. 23 MkDocs pages, 15,651 words, 100% Giles by blame, excluding glossary.md (template filler) and todo.md (scratch). Sentences median 14w. Paragraphs median 1, 53% single, 3% over three. you 246 / your 134 / we 97 / I 6. 11 contractions. 17 "!!! note", 8 "!!! warning". 0 em dashes. 0 rhetorical questions.
 
-Code: github.com/gilesknap/gphotos-sync src/. 3,487 lines, 92% Giles by commit. Docstrings median 17w, 44% at 15w or fewer. Comments 1 per 16 lines. 0 em dashes. Take LENGTH from this corpus but not coverage: it documents only 19% of public functions and 10% carry Args, both lower than Giles wants now. It also opens docstrings in lowercase, which he has overridden in favour of capitals.
+Code: github.com/gilesknap/gphotos-sync src/. 3,487 lines, 92% Giles by commit. Docstrings median 17w, 44% at 15w or fewer. Comments 1 per 16 lines. 0 em dashes. Take LENGTH from this corpus but not coverage: it documents only 19% of public functions and 10% carry Args, both lower than Giles wants now. It also opens docstrings and comments in lowercase, which he has overridden in favour of capitals in both.
 
 thoth baselines this skill exists to correct: src/ docstrings median 47w, 67w for public functions, on 96% coverage which is the right level. docs/ 377 em dashes in 25,839 words, and another 73 in src/.
 -->
@@ -122,19 +122,19 @@ Say what an argument is for, never what type it is:
 
 State the contract rather than gesturing at it. "True only for a non-zero exit naming the index lock, otherwise False" beats "... and nothing else".
 
-**Comments are lowercase, take no full stop, and say why rather than what.** One per 16 lines is a floor, not a target.
+**Comments start each sentence with a capital, take no trailing full stop, and say why rather than what.** One per 16 lines is a floor, not a target. The corpus writes them lowercase; Giles has overridden that, the same way he overrode lowercase docstrings. A word that is lowercase by nature keeps its case, so `contextlib.closing`, `git`, `thoth` and `rowcount` open a comment unchanged.
 
-    # we dont want a massive queue so wait until at least one thread is free
+    # We dont want a massive queue so wait until at least one thread is free
 
 Blame the external constraint by name, with the evidence:
 
-    # incredibly windows cannot handle dates below 1980
-    # we now index all contents of non-shared albums due to the behaviour
+    # Incredibly windows cannot handle dates below 1980
+    # We now index all contents of non-shared albums due to the behaviour
     # reported here https://github.com/gilesknap/gphotos-sync/issues/89
 
 Be honest about your own code, in place:
 
-    # ugly global stuff to avoid passing Checks object everywhere
+    # Ugly global stuff to avoid passing Checks object everywhere
     # TODO this whole dynamic class thing is a little overdone
 
 When rewriting, facts a reader cannot get from the signature survive: invariants, failure modes, and ADR, SPEC or issue references. Restatements of the signature go.
@@ -167,6 +167,6 @@ Spoken: inside 100 words per minute. Read it aloud, and rewrite it if it sounds 
 
 Docs: `you` outnumbers `I`, contractions near zero, and every costly caveat sits in a `!!! warning`.
 
-Code: narrative median near 17 to 20 words with nothing over 120. `Args:` and `Returns:` follow Google style rather than appearing everywhere, and no entry restates a type. No paragraph runs past three sentences, and any enumeration of a fixed set is still a list.
+Code: narrative median near 17 to 20 words with nothing over 120. `Args:` and `Returns:` follow Google style rather than appearing everywhere, and no entry restates a type. No paragraph runs past three sentences, any enumeration of a fixed set is still a list, and every comment sentence opens with a capital.
 
 Count the lines, not only the words. A rewrite that cuts words but grows the diff has moved the verbosity rather than removed it.
