@@ -156,7 +156,9 @@ This needs no extra scope beyond `chat:write`. If the edit cannot be performed f
 
 ## 7. How answers read
 
-Answers come back as clean, conversational prose. The model refers to your pages by title, never a raw file path, and every reference is collected into one concise `Sources:` block at the end, giving a clickable `obsidian://` link plus the vault-relative path per page.
+Answers come back as clean, conversational prose. The model refers to your pages by title, never a raw file path and never a `[[wikilink]]`, which is dead in Slack.
+
+Every reference is collected into one concise `Sources:` block at the end, giving a clickable `obsidian://` link plus the vault-relative path per page.
 
 For a vault-only question the `Sources:` list shows only the pages the answer actually used rather than the whole retrieval candidate set, so the list stays short and honest. How many pages were consulted against how many were used is recorded in the operator logs, for tuning recall.
 

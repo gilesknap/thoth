@@ -8,7 +8,9 @@ Accepted
 
 ## Context
 
-thoth's MCP server (`thoth mcp`) has so far spoken only stdio. The host, which is Claude Code running locally, spawns `thoth mcp` as a child process, and the OS process boundary is the trust boundary. There is no socket, no authentication, and only a local user who can already run the binary can reach the tools. That is the right default and it stays the default.
+thoth's MCP server (`thoth mcp`) has so far spoken only stdio. The host, which is Claude Code running locally, spawns `thoth mcp` as a child process, and the OS process boundary is the trust boundary.
+
+There is no socket, no authentication, and only a local user who can already run the binary can reach the tools. That is the right default and it stays the default.
 
 But the appliance runs headless on a VPS, and the owner wants to reach the same seven `pkm_*` tools from claude.ai on web and mobile, and from a remote Claude Code. That needs a network transport, and three things make it more than opening a port:
 
