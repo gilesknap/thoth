@@ -19,26 +19,27 @@ def build_app(
 ) -> Any:
     """Lazily import ``slack_bolt``, build the App, and register the handlers.
 
-    ``slack_bolt`` is imported **inside** this function so module import stays CI-safe.
-    The :class:`~thoth.slack_app.Handlers` graph (and the fail-fast required-config
-    checks, including the dedicated ``SLACK_CAPTURE_CHANNEL`` the daemon listens/replies
-    in, issue #61) is built by :func:`~thoth.slack_app.handlers._build_handlers` --
-    factored out so that wiring is testable without ``slack_bolt``. The returned app
-    delegates the ``message`` listener (which also carries file uploads, as a
-    ``file_share`` subtype) to those handlers. The bare ``file_shared`` event is bound
-    to a no-op (it is a stub the appliance ignores -- see
-    :meth:`~thoth.slack_app.Handlers.handle_message`). The app is **not** started --
-    :func:`run` does that. Free-text questions take the vault-only query path.
+    ``slack_bolt`` is imported **inside** this function, so module import stays CI-safe.
+    :func:`~thoth.slack_app.handlers._build_handlers` builds the
+    :class:`~thoth.slack_app.Handlers` graph, along with the fail-fast required-config
+    checks covering the dedicated ``SLACK_CAPTURE_CHANNEL`` the daemon listens and
+    replies in (issue #61). That factoring makes the wiring testable without
+    ``slack_bolt``. The returned app delegates the ``message`` listener, which also
+    carries a file upload as a ``file_share`` subtype, to those handlers. The bare
+    ``file_shared`` event is bound to a no-op, being a stub the appliance ignores, as
+    :meth:`~thoth.slack_app.Handlers.handle_message` explains. The app is **not**
+    started, which :func:`run` does. A free-text question takes the vault-only query
+    path.
 
     Args:
-        config: The frozen runtime config (provides the Slack bot token + capture
-            channel).
+        config: The frozen runtime config, providing the Slack bot token and the
+            capture channel.
         ingestor: The constructed ingest pipeline.
         query_engine: The constructed retrieval engine.
 
     Returns:
-        The configured ``slack_bolt.App`` instance (typed ``Any`` to avoid a top-level
-        import of the optional dependency).
+        The configured ``slack_bolt.App`` instance, typed ``Any`` to avoid a top-level
+        import of the optional dependency.
     """
     from slack_bolt import App
 
@@ -70,20 +71,19 @@ def run(
 ) -> None:
     """Build the app and block serving over Socket Mode (the daemon entry point).
 
-    Lazily imports ``SocketModeHandler``, builds the app via :func:`build_app`, and
-    calls ``handler.start()`` which blocks forever. This is the production entry point
-    (``thoth slack``) and is never unit-tested live (CI has no Slack socket); the
-    testable logic all lives on :class:`~thoth.slack_app.Handlers`.
+    Lazily imports ``SocketModeHandler``, builds the app through :func:`build_app`, and
+    calls ``handler.start()``, which blocks forever. This is the ``thoth slack``
+    production entry point, never unit-tested live because CI has no Slack socket, and
+    all the testable logic lives on :class:`~thoth.slack_app.Handlers`.
 
-    Unattended observability (issue #15): the blocking serve is wrapped by
-    :func:`serve_with_alerting` so an **unhandled** daemon exception is reported to the
-    errors-to-Slack target (:class:`thoth.alerts.Alerter`) before the process exits and
-    systemd restarts it -- otherwise a crash loop would be silent. The alert is
-    best-effort and the original exception is always re-raised so systemd still sees the
-    non-zero exit.
+    Unattended observability (issue #15): :func:`serve_with_alerting` wraps the blocking
+    serve, so an **unhandled** daemon exception reaches the errors-to-Slack
+    :class:`thoth.alerts.Alerter` target before the process exits and systemd restarts
+    it. A crash loop would otherwise be silent. The alert is best-effort, and the
+    original exception is always re-raised so systemd still sees the non-zero exit.
 
     Args:
-        config: The frozen runtime config (provides both Slack tokens).
+        config: The frozen runtime config, providing both Slack tokens.
         ingestor: The constructed ingest pipeline.
         query_engine: The constructed retrieval engine.
     """
@@ -104,19 +104,19 @@ def serve_with_alerting(serve: Callable[[], None], alerter: AlerterLike) -> None
     """Run ``serve`` (a blocking daemon loop), alerting on an unhandled exception.
 
     The top-level supervision seam (issue #15), factored out of :func:`run` so it is
-    unit-testable without a real Slack socket: it invokes ``serve`` and, if it raises,
-    posts an unhandled-exception alert via ``alerter`` (best-effort -- the alert post
-    swallows its own errors) and then **re-raises** the original exception so the
-    process still exits non-zero and systemd restarts (and rate-limits) it.
+    unit-testable without a real Slack socket. It invokes ``serve`` and, should that
+    raise, posts an unhandled-exception alert through ``alerter``, best-effort since the
+    alert post swallows its own errors, then **re-raises** the original exception so the
+    process still exits non-zero and systemd restarts and rate-limits it.
 
-    A clean shutdown is *not* an incident: ``KeyboardInterrupt`` / ``SystemExit`` (how
-    ``systemctl stop`` and a deploy restart unwind the blocking loop) re-raise silently,
-    so a routine stop/restart does not post an alert (which would train the operator to
-    ignore them). Only genuine crashes -- any other exception -- alert.
+    A clean shutdown is *not* an incident. ``KeyboardInterrupt`` and ``SystemExit``, how
+    ``systemctl stop`` and a deploy restart unwind the blocking loop, re-raise silently,
+    so a routine stop or restart posts no alert, which would only train the operator to
+    ignore them. Only a genuine crash, meaning any other exception, alerts.
 
     Args:
-        serve: The blocking daemon entry (e.g. ``SocketModeHandler(...).start``).
-        alerter: The errors-to-Slack alerter (a :class:`thoth.alerts.Alerter`).
+        serve: The blocking daemon entry, such as ``SocketModeHandler(...).start``.
+        alerter: The errors-to-Slack :class:`thoth.alerts.Alerter`.
     """
     try:
         serve()

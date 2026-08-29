@@ -14,16 +14,16 @@ from .responder import Responder, SlackClientLike
 
 
 class SlackError(Exception):
-    """Base error for the Slack surface (raised by the daemon factory wiring)."""
+    """Base error for the Slack surface, raised by the daemon factory wiring."""
 
 
 def _is_image_file(file_info: dict[str, Any]) -> bool:
-    """Report whether a Slack file object is an image (issue #84 batch gate).
+    """Report whether a Slack file object is an image, the issue #84 batch gate.
 
-    Used to decide whether a multi-file upload is a homogeneous image batch
-    (captured as one page). Prefers Slack's own ``mimetype`` (``image/...``), then
-    falls back to the filename extension so a file object without a mimetype still
-    routes; both mirror the image extensions the ingest pipeline recognises.
+    This decides whether a multi-file upload is a homogeneous image batch, captured as
+    one page. It prefers Slack's own ``image/...`` ``mimetype``, then falls back to the
+    filename extension so a file object without a mimetype still routes. Both mirror the
+    image extensions the ingest pipeline recognises.
     """
     mimetype = file_info.get("mimetype")
     if isinstance(mimetype, str) and mimetype.lower().startswith("image/"):
@@ -48,10 +48,10 @@ def _download_to_tmp(
     client: SlackClientLike | None,
     responder: Responder,
 ) -> tuple[Path, str | None] | None:
-    """Download one Slack file object to a temp path (fail-loud), or ``None``.
+    """Download one Slack file object to a temp path, fail-loud, or return ``None``.
 
-    Returns the staged ``(path, filename)`` on success; warns and returns ``None``
-    for a missing download URL or a failed download so a batch keeps the rest.
+    Returns the staged ``(path, filename)`` on success. It warns and returns ``None``
+    for a missing download URL or a failed download, so a batch keeps the rest.
     """
     url = _download_url(file_info)
     if not url:
@@ -75,12 +75,12 @@ def _download_to_tmp(
 def _download_bytes(client: SlackClientLike | None, url: str) -> bytes:
     """Download private Slack file bytes via an authenticated request.
 
-    A test injects a fake client exposing ``download`` (used directly, no
-    network). The real ``slack_sdk.WebClient`` has **no** download helper, so the
-    bytes are fetched with an authenticated ``GET`` to the file's private URL using
-    the client's bot ``token`` (``Authorization: Bearer ...``) -- the only way to
-    read a ``url_private``/``url_private_download`` link. Raises :class:`SlackError`
-    when there is no usable download path or the URL is not an ``https`` Slack URL.
+    A test injects a fake client exposing ``download``, used directly with no network.
+    The real ``slack_sdk.WebClient`` has **no** download helper, so the bytes are
+    fetched with an authenticated ``GET`` to the file's private URL, using the client's
+    bot ``token`` as ``Authorization: Bearer ...``. That is the only way to read a
+    ``url_private`` or ``url_private_download`` link. Raises :class:`SlackError` when
+    there is no usable download path, or the URL is not an ``https`` Slack URL.
     """
     downloader = getattr(client, "download", None)
     if callable(downloader):
