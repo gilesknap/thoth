@@ -1,9 +1,9 @@
-"""Citation minting, prose composition, and the ``USED:`` selection parse.
+"""Citation minting, prose composition and the ``USED:`` selection parse.
 
-These are the answer-side functions: building the harness-only :class:`Citation` for a
-confined page, composing the prose (LLM-written or deterministic excerpt), and parsing
-the model's trailing ``USED:`` line back to the used citation subset (issue #34). The
-thin methods on :class:`thoth.query.QueryEngine` delegate here with the injected
+These are the answer-side functions. They build the harness-only :class:`Citation` for
+a confined page, compose the prose, either LLM-written or a deterministic excerpt, and
+parse the model's trailing ``USED:`` line back to the used citation subset (issue #34).
+The thin methods on :class:`thoth.query.QueryEngine` delegate here, with the injected
 collaborators as explicit parameters.
 """
 
@@ -58,24 +58,23 @@ def _compose(
 ) -> tuple[str, list[Citation]]:
     """Compose the prose answer and the *used* citation subset (issue #34).
 
-    With an injected LLM the consulted page bodies are handed to the model as
-    indexed context; the model writes natural prose and ends with a ``USED: 1, 3``
-    line naming the candidates that directly supported the answer. That line is
-    parsed, mapped back to the consulted citations, and stripped from the displayed
-    prose; the matching subset is returned. A missing/garbled ``USED:`` line falls
-    back to keeping **all** consulted citations (the pre-#34 behaviour). Without an
-    LLM a deterministic excerpt of the top consulted page is returned with that
-    single page as its citation.
+    With an injected LLM the consulted page bodies reach the model as indexed context.
+    The model writes natural prose and ends with a ``USED: 1, 3`` line naming the
+    candidates that directly supported the answer. That line is parsed, mapped back to
+    the consulted citations and stripped from the displayed prose, and the matching
+    subset returns. A missing or garbled ``USED:`` line falls back to keeping **all**
+    consulted citations, the pre-#34 behaviour. Without an LLM, a deterministic excerpt
+    of the top consulted page returns with that single page as its citation.
 
     Args:
         vault: The real, path-confined vault facade.
-        llm: The optional injected LLM (``None`` means the deterministic path).
+        llm: The optional injected LLM. ``None`` selects the deterministic path.
         query: The natural-language query.
         consulted: The harness-built citations for every retrieved candidate page.
 
     Returns:
-        A ``(answer, used_citations)`` pair: the displayed prose (``USED:`` line
-        stripped) and the subset of ``consulted`` the answer actually used.
+        An ``(answer, used_citations)`` pair: the displayed prose with the ``USED:``
+        line stripped, and the subset of ``consulted`` the answer actually used.
     """
     if llm is not None:
         return _compose_with_llm(vault, llm, query, consulted)
@@ -87,17 +86,17 @@ def _compose_with_llm(
 ) -> tuple[str, list[Citation]]:
     """Hand the indexed candidate pages to the LLM; return prose + the used subset.
 
-    Each candidate is labelled with a 1-based index and its full excerpt is handed
-    to the model verbatim (image ``![[embeds]]`` and all, so the model can answer
-    questions *about* the attachments). Clean Slack output is the prompt's job, not
-    a pre-processor's: the model is told to write natural, concise prose in Slack
-    ``mrkdwn`` (``*bold*``/``_italic_``/bullets, never GitHub ``**bold**``),
-    referring to pages by title only -- never pasting paths, ``[[wikilinks]]`` or
-    ``![[embeds]]``, and never narrating the source list (the harness attaches it,
-    so the model must not mention it; issue #63). It ends with a ``USED: <indices>``
-    line; that line is parsed back to the consulted citations, stripped from the
-    displayed answer, and the used subset returned. A missing/garbled line falls
-    back to all citations.
+    Each candidate is labelled with a 1-based index, and its full excerpt reaches the
+    model verbatim, image ``![[embeds]]`` and all, so the model can answer questions
+    *about* the attachments. Clean Slack output is the prompt's job rather than a
+    pre-processor's, so the model is told to write natural, concise prose in Slack
+    ``mrkdwn``, using ``*bold*``, ``_italic_`` and bullets and never GitHub
+    ``**bold**``. It must refer to pages by title only, never pasting paths,
+    ``[[wikilinks]]`` or ``![[embeds]]``, and never narrating the source list, which the
+    harness attaches and the model must not mention (issue #63). It ends with a
+    ``USED: <indices>`` line, which is parsed back to the consulted citations, stripped
+    from the displayed answer, and used to return the subset. A missing or garbled line
+    falls back to all citations.
     """
     context_parts: list[str] = []
     for index, citation in enumerate(consulted, start=1):
@@ -123,7 +122,7 @@ def _compose_with_llm(
 
 
 def _excerpt(vault: Vault, path: str, *, limit: int = _EXCERPT_CHARS) -> str:
-    """Return a stripped, length-capped excerpt of a page body (deterministic)."""
+    """Return a deterministic, stripped and length-capped excerpt of a page body."""
     try:
         page = vault.read_page(path)
     except VaultError:
@@ -137,20 +136,22 @@ def _excerpt(vault: Vault, path: str, *, limit: int = _EXCERPT_CHARS) -> str:
 def _split_used(raw: str, consulted: list[Citation]) -> tuple[str, list[Citation]]:
     """Split the model reply into displayed prose + the used citations (issue #34).
 
-    Finds the **last** ``USED: 1, 3`` (or ``USED: none``) line (the prompt promises the
-    selection is on the *final* line, with nothing after it), maps its 1-based indices
-    back to ``consulted`` citations, and returns the prose with the selection line(s)
-    removed plus the matching subset. If the model misbehaves and emits more than one
+    Finds the **last** ``USED: 1, 3`` or ``USED: none`` line, the prompt promising the
+    selection sits on the *final* line with nothing after it, maps its 1-based indices
+    back to ``consulted`` citations, and returns the prose with the selection lines
+    removed plus the matching subset. Should the model misbehave and emit more than one
     selection line, only the last drives the subset, but **every** selection-only line
     is stripped from the prose so none leaks into the displayed answer. A legitimate
-    prose sentence that merely *begins* with ``USED:`` (followed by words, not indices)
-    is preserved. Robust fallback: a missing/garbled/empty selection keeps **all**
-    consulted citations (the pre-#34 behaviour) so a malformed model reply never crashes
-    and never silently drops every source. ``USED: none`` yields an empty subset (the
-    answer cited nothing), so the renderer shows prose alone.
+    prose sentence that merely *begins* with ``USED:``, followed by words rather than
+    indices, is preserved.
+
+    The fallback is robust: a missing, garbled or empty selection keeps **all**
+    consulted citations, the pre-#34 behaviour, so a malformed model reply never crashes
+    and never silently drops every source. ``USED: none`` yields an empty subset, the
+    answer having cited nothing, so the renderer shows prose alone.
 
     Args:
-        raw: The model's full text reply (may end with a ``USED:`` line).
+        raw: The model's full text reply, which may end with a ``USED:`` line.
         consulted: The candidate citations, in the 1-based order shown to the model.
 
     Returns:

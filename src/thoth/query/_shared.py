@@ -1,8 +1,8 @@
-"""Shared types, constants, and the package logger of the query passes.
+"""Shared types, constants and the package logger of the query passes.
 
-The result/citation dataclasses, the error, the retrieval-method vocabulary, and the
-tuning constants live here so the pass submodules of :mod:`thoth.query` stay
-cycle-free. Only the standard library plus ``thoth.vault`` is imported, preserving the
+The result and citation dataclasses, the error, the retrieval-method vocabulary and the
+tuning constants live here, so the pass submodules of :mod:`thoth.query` stay
+cycle-free. Only the standard library and ``thoth.vault`` are imported, preserving the
 package's import-purity contract.
 """
 
@@ -71,18 +71,18 @@ _EXCERPT_CHARS: int = 600
 
 
 class QueryError(Exception):
-    """Raised when a query cannot be answered (for example no vault pages match)."""
+    """Raised when a query cannot be answered, as when no vault page matches."""
 
 
 @dataclass(frozen=True, slots=True)
 class Citation:
     """Harness-built, unfabricable handle for one cited vault page.
 
-    Every field is derived from a real, path-confined vault page: ``path`` has passed
+    Every field derives from a real, path-confined vault page. ``path`` has passed
     :meth:`~thoth.vault.Vault.resolve`, ``obsidian_uri`` comes from
-    :meth:`~thoth.vault.Vault.obsidian_uri`, ``wikilink`` is derived from the page's
-    actual filename, and ``snippet`` is the page's own ``summary:`` frontmatter gloss
-    (issue #72 / ADR 0008) when it carries one. The model never supplies any of these.
+    :meth:`~thoth.vault.Vault.obsidian_uri`, ``wikilink`` derives from the page's actual
+    filename, and ``snippet`` is the page's own ``summary:`` frontmatter gloss (issue
+    #72, ADR 0008) when it carries one. The model never supplies any of these.
     """
 
     path: str
@@ -99,12 +99,12 @@ class Citation:
 
 @dataclass(frozen=True, slots=True)
 class PageProvenance:
-    """How one cited page was surfaced: its retrieval methods + final rank (issue #143).
+    """How one cited page was surfaced: its retrieval methods and rank (issue #143).
 
-    A page can be produced by more than one retrieval source (e.g. grep AND recall both
-    name it), so ``methods`` is the full set of tags that surfaced it, reported in the
-    fixed :data:`_METHOD_ORDER` (grep, wikilink, recall). ``rank`` is the page's 1-based
-    position in the cited (consulted) set after the RRF blend -- so a list of
+    More than one retrieval source can produce a page, as when grep AND recall both name
+    it, so ``methods`` is the full set of tags that surfaced it, reported in the fixed
+    :data:`_METHOD_ORDER` of grep, wikilink and recall. ``rank`` is the page's 1-based
+    position in the cited, consulted set after the RRF blend, so a list of
     ``PageProvenance`` reads as the final retrieval order with its attribution attached.
     """
 
@@ -120,25 +120,25 @@ class PageProvenance:
 class QueryResult:
     """A composed answer plus its harness-attached citations and per-page provenance.
 
-    ``citations`` is the **used** subset: when an LLM composes the prose it ends its
+    ``citations`` is the **used** subset. When an LLM composes the prose it ends its
     reply with a ``USED: 1, 3`` line naming the candidate pages that directly supported
-    the answer, and only those are kept (issue #34) so the Slack ``Sources:`` list
-    reflects what the answer actually drew on, not the whole retrieval candidate set. A
-    missing/garbled ``USED:`` line falls back to keeping every consulted page (the
-    pre-#34 behaviour), and the deterministic (no-LLM) path keeps its single top page.
+    the answer, and only those are kept (issue #34), so the Slack ``Sources:`` list
+    reflects what the answer actually drew on rather than the whole retrieval candidate
+    set. A missing or garbled ``USED:`` line falls back to keeping every consulted page,
+    the pre-#34 behaviour, and the deterministic no-LLM path keeps its single top page.
 
-    ``provenance`` (issue #143) records, for **every consulted (cited) page** in final
-    rank order, which retrieval methods surfaced it (a :class:`PageProvenance` per
-    page). The two retrieval sources -- structural (grep + wikilinks) and semantic
-    recall -- are blended by Reciprocal Rank Fusion (:data:`RRF_K`), so a page may carry
-    more than one method, and provenance is the record of that blend: it covers the
-    consulted set (which may be a superset of the ``USED:`` ``citations``).
+    ``provenance`` (issue #143) records, for **every consulted page** in final rank
+    order, which retrieval methods surfaced it, one :class:`PageProvenance` per page.
+    Reciprocal Rank Fusion (:data:`RRF_K`) blends the two retrieval sources, structural
+    grep with wikilinks and semantic recall, so a page may carry more than one method.
+    Provenance is the record of that blend, and it covers the consulted set, which may
+    be a superset of the ``USED:`` ``citations``.
 
     ``consulted_count`` records how many candidate pages were retrieved and offered to
     the model *before* the ``USED:`` filter, so an operator log (issue #52) can compare
-    consulted-vs-used recall. ``used_recall`` records whether the (more expensive)
-    Hindsight semantic pass contributed to the answer: it is ``True`` when a
-    recall-surfaced page lands in the ``USED:`` subset, ``False`` otherwise.
+    consulted against used recall. ``used_recall`` records whether the more expensive
+    Hindsight semantic pass contributed to the answer, being ``True`` when a
+    recall-surfaced page lands in the ``USED:`` subset and ``False`` otherwise.
     """
 
     answer: str

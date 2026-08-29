@@ -1,9 +1,9 @@
 """The full cost-ordered pass: structural + recall sources fused by RRF (issue #143).
 
-:func:`_answer` is the orchestration behind :meth:`thoth.query.QueryEngine.answer`
-(which documents the user-facing contract and delegates here): it overlaps the
-expensive recall pass with the cheap structural one, fuses the two ranked lists by
-Reciprocal Rank Fusion, and composes the answer with its harness-built citations.
+:func:`_answer` is the orchestration behind :meth:`thoth.query.QueryEngine.answer`,
+which documents the user-facing contract and delegates here. It overlaps the expensive
+recall pass with the cheap structural one, fuses the two ranked lists by Reciprocal
+Rank Fusion, and composes the answer with its harness-built citations.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def _answer(
     use_recall: bool = True,
     search_terms: list[str] | None = None,
 ) -> QueryResult:
-    """Blend structural + semantic retrieval (RRF), compose an answer (issue #143)."""
+    """Blend structural and semantic retrieval by RRF, then compose an answer (#143)."""
     if max_pages < 1:
         raise QueryError("max_pages must be at least 1")
     # The keywords from the intent gate (issue #102) seed the lexical grep; the raw
@@ -157,22 +157,22 @@ def _structural_paths(
 
     Runs the two cheap, lexical passes on the calling thread and threads them into a
     single ordered list of real, confined paths (issue #143). grep over the curated
-    folders comes first (it scans frontmatter, so a page's ``summary:`` gloss
-    matches here -- ADR 0008), then ``[[wikilink]]`` navigation expands from those
-    hits (bounded, so a giant link farm cannot blow up the pass). Each path is
-    existence-checked via :meth:`~thoth.vault.Vault.page_exists` and recorded once,
-    in discovery order -- the same structural ordering the pre-blend code produced,
-    now isolated so RRF can fuse it with the recall source.
+    folders comes first, scanning frontmatter so a page's ``summary:`` gloss matches
+    here (ADR 0008), then ``[[wikilink]]`` navigation expands from those hits, bounded
+    so a giant link farm cannot blow up the pass. Each path is existence-checked
+    through :meth:`~thoth.vault.Vault.page_exists` and recorded once, in discovery
+    order. That is the same structural ordering the pre-blend code produced, now
+    isolated so RRF can fuse it with the recall source.
 
     Args:
         vault: The real, path-confined vault facade.
-        grep_term: The (keyword-seeded) text to grep.
-        max_pages: The page budget, used to bound the grep/wikilink fan-out.
+        grep_term: The keyword-seeded text to grep.
+        max_pages: The page budget, bounding the grep and wikilink fan-out.
 
     Returns:
-        A ``(ordered, grep_hits)`` pair: the deduped, existence-checked structural
-        paths in discovery order, and the subset that came from grep (the rest are
-        wikilink hops) so the caller can attribute each path's provenance method.
+        An ``(ordered, grep_hits)`` pair: the deduped, existence-checked structural
+        paths in discovery order, and the subset that came from grep, the rest being
+        wikilink hops, so the caller can attribute each path's provenance method.
     """
     ordered: list[str] = []
     seen: set[str] = set()
@@ -203,32 +203,32 @@ def _fuse(
 ) -> tuple[list[str], dict[str, tuple[str, ...]]]:
     """Merge the structural + recall sources by Reciprocal Rank Fusion (issue #143).
 
-    Each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in
-    (``rank`` 0-based), so a page in both sources outscores one topping only a
-    single source, and a strong recall-only hit (recall rank 0) still scores
-    ``1 / RRF_K`` -- enough to earn a cited slot even when the structural source
-    already filled the budget. Paths sort by fused score **descending**, with
-    structural discovery order as a stable tie-break (a structural/grep hit leads a
-    recall hit on a score tie, and an exact-token grep #1 stays #1). The top
-    ``max_pages`` are returned.
+    Each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in,
+    with ``rank`` 0-based, so a page in both sources outscores one topping only a
+    single source. A strong recall-only hit, at recall rank 0, still scores
+    ``1 / RRF_K``, enough to earn a cited slot even when the structural source already
+    filled the budget. Paths sort by fused score **descending**, with structural
+    discovery order as a stable tie-break, so a structural grep hit leads a recall hit
+    on a score tie and an exact-token grep #1 stays #1. The top ``max_pages`` are
+    returned.
 
     Each returned path also carries the set of methods that surfaced it, in
-    :data:`_METHOD_ORDER`: a structural path is tagged :data:`METHOD_GREP` when it
-    came from grep, else :data:`METHOD_WIKILINK` (the structural list is grep hits
-    first, then wikilink hops -- :func:`_structural_paths`), and a recall path is
-    tagged :data:`METHOD_RECALL`; a page in both carries both tags.
+    :data:`_METHOD_ORDER`. A structural path is tagged :data:`METHOD_GREP` when it came
+    from grep, else :data:`METHOD_WIKILINK`, since :func:`_structural_paths` lists grep
+    hits first and then wikilink hops. A recall path is tagged :data:`METHOD_RECALL`,
+    and a page in both carries both tags.
 
     Args:
-        structural: The deduped structural paths in discovery order (grep hits, then
-            wikilink hops).
+        structural: The deduped structural paths in discovery order, grep hits then
+            wikilink hops.
         recall: The existence-filtered recall paths in recall-rank order.
-        grep_hits: The subset of ``structural`` that came from grep (the rest are
-            wikilink hops), used to tag each structural path's provenance method.
+        grep_hits: The subset of ``structural`` that came from grep, the rest being
+            wikilink hops, used to tag each structural path's provenance method.
         max_pages: The cap on the returned cited set.
 
     Returns:
-        A ``(ordered_paths, methods)`` pair: the fused, capped path list in final
-        rank order, and a path -> methods-tuple map covering those paths.
+        An ``(ordered_paths, methods)`` pair: the fused, capped path list in final rank
+        order, and a map from path to methods tuple covering those paths.
     """
     method_sets: defaultdict[str, set[str]] = defaultdict(set)
     scores: defaultdict[str, float] = defaultdict(float)

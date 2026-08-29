@@ -68,10 +68,9 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
     :meth:`~thoth.summary.SummaryEngine.open_actions`,
     :meth:`~thoth.summary.SummaryEngine.overdue_actions` flags the overdue items, and
     :meth:`~thoth.summary.SummaryEngine.closed_actions` supplies the optional done
-    section. Each item renders with its harness-built ``[title](obsidian-uri)`` link
-    plus the plain vault path and the ``[[wikilink]]``, the MCP citation style the other
-    tools use, then its status, due date and priority. A done or cancelled action is
-    left out unless ``include_done`` is true.
+    section. Each item renders in the shared :func:`_ref` citation style, then its
+    status, due date and priority. A done or cancelled action is left out unless
+    ``include_done`` is true.
 
     Args:
         ctx: The injected collaborator bundle.
