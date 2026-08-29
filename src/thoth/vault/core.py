@@ -1,4 +1,4 @@
-"""The errors, page records, and the path-confined :class:`Vault` facade itself."""
+"""The errors, the page records, and the path-confined :class:`Vault` facade."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class VaultError(Exception):
 
 
 class PathConfinementError(VaultError):
-    """Raised when a path escapes the vault root (abs, ``..``, or symlink)."""
+    """Raised when a path escapes the vault root: absolute, ``..`` or symlink."""
 
 
 class SlugError(VaultError):
@@ -43,7 +43,7 @@ class SlugError(VaultError):
 
 
 class SchemaError(VaultError):
-    """Raised when the frontmatter / type / folder contract is violated."""
+    """Raised when the frontmatter, type or folder contract is violated."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,9 +59,9 @@ class Page:
 class SeedResult:
     """The created/skipped split returned by :meth:`Vault.seed`.
 
-    ``created`` lists the vault-relative spine/dashboard paths written on this run;
-    ``skipped`` lists the ones left untouched because they already existed (and
-    ``force`` was not set). Empty content folders are not reported either way.
+    ``created`` lists the vault-relative spine and dashboard paths written on this run.
+    ``skipped`` lists the ones left untouched because they already existed and ``force``
+    was not set. An empty content folder is not reported either way.
     """
 
     created: tuple[str, ...]
@@ -69,7 +69,7 @@ class SeedResult:
 
 
 class Vault:
-    """Path-confined read/write facade over one vault, built from a frozen Config."""
+    """Path-confined read and write facade over one vault, from a frozen Config."""
 
     def __init__(self, config: Config) -> None:
         """Store the config and cache the resolved absolute vault root."""
@@ -78,17 +78,17 @@ class Vault:
 
     @property
     def root(self) -> Path:
-        """Resolved absolute vault root (equals ``config.vault_path``)."""
+        """The resolved absolute vault root, equal to ``config.vault_path``."""
         return self._root
 
     def schema_md(self) -> str | None:
         """Return the vault's ``SCHEMA.md`` text, or ``None`` when it is absent.
 
-        The curate pass passes this to the model as ``system_extra`` so curated pages
-        are filed to the *live* per-type schema (see :class:`thoth.ingest.Ingestor`'s
-        ``schema_md``). A missing ``SCHEMA.md`` is a valid state (a bare/unseeded
-        vault), so this returns ``None`` rather than raising; the contract enforced by
-        :func:`thoth.llm.validate_file_plan` does not depend on it.
+        The curate pass hands this to the model as ``system_extra``, so a curated page
+        is filed under the *live* per-type schema, as :class:`thoth.ingest.Ingestor`'s
+        ``schema_md`` shows. A missing ``SCHEMA.md`` is a valid state, for a bare or
+        unseeded vault, so this returns ``None`` rather than raises, and the contract
+        :func:`thoth.llm.validate_file_plan` enforces does not depend on it.
         """
         path = self._root / "SCHEMA.md"
         if not path.is_file():
@@ -98,25 +98,25 @@ class Vault:
     # ---- seed the vault spine (idempotent provisioning) --------------------------
 
     def seed(self, *, force: bool = False) -> SeedResult:
-        """Write the packaged vault spine + dashboards into this vault (idempotent).
+        """Write the packaged vault spine and dashboards into this vault, idempotently.
 
-        Writes every packaged template (``index.md``, ``SCHEMA.md``, ``log.md``,
-        ``_bases/*.base``, and the ``_bases/index.md`` Dashboards page) to its path
-        under the vault root and creates the canonical
-        empty content folders (:data:`~thoth.vault.SEED_DIRS`: ``entities/``,
-        ``notes/``, ``memories/``, ``actions/``, ``inbox/`` and the ``raw/`` subdirs)
-        so the structure exists for Obsidian browsing. Existing spine files are left
-        untouched unless ``force`` is set, so re-running over a live vault never
-        clobbers an edited spine page; the empty-folder creation is always
-        ``exist_ok``.
+        Writes every packaged template to its path under the vault root: ``index.md``,
+        ``SCHEMA.md``, ``log.md``, the ``_bases/*.base`` files and the
+        ``_bases/index.md`` Dashboards page. It also creates the canonical empty content
+        folders in :data:`~thoth.vault.SEED_DIRS`, meaning ``entities/``, ``notes/``,
+        ``memories/``, ``actions/``, ``inbox/`` and the ``raw/`` subdirs, so the
+        structure exists for Obsidian browsing. An existing spine file is left untouched
+        unless ``force`` is set, so re-running over a live vault never clobbers an
+        edited spine page, and the empty-folder creation is always ``exist_ok``.
 
         Args:
-            force: Overwrite existing spine/dashboard files with the packaged text.
+            force: Overwrites an existing spine or dashboard file with the packaged
+                text.
 
         Returns:
-            A :class:`SeedResult` splitting the vault-relative template paths into the
-            ones ``created`` on this run and the ones ``skipped`` (already present and
-            ``force`` not set).
+            A :class:`SeedResult` splitting the vault-relative template paths into
+            the ones ``created`` on this run and the ones ``skipped``, already present
+            with ``force`` unset.
         """
         from thoth.templates import iter_templates
 
@@ -141,9 +141,9 @@ class Vault:
     def resolve(self, vault_relative_path: str) -> Path:
         """Validate and resolve a vault-relative path to an absolute path in root.
 
-        Rejects the empty string, absolute paths, any ``..`` or ``.`` part, and any
-        result whose resolved location is not under the resolved root (so a symlink
-        that points outside the vault is caught). Does not require the path to exist.
+        Rejects the empty string, an absolute path, any ``..`` or ``.`` part, and any
+        result whose resolved location is not under the resolved root, which catches a
+        symlink pointing outside the vault. It does not require the path to exist.
 
         Args:
             vault_relative_path: A POSIX-style path relative to the vault root.
@@ -152,8 +152,8 @@ class Vault:
             The absolute path inside the vault root.
 
         Raises:
-            PathConfinementError: if the path is empty, absolute, contains a ``..`` or
-                ``.`` segment, or resolves outside the vault root.
+            PathConfinementError: when the path is empty or absolute, contains a
+                ``..`` or ``.`` segment, or resolves outside the vault root.
         """
         if not vault_relative_path:
             raise PathConfinementError("vault path must be a non-empty relative path")
@@ -183,7 +183,7 @@ class Vault:
         return candidate
 
     def is_inside(self, vault_relative_path: str) -> bool:
-        """Return ``True`` if :meth:`resolve` would succeed, else ``False``."""
+        """Return ``True`` when :meth:`resolve` would succeed, else ``False``."""
         try:
             self.resolve(vault_relative_path)
         except PathConfinementError:
@@ -194,11 +194,11 @@ class Vault:
 
     @staticmethod
     def validate_slug(slug: str) -> str:
-        """Return ``slug`` if it matches the slug grammar, else raise SlugError.
+        """Return ``slug`` when it matches the slug grammar, else raise SlugError.
 
-        Accepts lowercase alphanumeric groups joined by single hyphens (for example
-        ``program-motion-controller``, per :data:`~thoth.vault.SLUG_RE`); rejects
-        uppercase, spaces, slashes, leading or trailing hyphens, doubled hyphens, and
+        Accepts lowercase alphanumeric groups joined by single hyphens, such as
+        ``program-motion-controller``, per :data:`~thoth.vault.SLUG_RE`. It rejects
+        uppercase, a space, a slash, a leading or trailing hyphen, a doubled hyphen and
         the empty string.
         """
         if not SLUG_RE.fullmatch(slug):
@@ -207,14 +207,14 @@ class Vault:
 
     @staticmethod
     def validate_asset_filename(name: str) -> str:
-        """Return ``name`` if it matches the asset grammar, else raise SlugError.
+        """Return ``name`` when it matches the asset grammar, else raise SlugError.
 
-        Accepts ``<slug>.<ext>`` with a lowercase slug and lowercase extension (for
-        example ``motor-control-diagram-e4a408.png``, per
-        :data:`~thoth.vault.ASSET_SLUG_RE`), as well as a compound extension (for
-        example ``motor-control-diagram-e4a408.excalidraw.md``, the editable
-        Excalidraw reconstruction from issue #68); rejects a missing extension, ``..``,
-        a leading dot, uppercase, and spaces.
+        Accepts ``<slug>.<ext>`` with a lowercase slug and lowercase extension, such as
+        ``motor-control-diagram-e4a408.png``, per :data:`~thoth.vault.ASSET_SLUG_RE`. It
+        also accepts a compound extension, such as
+        ``motor-control-diagram-e4a408.excalidraw.md``, the editable Excalidraw
+        reconstruction from issue #68. It rejects a missing extension, ``..``, a leading
+        dot, uppercase and a space.
         """
         if not ASSET_SLUG_RE.fullmatch(name):
             raise SlugError(
@@ -242,7 +242,7 @@ class Vault:
             page_type: The frontmatter ``type`` value.
 
         Raises:
-            SchemaError: if ``folder`` is not a known folder, or ``page_type`` is not
+            SchemaError: when ``folder`` is not a known folder, or ``page_type`` is not
                 permitted in that folder per :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`.
         """
         allowed = FOLDER_TYPE_CONTRACT.get(folder)
@@ -262,12 +262,12 @@ class Vault:
     def obsidian_uri(self, vault_relative_path: str) -> str:
         """Confine ``vault_relative_path`` then return ``config.obsidian_uri(path)``.
 
-        The path is first run through :meth:`resolve` for full confinement (including
-        the symlink check); the percent-encoding itself is delegated to the single
-        canonical builder on :class:`~thoth.config.Config`.
+        The path first runs through :meth:`resolve` for full confinement, including the
+        symlink check, and the percent-encoding is delegated to the single canonical
+        builder on :class:`~thoth.config.Config`.
 
         Raises:
-            PathConfinementError: if the path escapes the vault root.
+            PathConfinementError: when the path escapes the vault root.
         """
         self.resolve(vault_relative_path)
         return self._config.obsidian_uri(vault_relative_path)
@@ -275,17 +275,17 @@ class Vault:
     # ---- read --------------------------------------------------------------------
 
     def read_page(self, vault_relative_path: str) -> Page:
-        """Confine, read, and split a page into frontmatter + body.
+        """Confine, read, then split a page into its frontmatter and body.
 
         Args:
             vault_relative_path: Vault-relative path to a ``.md`` file.
 
         Returns:
-            A :class:`Page` with the vault-relative path, frontmatter mapping, and body.
+            A :class:`Page` with the vault-relative path, frontmatter mapping and body.
 
         Raises:
-            PathConfinementError: if the path escapes the vault root.
-            VaultError: if the file does not exist.
+            PathConfinementError: when the path escapes the vault root.
+            VaultError: when the file does not exist.
         """
         absolute = self.resolve(vault_relative_path)
         if not absolute.is_file():
@@ -298,23 +298,23 @@ class Vault:
         )
 
     def page_exists(self, vault_relative_path: str) -> bool:
-        """Return ``True`` if a confined ``vault_relative_path`` exists as a file."""
+        """Return ``True`` when a confined ``vault_relative_path`` exists as a file."""
         absolute = self.resolve(vault_relative_path)
         return absolute.is_file()
 
     def iter_folder_pages(self, folders: tuple[str, ...]) -> Iterator[tuple[str, Path]]:
         """Yield ``(rel, absolute)`` for every ``*.md`` page under ``folders``.
 
-        Folders are visited in the given order and pages within a folder in sorted
-        filename order -- the stable scan order the lexical search passes rank by.
-        Missing folders are skipped silently.
+        Folders are visited in the given order, and pages within a folder in sorted
+        filename order, the stable scan order the lexical search passes rank by. A
+        missing folder is skipped silently.
 
         Args:
             folders: Vault-relative folder names to scan, in priority order.
 
         Yields:
-            ``(rel, absolute)`` pairs: the vault-relative ``folder/name.md`` path and
-            the absolute :class:`~pathlib.Path` to the file.
+            ``(rel, absolute)`` pairs: the vault-relative ``folder/name.md`` path,
+            and the absolute :class:`~pathlib.Path` to the file.
         """
         for folder in folders:
             directory = self._root / folder
@@ -332,16 +332,14 @@ class Vault:
     def stored_body_sha256(cls, body: str) -> str:
         """Return the ``sha256`` to stamp on a raw page for body drift detection.
 
-        The digest must equal what any reader re-derives from disk -- namely
-        ``body_sha256(post.content)`` where ``post`` is ``python-frontmatter``'s
-        parse of the written file (see
-        :meth:`thoth.lint.LintEngine.check_source_drift`). ``python-frontmatter``
-        normalises ``post.content`` (it drops the leading blank line and trailing
-        whitespace), so the digest is taken over a round trip through the exact
-        serialisation :meth:`_write_post` writes -- redact, render, re-parse --
-        rather than over the raw input string. Stamping the raw digest instead would
-        make every body ending in a newline (the normal extractor/article case)
-        report spurious drift.
+        The digest must equal what any reader re-derives from disk, namely
+        ``body_sha256(post.content)`` where ``post`` is ``python-frontmatter``'s parse
+        of the written file, as :meth:`thoth.lint.LintEngine.check_source_drift` does.
+        ``python-frontmatter`` normalises ``post.content``, dropping the leading blank
+        line and trailing whitespace, so the digest is taken over a round trip through
+        the exact serialisation :meth:`_write_post` writes: redact, render, re-parse.
+        Stamping the raw digest instead would make every body ending in a newline, the
+        normal extractor and article case, report spurious drift.
 
         Args:
             body: The raw page body markdown (pre-redaction).
@@ -360,40 +358,40 @@ class Vault:
     def asset_exists(self, asset_filename: str) -> bool:
         """Return ``True`` if ``raw/assets/<asset_filename>`` already exists.
 
-        The filename is validated and confined first (so a malformed or escaping
-        name is rejected, not silently reported absent).
+        The filename is validated and confined first, so a malformed or escaping name is
+        rejected rather than silently reported absent.
 
         Args:
-            asset_filename: The asset filename (validated by
-                :meth:`validate_asset_filename`).
+            asset_filename: The asset filename, validated by
+                :meth:`validate_asset_filename`.
 
         Returns:
-            ``True`` if the confined asset path exists as a file, else ``False``.
+            ``True`` when the confined asset path exists as a file, else ``False``.
 
         Raises:
             SlugError: on an invalid asset filename.
-            PathConfinementError: if the destination escapes the vault root.
+            PathConfinementError: when the destination escapes the vault root.
         """
         return self.resolve(self._asset_rel(asset_filename)).is_file()
 
     def asset_sha256(self, asset_filename: str) -> str:
         """Return the hex SHA-256 of an existing asset's bytes.
 
-        The filename is validated and confined first. Used by the ingest pass to
-        decide whether a re-uploaded binary is byte-identical (idempotent skip) or a
-        genuine change (drift) before calling :meth:`save_asset`.
+        The filename is validated and confined first. The ingest pass uses it to decide
+        whether a re-uploaded binary is byte-identical, an idempotent skip, or a genuine
+        change, drift, before calling :meth:`save_asset`.
 
         Args:
-            asset_filename: The asset filename (validated by
-                :meth:`validate_asset_filename`).
+            asset_filename: The asset filename, validated by
+                :meth:`validate_asset_filename`.
 
         Returns:
             The hex SHA-256 of the asset's bytes.
 
         Raises:
             SlugError: on an invalid asset filename.
-            PathConfinementError: if the destination escapes the vault root.
-            VaultError: if the asset does not exist.
+            PathConfinementError: when the destination escapes the vault root.
+            VaultError: when the asset does not exist.
         """
         rel = self._asset_rel(asset_filename)
         absolute = self.resolve(rel)
@@ -412,28 +410,29 @@ class Vault:
         *,
         today: date | None = None,
     ) -> str:
-        """Validate, redact, stamp, and atomically write a curated/life-admin page.
+        """Validate, redact, stamp, then atomically write a curated or life-admin page.
 
         Validates the folder-by-type contract, the slug grammar, the required common
-        fields, and the ``source`` value; redacts secrets from the body and string
-        frontmatter values; stamps ``created`` (preserved on update) and ``updated``
-        (always the run date); then writes ``<folder>/<slug>.md`` atomically.
+        fields and the ``source`` value. It redacts secrets from the body and the string
+        frontmatter values, stamps ``created``, preserved on update, and ``updated``,
+        always the run date, then writes ``<folder>/<slug>.md`` atomically.
 
         Args:
-            folder: A top-level vault folder (key of
-                :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`).
-            slug: The page slug (validated by :meth:`validate_slug`).
-            frontmatter_in: The page frontmatter; must contain a valid ``type`` and
-                ``source`` and the other :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`.
+            folder: A top-level vault folder, a key of
+                :data:`~thoth.vault.FOLDER_TYPE_CONTRACT`.
+            slug: The page slug, validated by :meth:`validate_slug`.
+            frontmatter_in: The page frontmatter, which must contain a valid
+                ``type`` and ``source`` plus the other
+                :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`.
             body: The page body markdown.
-            today: The date to stamp; defaults to :meth:`date.today`.
+            today: The date to stamp, defaulting to :meth:`date.today`.
 
         Returns:
-            The vault-relative path written (for example ``entities/foo.md``).
+            The vault-relative path written, such as ``entities/foo.md``.
 
         Raises:
-            SchemaError: on a folder/type mismatch, missing required field, bad type,
-                or invalid source.
+            SchemaError: on a folder and type mismatch, a missing required field, a bad
+                type, or an invalid source.
             SlugError: on an invalid slug.
         """
         self.validate_slug(slug)
@@ -467,24 +466,25 @@ class Vault:
     ) -> str:
         """Write an immutable ``raw/<subdir>/<slug>.md`` source page.
 
-        Stamps ``ingested`` and ``sha256`` (digest of the parse-stable redacted body,
-        per :meth:`stored_body_sha256`) and redacts secrets from the body and string
+        Stamps ``ingested`` and ``sha256``, the digest of the parse-stable redacted body
+        per :meth:`stored_body_sha256`, and redacts secrets from the body and the string
         frontmatter values.
 
         Args:
             subdir: A ``raw/`` subdirectory in :data:`~thoth.vault.RAW_SUBDIRS`,
-                excluding ``assets`` (which is binary-only -- use :meth:`save_asset`).
-            slug: The raw page slug (validated by :meth:`validate_slug`).
-            frontmatter_in: Raw frontmatter (for example ``source_url``); ``ingested``
-                and ``sha256`` are added/overwritten by this method.
+                excluding ``assets``, which is binary-only and uses
+                :meth:`save_asset`.
+            slug: The raw page slug, validated by :meth:`validate_slug`.
+            frontmatter_in: Raw frontmatter, such as ``source_url``. This method adds or
+                overwrites ``ingested`` and ``sha256``.
             body: The raw page body markdown.
-            today: The date to stamp as ``ingested``; defaults to :meth:`date.today`.
+            today: The date to stamp as ``ingested``, defaulting to :meth:`date.today`.
 
         Returns:
-            The vault-relative path written (for example ``raw/papers/foo.md``).
+            The vault-relative path written, such as ``raw/papers/foo.md``.
 
         Raises:
-            SchemaError: if ``subdir`` is ``assets`` or not a known raw subdir.
+            SchemaError: when ``subdir`` is ``assets`` or is not a known raw subdir.
             SlugError: on an invalid slug.
         """
         if subdir == "assets":
@@ -508,21 +508,21 @@ class Vault:
     def save_asset(self, tmp_path: Path, asset_filename: str) -> str:
         """Move a downloaded binary into ``raw/assets/<asset_filename>``.
 
-        The filename is validated and confined; the bytes are moved verbatim (never
-        base64). Refuses to overwrite an existing asset.
+        The filename is validated and confined, and the bytes are moved verbatim, never
+        as base64. It refuses to overwrite an existing asset.
 
         Args:
             tmp_path: Path to the already-downloaded binary file.
-            asset_filename: The destination filename (validated by
-                :meth:`validate_asset_filename`).
+            asset_filename: The destination filename, validated by
+                :meth:`validate_asset_filename`.
 
         Returns:
-            The vault-relative path written (for example ``raw/assets/foo.png``).
+            The vault-relative path written, such as ``raw/assets/foo.png``.
 
         Raises:
             SlugError: on an invalid asset filename.
-            PathConfinementError: if the destination escapes the vault root.
-            VaultError: if the source is missing or the destination already exists.
+            PathConfinementError: when the destination escapes the vault root.
+            VaultError: when the source is missing or the destination already exists.
         """
         rel = self._asset_rel(asset_filename)
         destination = self.resolve(rel)
@@ -535,21 +535,22 @@ class Vault:
         return rel
 
     def remove_page(self, vault_relative_path: str) -> bool:
-        """Delete a confined ``vault_relative_path`` if it exists (idempotent).
+        """Delete a confined ``vault_relative_path`` when it exists, idempotently.
 
-        The path is confined first (so an absolute, ``..``, or symlink-escaping path is
-        rejected, never deleted), then the file is unlinked if present. Used to drop a
-        superseded ``inbox/`` holding page once a deferred capture has been curated (the
-        durable raw/curated pages then carry the content); a missing file is a no-op.
+        The path is confined first, so an absolute, ``..`` or symlink-escaping path is
+        rejected and never deleted, then the file is unlinked when present. It drops a
+        superseded ``inbox/`` holding page once a deferred capture has been curated, the
+        durable raw and curated pages then carrying the content, and a missing file is a
+        no-op.
 
         Args:
             vault_relative_path: Vault-relative path to remove.
 
         Returns:
-            ``True`` if a file was removed, ``False`` if nothing was there.
+            ``True`` when a file was removed, ``False`` when nothing was there.
 
         Raises:
-            PathConfinementError: if the path escapes the vault root.
+            PathConfinementError: when the path escapes the vault root.
         """
         absolute = self.resolve(vault_relative_path)
         if not absolute.is_file():
@@ -560,17 +561,17 @@ class Vault:
     # ---- navigation edits (append-only / idempotent) ----------------------------
 
     def append_log(self, action: str, subject: str, files: list[str]) -> None:
-        """Append a dated action block plus the touched-file list to ``log.md``.
+        """Append a dated action block, plus the touched-file list, to ``log.md``.
 
         Args:
             action: One of ``ingest``, ``create``, ``update``, ``query``, ``lint``,
-                ``archive``, ``delete``, ``reindex``.
+                ``archive``, ``delete`` or ``reindex``.
             subject: A short human-readable subject for the action.
             files: The vault-relative paths touched by the action.
 
         Raises:
-            SchemaError: if ``action`` is not a known log action.
-            VaultError: if ``log.md`` is missing.
+            SchemaError: when ``action`` is not a known log action.
+            VaultError: when ``log.md`` is missing.
         """
         if action not in _LOG_ACTIONS:
             raise SchemaError(
@@ -592,13 +593,13 @@ class Vault:
     # ---- internals ---------------------------------------------------------------
 
     def _validate_common_fields(self, meta: dict[str, object]) -> None:
-        """Validate author-supplied common fields, the ``type``, and ``source``.
+        """Validate the author-supplied common fields, the ``type`` and the ``source``.
 
-        ``created`` and ``updated`` are intentionally not required here: they are
-        stamped by :meth:`write_page` (the caller supplies neither), so requiring them
-        pre-stamp would be wrong. An ``inbox`` hold is machinery with its own set
-        (:data:`~thoth.vault.INBOX_REQUIRED_FIELDS` -- ``sha256`` instead of ``tags``,
-        ADR 0013).
+        ``created`` and ``updated`` are deliberately not required here, because
+        :meth:`write_page` stamps them and the caller supplies neither, so requiring
+        them pre-stamp would be wrong. An ``inbox`` hold is machinery with its own set,
+        :data:`~thoth.vault.INBOX_REQUIRED_FIELDS`, carrying ``sha256`` instead of
+        ``tags`` (ADR 0013).
         """
         required = (
             _AUTHOR_REQUIRED_INBOX_FIELDS
@@ -631,18 +632,18 @@ class Vault:
 
     @staticmethod
     def _render_page(meta: dict[str, object], body: str) -> str:
-        """Serialise already-redacted ``meta`` + ``body`` to the on-disk page text.
+        """Serialise an already-redacted ``meta`` and ``body`` to the on-disk page text.
 
-        This is the single source of truth for a page's byte layout. The frontmatter
-        block is rendered with :func:`yaml.safe_dump` so the key order we assembled is
-        preserved (``frontmatter.dumps`` would re-sort it), and the body is written with
-        a single trailing newline.
+        This is the single source of truth for a page's byte layout.
+        :func:`yaml.safe_dump` renders the frontmatter block, preserving the key order
+        we assembled, which ``frontmatter.dumps`` would re-sort, and the body is written
+        with a single trailing newline.
 
         Args:
-            meta: The redacted frontmatter mapping (already passed through
-                :func:`~thoth.vault.redact._redact_frontmatter`).
-            body: The redacted body markdown (already passed through
-                :func:`~thoth.vault.redact_secrets`).
+            meta: The redacted frontmatter mapping, already passed through
+                :func:`~thoth.vault.redact._redact_frontmatter`.
+            body: The redacted body markdown, already passed through
+                :func:`~thoth.vault.redact_secrets`.
 
         Returns:
             The exact text written to disk for this page.
@@ -659,10 +660,10 @@ class Vault:
     def _write_post(
         self, vault_relative_path: str, meta: dict[str, object], body: str
     ) -> None:
-        """Redact, serialise (stable key order), and atomically write a page.
+        """Redact, serialise in a stable key order, then atomically write a page.
 
-        The body bytes are laid out by :meth:`_render_page`; the file is written to a
-        sibling ``.tmp`` and atomically replaced so a crash never leaves a half-written
+        :meth:`_render_page` lays out the body bytes, and the file is written to a
+        sibling ``.tmp`` and atomically replaced, so a crash never leaves a half-written
         page in the vault.
         """
         absolute = self.resolve(vault_relative_path)

@@ -34,12 +34,12 @@ _REDACTED = "[REDACTED]"
 def redact_secrets(text: str) -> str:
     """Replace secret-looking substrings with a fixed ``[REDACTED]`` marker.
 
-    Masks provider-prefixed API keys (``sk-...``, ``ghp_...``), AWS access key ids
-    (``AKIA...``), ``Bearer <token>`` headers, ``key=VALUE`` assignments for a
-    sensitive key set, and long opaque hex/base64 blobs. The match is conservative so
-    ordinary prose and short words are left untouched. Applied to body and frontmatter
-    before filing (SPEC section 12). Never raises; a non-string input is returned
-    unchanged.
+    Masks a provider-prefixed API key such as ``sk-...`` or ``ghp_...``, an AWS access
+    key id such as ``AKIA...``, a ``Bearer <token>`` header, a ``key=VALUE`` assignment
+    for a sensitive key set, and a long opaque hex or base64 blob. The match is
+    conservative, so ordinary prose and short words are left untouched. It is applied to
+    body and frontmatter before filing (SPEC section 12). It never raises, and a
+    non-string input returns unchanged.
     """
     if not isinstance(text, str):
         return text
@@ -60,10 +60,10 @@ _NEVER_REDACT_FIELDS: frozenset[str] = frozenset(
 def _redact_frontmatter(meta: dict[str, object]) -> dict[str, object]:
     """Return a copy of ``meta`` with secrets redacted from string values.
 
-    Recurses into list and dict values; non-string scalars (dates, ints, bools) are
-    preserved as-is so frontmatter typing and date stamping are not disturbed.
-    Writer-controlled structural fields (:data:`_NEVER_REDACT_FIELDS`) are passed
-    through verbatim so the generated ``sha256`` digest is not mistaken for a secret.
+    Recurses into list and dict values. A non-string scalar, such as a date, int or
+    bool, is preserved as is, so frontmatter typing and date stamping are not disturbed.
+    A writer-controlled structural field from :data:`_NEVER_REDACT_FIELDS` passes
+    through verbatim, so the generated ``sha256`` digest is not mistaken for a secret.
     """
     return {
         key: (value if key in _NEVER_REDACT_FIELDS else _redact_value(value))
