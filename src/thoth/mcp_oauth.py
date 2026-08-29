@@ -1,43 +1,43 @@
-"""OAuth 2.1 + PKCE authorization layer for thoth's MCP HTTP server.
+"""OAuth 2.1 and PKCE authorization layer for thoth's MCP HTTP server.
 
-This is additive to the static ``THOTH_MCP_API_KEYS`` bearer (issue #103): with no
-OAuth env at all the HTTP transport stays API-key-only, and a request may present
-*either* a static key *or* a thoth-issued OAuth access token. When the four required
-OAuth vars are set (:meth:`Config.oauth_enabled`) this module mounts the six routes that
-let a remote MCP client (claude.ai, Claude Code) obtain a per-user token by signing in
-with GitHub.
+This is additive to the static ``THOTH_MCP_API_KEYS`` bearer (issue #103). With no
+OAuth environment at all the HTTP transport stays API-key-only, and a request may
+present *either* a static key *or* a thoth-issued OAuth access token. When the four
+required OAuth vars are set, per :meth:`Config.oauth_enabled`, this module mounts the
+six routes that let a remote MCP client, claude.ai or Claude Code, obtain a per-user
+token by signing in with GitHub.
 
 thoth acts as two things at once here:
 
-* an OAuth *authorization server* to the MCP client -- it publishes discovery metadata
-  (RFC 8414 / RFC 9728), accepts Dynamic Client Registration (RFC 7591), runs the
+* an OAuth *authorization server* to the MCP client. It publishes discovery metadata
+  (RFC 8414 and RFC 9728), accepts Dynamic Client Registration (RFC 7591), runs the
   OAuth 2.1 authorization-code flow with mandatory PKCE S256 (RFC 7636), and mints its
   own HS256 access-token JWTs signed with ``THOTH_JWT_SIGNING_SECRET``;
-* an OAuth *client* of GitHub -- the upstream identity provider. The authenticated
-  GitHub login becomes the ``sub`` of the token thoth mints, and only logins in
+* an OAuth *client* of GitHub, the upstream identity provider. The authenticated GitHub
+  login becomes the ``sub`` of the token thoth mints, and only a login in
   ``THOTH_ALLOWED_GITHUB_USERS`` may obtain one.
 
 The mounted routes (all relative to ``THOTH_OAUTH_SERVER_URL``):
 
-* ``GET  /.well-known/oauth-authorization-server`` -- RFC 8414 AS metadata
-* ``GET  /.well-known/oauth-protected-resource``   -- RFC 9728 resource metadata
-* ``POST /register``  -- RFC 7591 Dynamic Client Registration (public clients only)
-* ``GET  /authorize`` -- OAuth 2.1 authorize; stashes the PKCE challenge, bounces the
-  user to GitHub
-* ``GET  /callback``  -- GitHub's redirect target; verifies identity + allow-list and
-  issues a short-lived thoth authorization code
-* ``POST /token``     -- verifies PKCE and mints the access-token JWT
+* ``GET  /.well-known/oauth-authorization-server``, the RFC 8414 AS metadata
+* ``GET  /.well-known/oauth-protected-resource``, the RFC 9728 resource metadata
+* ``POST /register``, RFC 7591 Dynamic Client Registration, public clients only
+* ``GET  /authorize``, the OAuth 2.1 authorize, which stashes the PKCE challenge and
+  bounces the user to GitHub
+* ``GET  /callback``, GitHub's redirect target, which verifies the identity and the
+  allow-list and issues a short-lived thoth authorization code
+* ``POST /token``, which verifies PKCE and mints the access-token JWT
 
-**Single-replica state.** The pending authorizations, issued authorization codes, and
-registered clients live in plain module-level dicts (``_pending``, ``_auth_codes``,
-``_clients``). They are lost on restart and are NOT shared across processes -- which is
-fine for the single-replica appliance per the OAuth plan; an in-flight sign-in just
-restarts, and a registered client re-registers via DCR. Do **not** reach for Redis or
-SQLite here.
+**Single-replica state.** The pending authorizations, issued authorization codes and
+registered clients live in the plain module-level dicts ``_pending``, ``_auth_codes``
+and ``_clients``. They are lost on restart and are NOT shared across processes, which
+suits the single-replica appliance per the OAuth plan: an in-flight sign-in simply
+restarts, and a registered client re-registers through DCR. Do **not** reach for Redis
+or SQLite here.
 
 ``starlette``, ``jwt`` (PyJWT) and ``httpx`` are imported lazily inside the functions
-that need them, so importing this module needs only the standard library and stays
-CI-safe -- matching :mod:`thoth.mcp_auth`.
+that need them, matching :mod:`thoth.mcp_auth`, so importing this module needs only the
+standard library and stays CI-safe.
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ OAUTH_PUBLIC_PATHS: frozenset[str] = frozenset(
 
 @dataclass
 class _RegisteredClient:
-    """One DCR-registered public (PKCE) client; no client_secret is ever held."""
+    """One DCR-registered public PKCE client. No client_secret is ever held."""
 
     client_id: str
     redirect_uris: list[str]
@@ -158,10 +158,9 @@ class _RegisteredClient:
 class _PendingAuth:
     """One in-flight /authorize request, keyed by the GitHub-callback ``state``.
 
-    Bridges thoth's /authorize redirect to GitHub and GitHub's /callback back to
-    thoth: it carries the MCP client's PKCE challenge and original redirect/state so
-    they can be bound to the authorization code thoth issues once GitHub identifies the
-    user.
+    Bridges thoth's /authorize redirect to GitHub, and GitHub's /callback back to thoth.
+    It carries the MCP client's PKCE challenge and its original redirect and state, so
+    they bind to the authorization code thoth issues once GitHub identifies the user.
     """
 
     client_id: str
@@ -192,7 +191,7 @@ _auth_codes: dict[str, _AuthCode] = {}  # thoth code -> _AuthCode
 
 
 def _gc(store: dict[str, Any], ttl: int) -> None:
-    """Drop entries older than ``ttl`` seconds (cheap opportunistic expiry)."""
+    """Drop entries older than ``ttl`` seconds, a cheap opportunistic expiry."""
     now = time.time()
     for key in [k for k, v in store.items() if now - v.created_at > ttl]:
         store.pop(key, None)
@@ -211,9 +210,9 @@ def _b64url_no_pad(data: bytes) -> str:
 def _verify_pkce(verifier: str, challenge: str, method: str) -> bool:
     """Return ``True`` when ``verifier`` matches ``challenge`` under S256.
 
-    Computes ``base64url(sha256(verifier))`` (no padding) and constant-time-compares it
-    with the stored challenge. Any method other than ``S256`` is rejected outright
-    (OAuth 2.1 forbids ``plain``).
+    Computes ``base64url(sha256(verifier))`` without padding, then
+    constant-time-compares it with the stored challenge. Any method other than ``S256``
+    is rejected outright, because OAuth 2.1 forbids ``plain``.
     """
     if method != "S256" or not verifier or not challenge:
         return False
@@ -232,14 +231,15 @@ def mint_oauth_jwt(
 ) -> str:
     """Mint a thoth access-token JWT for the authenticated GitHub login ``sub``.
 
-    The claim set is deliberately minimal -- ``{"sub", "iat", "exp"}`` -- with ``sub``
-    the GitHub username carried downstream as the caller identity. Signed HS256 with
+    The claim set is deliberately minimal, ``{"sub", "iat", "exp"}``, with ``sub`` the
+    GitHub username carried downstream as the caller identity. It is signed HS256 with
     ``THOTH_JWT_SIGNING_SECRET``.
 
     Args:
-        sub: The authenticated GitHub login (becomes the token subject).
-        config: The frozen runtime config (provides the signing secret).
-        ttl_seconds: Token lifetime; defaults to :data:`ACCESS_TOKEN_TTL_SECONDS` (24h).
+        sub: The authenticated GitHub login, which becomes the token subject.
+        config: The frozen runtime config, providing the signing secret.
+        ttl_seconds: Token lifetime, defaulting to the 24h
+            :data:`ACCESS_TOKEN_TTL_SECONDS`.
 
     Returns:
         The encoded JWT string.
@@ -255,21 +255,21 @@ def mint_oauth_jwt(
 def verify_oauth_jwt(token: str | None, config: Config) -> dict[str, Any]:
     """Verify a thoth-issued access-token JWT and return its claims.
 
-    Pins the algorithm to HS256 (rejecting the ``none`` algorithm) and requires a valid
-    signature and an unexpired ``exp``. Used by the bearer gate as the OAuth alternative
+    Pins the algorithm to HS256, rejecting the ``none`` algorithm, and requires a valid
+    signature and an unexpired ``exp``. The bearer gate uses it as the OAuth alternative
     to a static ``THOTH_MCP_API_KEYS`` key.
 
-    The token ``sub`` is *also* re-checked against the live allow-list
-    (:meth:`Config.allowed_github_user_set`) on every call, not just at code-issue time.
-    The allow-list is the appliance's only authorization control, so de-authorizing a
-    user (dropping them from ``THOTH_ALLOWED_GITHUB_USERS`` and restarting) must cut off
-    access promptly rather than waiting out the 24h token TTL -- there is no other
-    revocation path. A token whose subject is no longer allow-listed is rejected even
-    though its signature and ``exp`` are still valid.
+    Every call *also* re-checks the token ``sub`` against the live allow-list from
+    :meth:`Config.allowed_github_user_set`, not just at code-issue time. That allow-list
+    is the appliance's only authorization control, and there is no other revocation
+    path, so de-authorizing a user, by dropping them from ``THOTH_ALLOWED_GITHUB_USERS``
+    and restarting, must cut off access promptly rather than wait out the 24h token TTL.
+    A token whose subject is no longer allow-listed is rejected even though its
+    signature and ``exp`` are still valid.
 
     Args:
-        token: The raw bearer token (``None`` when the header was missing).
-        config: The frozen runtime config (provides the signing secret + allow-list).
+        token: The raw bearer token, ``None`` when the header was missing.
+        config: The frozen runtime config, providing the signing secret and allow-list.
 
     Returns:
         The decoded, validated claims dict.
@@ -309,20 +309,21 @@ def verify_oauth_jwt(token: str | None, config: Config) -> dict[str, Any]:
 def mount_oauth_routes(app: Any, config: Config) -> None:
     """Mount the six OAuth 2.1 routes onto the existing FastMCP ASGI ``app``.
 
-    No second server is started: the routes are appended to the streamable-HTTP app's
-    own router so discovery, registration, the authorize/callback redirect dance, and
-    the token endpoint all live on the same origin as the MCP transport. Called from
-    :func:`thoth.mcp_server.http._run_http` *before* the bearer middleware is added; the
-    gate in :mod:`thoth.mcp_auth` allow-lists :data:`OAUTH_PUBLIC_PATHS` so these routes
-    are reachable without a token.
+    No second server is started. The routes are appended to the streamable-HTTP app's
+    own router, so discovery, registration, the authorize and callback redirect dance,
+    and the token endpoint all live on the same origin as the MCP transport.
+    :func:`thoth.mcp_server.http._run_http` calls it *before* the bearer middleware is
+    added, and the gate in :mod:`thoth.mcp_auth` allow-lists :data:`OAUTH_PUBLIC_PATHS`,
+    so these routes are reachable without a token.
 
-    ``starlette`` and the four required OAuth vars are read here;
-    ``config.require_oauth`` fails fast (already enforced at config load) if the
-    configuration is half-set.
+    ``starlette`` and the four required OAuth vars are read here, and
+    ``config.require_oauth`` fails fast on a half-set configuration, which config load
+    already enforces.
 
     Args:
-        app: The FastMCP streamable-HTTP ASGI app (a Starlette app with ``.router``).
-        config: The frozen runtime config (OAuth essentials + allow-list).
+        app: The FastMCP streamable-HTTP ASGI app, a Starlette app with ``.router``.
+        config: The frozen runtime config, carrying the OAuth essentials and
+            allow-list.
     """
     from starlette.requests import Request
     from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -334,11 +335,12 @@ def mount_oauth_routes(app: Any, config: Config) -> None:
     github_redirect_uri = f"{issuer}{_CALLBACK_PATH}"
 
     def _oauth_err(error: str, detail: str, status: int = 400) -> Response:
-        """A local (non-redirect) OAuth error response."""
+        """A local OAuth error response, sent rather than redirected."""
         return JSONResponse({"error": error, "detail": detail}, status)
 
     def _client_err(detail: str, *, status: int = 400) -> Response:
-        """A local (non-redirect) OAuth error -- used before redirect_uri is trusted."""
+        """A local OAuth error, sent rather than redirected, before redirect_uri
+        is trusted."""
         return _oauth_err("invalid_request", detail, status)
 
     # -- RFC 8414: authorization-server metadata ------------------------------------
