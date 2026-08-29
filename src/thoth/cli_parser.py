@@ -1,8 +1,8 @@
 """The ``thoth`` argument parser, split out of :mod:`thoth.__main__`.
 
-This module imports only the standard library plus the package version. Building the
-parser, and therefore ``--version`` and ``--help``, never needs the heavy optional
-clients ``anthropic``, ``slack_bolt`` or ``mcp`` to be installed.
+Import safety: only the standard library plus the package version is imported here,
+so building the parser -- and therefore ``--version`` / ``--help`` -- never needs the
+heavy optional clients (``anthropic`` / ``slack_bolt`` / ``mcp``) to be installed.
 """
 
 from __future__ import annotations
@@ -18,25 +18,17 @@ __all__ = ["build_parser"]
 def build_parser() -> ArgumentParser:
     """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
 
-    The subcommands are:
-
-    * ``init`` seeds the vault spine and the dashboards. It is idempotent, and
-      ``--force`` overwrites an existing file.
-    * ``vault-bootstrap`` clones the vault repo into an empty ``$PKM_VAULT``.
-    * ``slack`` runs the capture and retrieve daemon.
-    * ``mcp`` runs the MCP server. ``--transport stdio`` is the default, and
-      ``--transport http`` serves the bearer-authenticated network surface on
-      ``--host`` and ``--port`` (issue #103).
-    * ``reindex`` runs the nightly incremental reindex. ``--full-rebuild`` recovers the
-      bank, and ``--budget`` overrides the cap for one run (issue #95).
-    * ``summary`` composes and posts the ``daily`` or ``weekly`` Slack digest.
-    * ``lint`` runs the 13-check vault maintenance scan. ``--no-log`` suppresses the log
-      entry.
-    * ``capture`` backfills files and folders through the ingest pipeline. ``--as-is``
-      asks for a low-touch import, and ``--budget`` overrides the cap for one run. It
-      also takes ``--dry-run``, ``--limit``, ``--batch-size``, ``--include`` and
-      ``--exclude`` (issue #80).
-
+    Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
+    ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
+    MCP server -- ``--transport stdio`` by default, ``--transport http`` for the
+    bearer-authenticated network surface on ``--host``/``--port``, issue #103),
+    ``reindex`` (nightly incremental, ``--full-rebuild`` for
+    recovery, ``--budget`` for a transient cap override, issue #95), ``summary``
+    (``daily`` / ``weekly`` Slack digest), ``lint`` (the
+    13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
+    ``capture`` (backfill files/folders through the ingest pipeline -- ``--as-is`` for
+    a low-touch import, ``--budget`` for a transient cap override, plus
+    ``--dry-run``/``--limit``/``--batch-size``/``--include``/``--exclude``, issue #80).
     ``-v/--version`` prints the version and exits.
 
     Returns:
@@ -77,10 +69,10 @@ def build_parser() -> ArgumentParser:
         help="stdio (default, spawn-as-child for Claude Code) or http (network "
         "streamable-HTTP, bearer-authenticated; THOTH_MCP_API_KEYS required) (#103)",
     )
-    # These defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST and DEFAULT_MCP_PORT. They
-    # stay literals here so that parsing --help never imports the heavy, mcp-dependent
-    # server module. The bind address is loopback by design. cloudflared and Cloudflare
-    # Access provide the network exposure (ADR 0011), never a raw 0.0.0.0 socket.
+    # Defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST/PORT; kept as literals here so
+    # parsing --help never imports the (heavy, mcp-dependent) server module. Loopback by
+    # default by design: network exposure is delegated to cloudflared + Cloudflare
+    # Access (ADR 0011), never a raw 0.0.0.0 socket.
     mcp.add_argument(
         "--host",
         default="127.0.0.1",

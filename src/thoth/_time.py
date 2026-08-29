@@ -1,8 +1,8 @@
 """Shared time primitives: the persona timezone and the default UTC clock.
 
-This module is a leaf that imports only the standard library, so summary, lint, budget
-and alerts all stay import-safe under pytest collection. A consumer that exposes
-``LONDON`` in its own public surface re-exports the name from here.
+Stdlib-only leaf module so every consumer (summary, lint, budget, alerts) stays
+import-safe under pytest collection. Consumers that expose ``LONDON`` as part of
+their public surface re-export it from here.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ __all__ = ["LONDON", "utc_now"]
 LONDON: ZoneInfo = ZoneInfo("Europe/London")
 """The Europe/London timezone used for every calendar-date computation (SPEC section 9).
 
-:class:`zoneinfo.ZoneInfo` resolves the name. The package declares ``tzdata`` as a base
-dependency, so the name resolves identically across the 3.11-3.14 matrix, even on a
-minimal container with no operating-system time-zone database.
+Resolved via :class:`zoneinfo.ZoneInfo`; the ``tzdata`` package is declared as a base
+dependency so this resolves identically across the 3.11-3.14 matrix even on a minimal
+container with no OS time-zone database.
 """
 
 

@@ -1,19 +1,18 @@
 """Shared construction of the ingest/query collaborator graph.
 
-Both production entry points need the same graph. They are
-``thoth.__main__._build_graph``, which serves the Slack daemon and the ``thoth capture``
-and ``thoth ask`` CLI, and :func:`thoth.mcp_server.run`, which serves the MCP server.
-The graph holds a :class:`~thoth.vault.Vault`, an :class:`~thoth.llm.LLM`, an
-:class:`~thoth.extract.Extractor`, a :class:`~thoth.hindsight.Hindsight`, a
-:class:`~thoth.git_sync.GitSync`, an :class:`~thoth.ingest.Ingestor` and a
-:class:`~thoth.query.QueryEngine`. :func:`build_collaborators` is the single place that
-wires that shape, so the two callers cannot drift. The MCP wiring once dropped
-``schema_md``, which left curate blind to the live schema.
+Both production entry points -- ``thoth.__main__._build_graph`` (the Slack daemon and
+the ``thoth capture``/``thoth ask`` CLI) and :func:`thoth.mcp_server.run` (the MCP
+server) -- need the same graph: a :class:`~thoth.vault.Vault`, an
+:class:`~thoth.llm.LLM`, an :class:`~thoth.extract.Extractor`, a
+:class:`~thoth.hindsight.Hindsight`, a :class:`~thoth.git_sync.GitSync`, an
+:class:`~thoth.ingest.Ingestor` and a :class:`~thoth.query.QueryEngine`.
+:func:`build_collaborators` is the single place that shape is wired, so the two
+callers cannot drift (the MCP wiring once dropped ``schema_md``, leaving curate blind
+to the live schema).
 
-The heavy imports happen inside the function body, at call time. Importing this module
-therefore stays light, and a test that patches a collaborator on its defining module
-takes effect. ``thoth.git_sync.GitSync`` and ``thoth.hindsight.Hindsight`` are two such
-modules.
+The heavy imports happen inside the function body, at call time, so importing this
+module stays light and tests that patch a collaborator on its defining module (for
+example ``thoth.git_sync.GitSync`` or ``thoth.hindsight.Hindsight``) are picked up.
 """
 
 from __future__ import annotations
@@ -56,13 +55,12 @@ def build_collaborators(
 
     Args:
         config: The frozen runtime config.
-        guard: The :class:`~thoth.budget.BudgetGuard`, or a no-op stand-in. The LLM
-            (classify, analyse and curate) and Hindsight (retain) share it, so one daily
-            cap covers both spenders. The caller builds it. The Slack and CLI side
-            attaches an alerter, and the MCP side blocks silently.
-        markers: An optional liveness :class:`~thoth.state.MarkerStore` threaded into
-            the ingestor (issue #15). ``None``, the MCP default, disables marker
-            recording.
+        guard: The :class:`~thoth.budget.BudgetGuard` (or a no-op stand-in) shared by
+            the LLM (classify/analyse/curate) and Hindsight (retain), so one daily cap
+            covers both spenders. Built by the caller -- the Slack/CLI side attaches an
+            alerter, the MCP side blocks silently.
+        markers: Optional liveness :class:`~thoth.state.MarkerStore` threaded into the
+            ingestor (issue #15). ``None`` (the MCP default) disables marker recording.
 
     Returns:
         The constructed :class:`Collaborators`.
@@ -80,9 +78,9 @@ def build_collaborators(
     extractor = Extractor(config)
     hindsight = Hindsight(config, guard=guard)
     git = GitSync(config)
-    # Pass SCHEMA.md as the curate-call system_extra, so curate files a page against the
-    # live per-type schema. Without it the curate model files blind. This wiring used to
-    # drop schema_md, which left the vault empty when paired with a schema-less prompt.
+    # Pass SCHEMA.md as the curate-call system_extra so curated pages are filed to the
+    # live per-type schema; without it the curate model files blind (this wiring used to
+    # drop schema_md, leaving the vault empty when paired with a schema-less prompt).
     ingestor = Ingestor(
         config,
         vault,

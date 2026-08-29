@@ -1,4 +1,4 @@
-"""The injectable :class:`Analyser` behind the vision and document analyse calls."""
+"""The injectable :class:`Analyser` driving the vision/document analyse calls."""
 
 from __future__ import annotations
 
@@ -23,36 +23,36 @@ _IMAGE_MEDIA_TYPES: dict[str, str] = {
 }
 _DEFAULT_IMAGE_MEDIA_TYPE: str = "image/png"
 
-# Tokens for the analyse call. The limit is generous enough to hold the OCR text and the
-# description. This is one heavier call per binary capture (issue #42), charged against
-# the daily guard like any other Anthropic call (issue #16).
+# Tokens for the analyse call: generous enough to hold OCR text + description, but this
+# is one heavier call per binary capture (issue #42), charged like any other Anthropic
+# call against the daily guard (issue #16).
 _ANALYSE_MAX_TOKENS: int = 2048
 
-# Tokens for the Excalidraw reconstruction call (issue #68). A scene of geometric
+# Tokens for the Excalidraw reconstruction call (issue #68): a scene of geometric
 # elements as JSON is larger than the analyse summary, so this best-effort second call
-# gets a roomier budget. The same daily guard charges it.
+# gets a roomier budget. It is charged against the same daily guard.
 _EXCALIDRAW_MAX_TOKENS: int = 4096
 
 
 class AnalyseError(Exception):
     """Raised when the analyse call returns output that cannot be parsed.
 
-    A *transport or availability* failure is deliberately **not** wrapped here. A
-    raising client and a tripped budget guard both propagate unchanged, so the ingest
-    pass can treat them as a deferral, exactly as it does for the classify and curate
-    calls. The raw capture is already durable.
+    A *transport/availability* failure (the client raising, or the budget guard
+    tripping) is deliberately **not** wrapped here: those propagate unchanged so the
+    ingest pass can treat them as a deferral (raw already durable), like the
+    classify/curate calls.
     """
 
 
 def image_media_type(ext: str) -> str:
-    """Return the IANA media type for a bare image extension, with no dot.
+    """Return the IANA media type for a bare image extension (no dot).
 
     Args:
         ext: A bare lowercase extension such as ``"png"`` or ``"jpg"``.
 
     Returns:
-        The matching ``image/*`` media type. An unrecognised extension defaults to
-        ``image/png``, which is the common phone-screenshot case.
+        The matching ``image/*`` media type, defaulting to ``image/png`` for an
+        unrecognised extension (the common phone-screenshot case).
     """
     return _IMAGE_MEDIA_TYPES.get(ext.lower().lstrip("."), _DEFAULT_IMAGE_MEDIA_TYPE)
 
@@ -60,10 +60,7 @@ def image_media_type(ext: str) -> str:
 def _base64_source_block(
     block_type: str, media_type: str, data: bytes
 ) -> dict[str, Any]:
-    """Return a vision or document block carrying ``data`` as transient base64.
-
-    ADR 0006 records why the base64 encoding is allowed here.
-    """
+    """A vision/document block carrying ``data`` as transient base64 (ADR 0006)."""
     return {
         "type": block_type,
         "source": {
@@ -75,13 +72,13 @@ def _base64_source_block(
 
 
 class Analyser:
-    """Vision and document analysis of binary captures behind an injected :class:`LLM`.
+    """Vision/document analysis of binary captures behind an injected :class:`LLM`.
 
-    The caller injects the :class:`~thoth.llm.LLM`, and its client is a fake in tests,
-    so the pass is unit-testable with no real model call. Crucially, the *same* daily
-    budget guard that the LLM already enforces charges the analyse call (issue #16). A
-    binary capture therefore costs one heavier vision or document call, which defers
-    like every other call when the cap is reached.
+    The :class:`~thoth.llm.LLM` is injected (its client is a fake in tests), so the pass
+    is unit-testable with no real model call, and -- crucially -- the analyse call is
+    charged against the *same* daily budget guard the LLM already enforces (issue #16),
+    so a binary capture costs one heavier vision/document call that defers like the rest
+    when the cap is reached.
     """
 
     def __init__(
@@ -94,74 +91,72 @@ class Analyser:
         """Store the injected LLM and the optional per-call model overrides.
 
         Args:
-            llm: The injectable Anthropic wrapper, which carries the budget guard.
-            model: An optional model id that overrides ``config.anthropic_model`` for
-                the main folded analyse, kind and transcription call. The model must be
-                multimodal. ``None`` uses the configured default, and the Sonnet models
-                are multimodal, so the default works. The owner may drop this to a
-                cheaper Haiku for a document A/B test.
-            diagram_model: An optional model id for the second
+            llm: The injectable Anthropic wrapper (carries the budget guard).
+            model: Optional model id overriding ``config.anthropic_model`` for the main
+                folded analyse/kind/transcription call (a multimodal model); ``None``
+                uses the configured default (the Sonnet models are multimodal, so the
+                default is fine). The owner may drop this to a cheaper Haiku for a
+                document A/B.
+            diagram_model: Optional model id for the second
                 :meth:`reconstruct_excalidraw` vision call (issue #68). That call needs
                 spatial reasoning plus valid JSON, so it can warrant a stronger model
-                than the main pass. ``None`` falls back to ``config.anthropic_model``
-                through the LLM.
+                than the main pass; ``None`` falls back to ``config.anthropic_model``
+                via the LLM.
         """
         self._llm = llm
         self._model = model
         self._diagram_model = diagram_model
 
     def analyse_image(self, image_bytes: bytes, *, ext: str) -> Analysis:
-        """Analyse one image for OCR text, a description and routing hints.
+        """Analyse one image: OCR text + description + routing hints (vision block).
 
-        This method is a single-image convenience wrapper over :meth:`analyse_images`.
-        It base64-encodes the bytes **transiently** into a vision ``image`` content
-        block (ADR 0006), and the caller still stores the asset itself as a real binary.
-        The call goes through :meth:`thoth.llm.LLM.complete`, so the daily budget guard
-        charges it.
+        A single-image convenience wrapper over :meth:`analyse_images`. The bytes are
+        base64-encoded **transiently** into a vision ``image`` content block (ADR 0006);
+        the asset itself is still stored as a real binary by the caller. The call goes
+        through :meth:`thoth.llm.LLM.complete`, so it is charged against the daily
+        budget guard.
 
         Args:
             image_bytes: The raw image bytes of the staged asset.
-            ext: The bare image extension, which selects the media type.
+            ext: The bare image extension (selects the media type).
 
         Returns:
             The parsed :class:`Analysis`.
 
         Raises:
-            AnalyseError: When the model output cannot be parsed into the expected
-                shape.
-            thoth.budget.BudgetExceededError: When the daily cap is reached. The error
-                propagates so that the ingest pass defers.
+            AnalyseError: if the model output cannot be parsed into the expected shape.
+            thoth.budget.BudgetExceededError: when the daily cap is reached (propagated
+                so the ingest pass defers).
         """
         return self.analyse_images([(image_bytes, ext)])
 
     def analyse_images(self, images: Sequence[tuple[bytes, str]]) -> Analysis:
-        """Analyse one or more images in a SINGLE vision call (issues #84 and #124).
+        """Analyse one OR MORE images in a SINGLE vision call (issue #84 / #124).
 
-        A multi-image Slack batch is one unit of intent, curated as one page. The method
-        therefore sends every image as its own ``image`` block in **one** call, which
-        produces one shared summary and one shared tag set. It never makes N calls and
-        merges the results. Because it is one :meth:`thoth.llm.LLM.complete` call, it
-        counts as exactly ONE charge against the daily budget guard, the same as a
-        single-image analyse. The caller, :meth:`thoth.ingest.Ingestor.analyse`, caps
-        the image count with ``THOTH_MAX_ANALYSE_IMAGES`` before it calls here.
+        A multi-image Slack batch is one unit of intent curated as one page, so every
+        image is sent as its own ``image`` block in **one** call producing one shared
+        summary/tags -- never N calls then a merge. Because it is one
+        :meth:`thoth.llm.LLM.complete` call, it counts as exactly ONE charge against the
+        daily budget guard (the same as a single-image analyse). The caller
+        (:meth:`thoth.ingest.Ingestor.analyse`) is responsible for capping the count via
+        ``THOTH_MAX_ANALYSE_IMAGES`` before calling here.
 
-        The method base64-encodes each image's bytes **transiently** (ADR 0006). The
-        caller still stores the assets themselves as real binaries.
+        Each image's bytes are base64-encoded **transiently** (ADR 0006); the assets
+        themselves are still stored as real binaries by the caller.
 
         Args:
-            images: One or more ``(image_bytes, ext)`` pairs in upload order. Each
-                ``ext`` is the bare image extension, which selects the media type.
+            images: One or more ``(image_bytes, ext)`` pairs in upload order; each
+                ``ext`` is the bare image extension (selects the media type).
 
         Returns:
-            The parsed :class:`Analysis`. One shared summary, description and tag set
-            covers all the supplied images.
+            The parsed :class:`Analysis` (one shared summary/description/tags covering
+            all the supplied images).
 
         Raises:
-            AnalyseError: When the model output cannot be parsed into the expected
-                shape.
-            ValueError: When ``images`` is empty.
-            thoth.budget.BudgetExceededError: When the daily cap is reached. The error
-                propagates so that the ingest pass defers.
+            AnalyseError: if the model output cannot be parsed into the expected shape.
+            ValueError: if ``images`` is empty.
+            thoth.budget.BudgetExceededError: when the daily cap is reached (propagated
+                so the ingest pass defers).
         """
         if not images:
             raise ValueError("analyse_images requires at least one image")
@@ -172,12 +167,11 @@ class Analyser:
         return self._run([*blocks, {"type": "text", "text": _IMAGE_PROMPT}])
 
     def analyse_pdf(self, pdf_bytes: bytes) -> Analysis:
-        """Analyse a PDF for extracted text, a summary and routing hints.
+        """Analyse a PDF: extracted text + summary + routing hints (document block).
 
-        The method base64-encodes the bytes **transiently** into a ``document`` content
-        block (ADR 0006), which Claude reads natively. The caller still stores the PDF
-        itself as a real binary. The daily budget guard charges the call through the
-        LLM.
+        The bytes are base64-encoded **transiently** into a ``document`` content block
+        (ADR 0006) that Claude reads natively; the PDF itself is still stored as a real
+        binary by the caller. Charged against the daily budget guard via the LLM.
 
         Args:
             pdf_bytes: The raw PDF bytes of the staged asset.
@@ -186,10 +180,9 @@ class Analyser:
             The parsed :class:`Analysis`.
 
         Raises:
-            AnalyseError: When the model output cannot be parsed into the expected
-                shape.
-            thoth.budget.BudgetExceededError: When the daily cap is reached. The error
-                propagates so that the ingest pass defers.
+            AnalyseError: if the model output cannot be parsed into the expected shape.
+            thoth.budget.BudgetExceededError: when the daily cap is reached (propagated
+                so the ingest pass defers).
         """
         block = _base64_source_block("document", "application/pdf", pdf_bytes)
         return self._run([block, {"type": "text", "text": _PDF_PROMPT}])
@@ -197,9 +190,9 @@ class Analyser:
     def _run(self, content: list[dict[str, Any]]) -> Analysis:
         """Send one analyse turn and parse the JSON result into an :class:`Analysis`.
 
-        A client or transport failure is **not** caught here, and neither is a budget
-        trip. Both propagate, so the ingest pass can defer the capture. Only an
-        unparseable result becomes an :class:`AnalyseError`.
+        A client/transport failure (or a budget trip) is **not** caught here -- it
+        propagates so the ingest pass can defer the capture; only an unparseable result
+        becomes an :class:`AnalyseError`.
         """
         message = Message(role="user", content=content)
         response = self._llm.complete(
@@ -217,32 +210,30 @@ class Analyser:
     def reconstruct_excalidraw(self, image_bytes: bytes, *, ext: str) -> str | None:
         """Reconstruct a hand-drawn diagram as an editable Excalidraw markdown scene.
 
-        This is a **second, best-effort** vision call (issue #68 and ADR 0009), made
-        only for a ``diagram``-kind image. It asks the model to re-draw the whiteboard
-        or sketch as an *idealised* Excalidraw scene and to return only the element
-        list. It then assembles the ``.excalidraw.md`` envelope **deterministically in
-        code**, because the model is never trusted with the file wrapper. The result is
-        an additional asset saved alongside the original, and the original is always
-        kept.
+        This is a **second, best-effort** vision call (issue #68 / ADR 0009) made only
+        for a ``diagram``-kind image: it asks the model to re-draw the whiteboard /
+        sketch as an *idealised* Excalidraw scene and return only the element list, then
+        assembles the ``.excalidraw.md`` envelope **deterministically in code** (the
+        model is never trusted with the file wrapper). The result is an additional asset
+        saved alongside the original -- the original is always kept.
 
-        Excalidraw reconstruction is a pure enhancement, so this method **never raises
-        and never defers**. Any failure returns ``None`` and the capture proceeds with
-        the original image alone. An unparseable reply, an empty element list, the
-        budget cap and a transport error are all such failures. The model id is the
-        injected ``diagram_model``, and ``None`` falls back to
-        ``config.anthropic_model`` through the LLM.
+        Because Excalidraw reconstruction is a pure enhancement, this method **never
+        raises and never defers**: any failure (an unparseable reply, an empty element
+        list, the budget cap, or a transport error) returns ``None`` and the capture
+        proceeds with just the original image. The model id is the injected
+        ``diagram_model`` (``None`` falls back to ``config.anthropic_model`` via the
+        LLM).
 
         Args:
-            image_bytes: The raw image bytes of the staged asset. The method reuses them
-                rather than re-reading the file.
-            ext: The bare image extension, which selects the vision media type.
+            image_bytes: The raw image bytes of the staged asset (reused, not re-read).
+            ext: The bare image extension (selects the vision media type).
 
         Returns:
             The full ``.excalidraw.md`` markdown string on success, or ``None`` on any
-            failure, which degrades gracefully.
+            failure (graceful degrade).
 
         Raises:
-            Nothing: the method catches every failure mode and turns it into ``None``.
+            Nothing: every failure mode is caught and turned into ``None``.
         """
         block = _base64_source_block("image", image_media_type(ext), image_bytes)
         message = Message(
@@ -256,7 +247,7 @@ class Analyser:
                 model=self._diagram_model,
             )
             obj = parse_json_block(extract_text(response))
-        except Exception:  # noqa: BLE001 - a best-effort enhancement never propagates
+        except Exception:  # noqa: BLE001 -- best-effort enhancement, never propagate
             return None
         raw = obj.get("elements")
         if not isinstance(raw, list):
