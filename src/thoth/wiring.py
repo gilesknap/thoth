@@ -1,18 +1,18 @@
 """Shared construction of the ingest/query collaborator graph.
 
-Two production entry points need the same graph: ``thoth.__main__._build_graph``, for
+Two production entry points need the same graph. ``thoth.__main__._build_graph`` serves
 the Slack daemon and the ``thoth capture`` and ``thoth ask`` commands, and
-:func:`thoth.mcp_server.run`, for the MCP server. The graph holds a
+:func:`thoth.mcp_server.run` serves the MCP server. The graph holds a
 :class:`~thoth.vault.Vault`, an :class:`~thoth.llm.LLM`, an
 :class:`~thoth.extract.Extractor`, a :class:`~thoth.hindsight.Hindsight`, a
 :class:`~thoth.git_sync.GitSync`, an :class:`~thoth.ingest.Ingestor` and a
 :class:`~thoth.query.QueryEngine`. :func:`build_collaborators` wires that shape in one
-place, so the two callers cannot drift, as they did when the MCP wiring dropped
-``schema_md`` and left curate blind to the live schema.
+place, so the two callers cannot drift. They drifted once, when the MCP wiring dropped
+``schema_md`` and left curate blind.
 
-The heavy imports run inside the function body, at call time, so this module stays light
-to import and a test that patches a collaborator on its defining module takes effect,
-such as ``thoth.git_sync.GitSync`` or ``thoth.hindsight.Hindsight``.
+The heavy imports run inside the function body, at call time, so this module stays
+light. A test that patches a collaborator on its defining module then takes effect, for
+example ``thoth.git_sync.GitSync`` or ``thoth.hindsight.Hindsight``.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ def build_collaborators(
     Args:
         config: The frozen runtime config.
         guard: The :class:`~thoth.budget.BudgetGuard`, or a no-op stand-in, shared by
-            the LLM (classify, analyse, curate) and Hindsight (retain), so one daily cap
-            covers both spenders. The caller builds it, with an alerter on the Slack and
-            CLI side and silent blocking on the MCP side.
+            the LLM (classify, analyse, curate) and Hindsight (retain). One daily cap
+            therefore covers both spenders. The caller builds it, with an alerter on the
+            Slack and CLI side and silent blocking on the MCP side.
         markers: An optional liveness :class:`~thoth.state.MarkerStore` threaded into
             the ingestor (issue #15), where ``None`` (the MCP default) disables marker
             recording.

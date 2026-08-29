@@ -1,8 +1,8 @@
 """The ``thoth`` argument parser, split out of :mod:`thoth.__main__`.
 
-Import safety: this module imports only the standard library and the package version, so
-building the parser never needs the heavy optional clients ``anthropic``, ``slack_bolt``
-or ``mcp``, and ``--version`` and ``--help`` work without them.
+Import safety: this module imports only the standard library and the package version.
+Building the parser therefore never needs the heavy optional clients ``anthropic``,
+``slack_bolt`` or ``mcp``, so ``--version`` and ``--help`` work without them.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ __all__ = ["build_parser"]
 def build_parser() -> ArgumentParser:
     """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
 
-    Every subcommand and option carries its own ``help`` text below, which is the one
+    Every subcommand and option carries its own ``help`` text below, the one
     description of what it does. ``capture`` backfills files and folders through the
     ingest pipeline (issue #80). ``-v`` and ``--version`` print the version and exit.
 

@@ -1,8 +1,8 @@
 """Shared file-extension vocabularies for capture-kind detection.
 
-A standard-library-only leaf module, and the single source for the extension sets that
-the ingest pipeline, the bulk-import walker and the Slack upload path classify by,
-listed in lowercase with no dot.
+A standard-library-only leaf module, and the one source for these extension sets. The
+ingest pipeline, the bulk-import walker and the Slack upload path all classify by them.
+List an extension in lowercase with no dot.
 """
 
 from __future__ import annotations
