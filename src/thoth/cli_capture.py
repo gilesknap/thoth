@@ -1,10 +1,9 @@
 """Per-item helpers for ``thoth capture``, split out of :mod:`thoth.__main__`.
 
 These helpers back the :func:`thoth.__main__.run_capture` loop that the file-walk (#80)
-and inbox-drain (#105) branches share. One tallies a capture's disposition, and one
-commits a batch of imported files. Import safety: the module top level imports only the
-standard library, and each helper body imports the ingest and git exception types
-lazily.
+and inbox-drain (#105) branches share, one tallying a capture's disposition and one
+committing a batch. Import safety: the module top level imports only the standard
+library, and each helper body imports the ingest and git exception types lazily.
 """
 
 from __future__ import annotations
@@ -44,12 +43,11 @@ def _ingest_one(
     failure stays isolated: the helper logs an :class:`~thoth.ingest.IngestError`,
     counts it and skips the item, which stays durable in ``inbox/``.
 
-    A drain hold retires once its content is durably curated, and the deletion stages
-    into the next batch. That means a genuine file with ``page_paths`` non-empty, or an
-    ``unchanged`` skip. Only a provably existing curated page reports ``unchanged``
-    (#113), so such a hold duplicates already-filed content. A deferred or skipped hold
-    stays, recoverable and idempotent, so a budget re-trip never deletes un-filed
-    content.
+    A drain hold retires once durably curated, with the deletion staged into the next
+    batch: a genuine file with ``page_paths`` non-empty, or an ``unchanged`` skip. Only
+    a provably existing curated page reports ``unchanged`` (#113), so such a hold
+    duplicates already-filed content. A deferred or skipped hold stays, recoverable and
+    idempotent, so a budget re-trip never deletes un-filed content.
 
     Returns:
         The disposition string.
@@ -93,10 +91,10 @@ def _commit_capture_batch(git: Any, count: int) -> None:
     """Commit and push one batch of imported files. Surface a conflict loudly and stop.
 
     :meth:`thoth.git_sync.GitSync.commit` does add -A, commit, rebase and push in one
-    call. It returns ``committed=False`` for "nothing to commit", so an empty flush is a
+    call, returning ``committed=False`` for "nothing to commit", so an empty flush is a
     safe no-op. A :class:`~thoth.git_sync.VaultConflictError` aborts the import rather
-    than ever forcing the push. The content is filed locally, and the run is idempotent,
-    so the operator re-runs once the remote is reconciled.
+    than ever force the push. The content is filed locally and the run is idempotent, so
+    the operator re-runs once the remote is reconciled.
     """
     from .git_sync import VaultConflictError
 

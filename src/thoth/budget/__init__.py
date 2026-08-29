@@ -1,12 +1,12 @@
 """The daily LLM spend guard: a persistent, fail-safe cost circuit-breaker (issue #16).
 
-thoth runs unattended on pay-as-you-go Anthropic and Gemini keys with no spend ceiling.
-Hindsight does **LLM fact-extraction** (SPEC section 8), so every ingest *and* every
+thoth runs unattended on pay-as-you-go Anthropic and Gemini keys with no spend ceiling,
+and Hindsight does **LLM fact-extraction** (SPEC section 8), so every ingest *and* every
 reindexed page is a model call. A redelivery storm, a flapping dependency retried to
 death, or an accidental ``reindex --full-rebuild`` of a large vault therefore costs
 without bound. This package is the guard the SPEC's "budget-ready" Phase-3 goal calls
 for: a small **daily call-count budget**, checked *before* each model call, that **fails
-safe** and defers rather than spends once the cap is reached. It emits **exactly one**
+safe** and defers rather than spends once the cap is reached, emitting **exactly one**
 notification through the errors-to-Slack surface (:mod:`thoth.alerts`).
 
 The design mirrors the rest of the closed-surface appliance:
@@ -16,29 +16,29 @@ The design mirrors the rest of the closed-surface appliance:
   triggers (:meth:`thoth.hindsight.Hindsight.retain`, the only observable Gemini cost,
   as token usage is not) both count against one ``THOTH_DAILY_LLM_BUDGET`` ceiling. The
   **separate counters** :data:`KIND_ANTHROPIC` and :data:`KIND_HINDSIGHT` exist purely
-  so the alert can report the split. The *check* is on their sum. A non-positive budget
-  **disables** the guard, the escape hatch for a box that wants no cap.
+  so the alert can report the split, and the *check* is on their sum. A non-positive
+  budget **disables** the guard, the escape hatch for a box that wants no cap.
 * **Persisted in the disposable state DB.** The per-day counters live in
   :attr:`thoth.config.Config.state_db_path`, the gitignored, not-backed-up
   ``~/.thoth/state.db`` that also backs :class:`thoth.state.EventStore` and
   :class:`~thoth.state.MarkerStore`. Keying on the **Europe/London** calendar day makes
-  the cap survive a daemon restart and reset at the London midnight the persona runs on.
-  Losing the DB resets today's count and nothing more, never knowledge (the P1
+  the cap survive a daemon restart and reset at the London midnight the persona runs on,
+  and losing the DB resets today's count and nothing more, never knowledge (the P1
   guardrail).
 * **Fail-safe, not fail-loud.** :meth:`BudgetGuard.charge` raises
   :class:`BudgetExceededError` *before* the spend. The ingest pipeline already treats a
   classify or curate failure as a *deferral*, holding the raw durably for a later sweep
-  to re-curate (see :mod:`thoth.ingest`), so a trip there loses nothing. Reindex aborts
-  the rebuild cleanly mid-walk. A capture is deferred, never dropped.
+  to re-curate (see :mod:`thoth.ingest`), so a trip there loses nothing and reindex
+  aborts the rebuild cleanly mid-walk. A capture is deferred, never dropped.
 * **Exactly one alert per day.** The first charge to trip the cap claims a per-day alert
   row with an atomic ``INSERT OR IGNORE``, the test-and-set
-  :class:`~thoth.state.EventStore` also uses. Every *later* blocked call stays silent.
+  :class:`~thoth.state.EventStore` also uses, and every *later* blocked call stays
+  silent.
 
 Module level imports only the standard library, ``thoth._time``, :mod:`thoth.state` and
-:mod:`thoth.config`, and the last two are themselves standard-library-only. Importing
-this package at pytest collection is therefore always safe. The clock is injectable, so
-the day boundary and the alert timestamp are deterministic in tests without the wall
-clock.
+:mod:`thoth.config`, the last two themselves standard-library-only, so importing this
+package at pytest collection is always safe. The clock is injectable, so the day
+boundary and the alert timestamp are deterministic in tests without the wall clock.
 """
 
 from __future__ import annotations

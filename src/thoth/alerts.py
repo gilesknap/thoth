@@ -1,30 +1,27 @@
 """Errors-to-Slack: the unattended appliance's only failure signal (issue #15).
 
 thoth runs unattended on an isolated VPS, so a failure nobody sees is a silent failure.
-This module is the **errors-to-Slack** surface (SPEC section 10 supervision). A small
-:class:`Alerter` formats an error and posts it to a dedicated Slack target, through the
-**same injectable** ``chat.postMessage`` seam the rest of the app uses
-(:class:`thoth.summary.SlackPoster`). Three callers wire it in:
-
-* the top-level handler of the Slack daemon loop (:func:`thoth.slack_app.run`), so an
-  unhandled daemon exception reaches Slack before systemd restarts the process;
-* the cron entrypoints (:func:`thoth.__main__.run_reindex` and ``run_summary``), so a
-  reindex or summary crash surfaces in Slack rather than only in a log file;
-* the unpushed-divergence alert (:meth:`Alerter.alert_unpushed_divergence`), raised when
-  a vault commit hits a rebase conflict (``VaultConflictError`` or ``GitSyncError``) and
-  the push is refused.
+This module is the **errors-to-Slack** surface (SPEC section 10 supervision): a small
+:class:`Alerter` that formats an error and posts it to a dedicated Slack target through
+the **same injectable** ``chat.postMessage`` seam the rest of the app uses
+(:class:`thoth.summary.SlackPoster`). Three callers wire it in: the Slack daemon loop's
+top-level handler (:func:`thoth.slack_app.run`), the cron entrypoints
+(:func:`thoth.__main__.run_reindex` and ``run_summary``), and the unpushed-divergence
+alert (:meth:`Alerter.alert_unpushed_divergence`), raised when a vault commit hits a
+rebase conflict (``VaultConflictError`` or ``GitSyncError``) and the push is refused.
+Each reports to Slack what would otherwise die into a log file nobody reads.
 
 Design constraints, the same closed-surface rules as the rest of the app:
 
-* Configuration resolves the alert **target**, never a hard-coded id.
+* Configuration resolves the alert **target**, never a hard-coded id:
   :meth:`thoth.config.Config.alert_target` returns ``SLACK_ALERT_CHANNEL``, or the first
-  allow-listed user id as a DM target. With neither set the alerter **no-ops** rather
-  than raises, because an alert path must not crash the caller.
-* Every post is best-effort and **swallows transport errors**. A failed post is logged
-  through the injected logger and returns ``False``, because reporting a failure must
-  never raise a *new* failure out of an exception handler.
+  allow-listed user id as a DM. With neither set the alerter **no-ops** rather than
+  raises, because an alert path must not crash the caller.
+* Every post is best-effort and **swallows transport errors**, logging through the
+  injected logger and returning ``False``, because reporting a failure must never raise
+  a *new* failure out of an exception handler.
 * ``slack_sdk`` and ``slack_bolt`` are **never** imported at module top level, since CI
-  lacks them. :func:`make_alerter` builds the real ``WebClient`` lazily, and the
+  lacks them: :func:`make_alerter` builds the real ``WebClient`` lazily, and the
   testable :class:`Alerter` takes an injected poster.
 
 Module level imports only the standard library, ``thoth._time`` and :mod:`thoth.config`,
@@ -56,9 +53,9 @@ class Alerter:
     """Format and post unattended error and divergence alerts to one Slack target.
 
     Construct with a resolved ``target``, a channel or DM id, and an injected
-    :class:`AlertPoster`. Both are ``None``-safe: a missing target or poster turns every
-    method into a logged no-op, so the alert path can never crash the caller. The clock
-    is injectable for deterministic tests.
+    :class:`AlertPoster`. Both are ``None``-safe, so a missing target or poster turns
+    every method into a logged no-op and the alert path can never crash the caller. The
+    clock is injectable for deterministic tests.
     """
 
     def __init__(
@@ -125,8 +122,8 @@ class Alerter:
         """Post the "N commits unpushed, vault conflict" divergence alert (issue #15).
 
         A vault commit landed locally but a rebase conflict refused the push, so the
-        local branch is ahead of the remote and Obsidian holds a conflicting change that
-        needs resolving by hand.
+        branch is ahead of the remote and Obsidian holds a conflicting change that needs
+        resolving by hand.
 
         Args:
             commits_ahead: How many local commits are unpushed, from
@@ -153,9 +150,9 @@ class Alerter:
 
         The first model call that :class:`thoth.budget.BudgetGuard` blocks on a given
         Europe/London day emits this once, so the operator learns the appliance has gone
-        fail-safe rather than silently burnt the cap. Fail-safe means deferred captures
-        and an aborted reindex. The guard's store holds the per-day de-duplication, and
-        this method only formats and posts.
+        fail-safe, deferring captures and aborting reindex, rather than silently burnt
+        the cap. The guard's store holds the per-day de-duplication, and this method
+        only formats and posts.
 
         Args:
             day: The Europe/London calendar day the cap was reached on (``YYYY-MM-DD``).
@@ -227,10 +224,10 @@ def make_alerter(
 
     :meth:`thoth.config.Config.alert_target` gives the target: ``SLACK_ALERT_CHANNEL``,
     or the first allow-listed user DM. ``poster_factory`` builds the poster **only when
-    a target resolves and a bot token is present**, and defaults to a real Slack
-    ``WebClient`` builder that imports ``slack_sdk`` lazily. Without a target, or
-    without a bot token, the returned alerter is a no-op with ``enabled`` set to
-    ``False``, so a box with no Slack configured neither crashes nor posts.
+    a target resolves and a bot token is present**, defaulting to a real Slack
+    ``WebClient`` builder that imports ``slack_sdk`` lazily. Without either, the
+    alerter is a no-op with ``enabled`` ``False``, so a box with no Slack configured
+    neither crashes nor posts.
 
     Args:
         config: The frozen runtime configuration.
@@ -268,9 +265,9 @@ def _cron_alerting(where: str, config: Config) -> Iterator[None]:
     A one-shot cron job that dies writes only to its ``/var/log`` file, which nobody
     watches on an isolated VPS (issue #15). This wraps the job body, so an unhandled
     exception reaches the alert target through :class:`Alerter`, best-effort, before it
-    is re-raised. The cron log therefore still records the non-zero exit, and a human
-    still gets a Slack message. Building the alerter is itself guarded, because a
-    failure to construct it must not mask the original error.
+    is re-raised: the cron log still records the non-zero exit, and a human still gets
+    a Slack message. Building the alerter is itself guarded, because a failure to
+    construct it must not mask the original error.
 
     Args:
         where: A short label for the failing entrypoint, such as ``"cron: reindex"``.

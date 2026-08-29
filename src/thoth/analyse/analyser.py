@@ -39,8 +39,8 @@ class AnalyseError(Exception):
 
     A *transport or availability* failure is deliberately **not** wrapped here, whether
     the client raised or the budget guard tripped. It propagates unchanged, so the
-    ingest pass treats it as a deferral with the raw capture already durable, exactly as
-    the classify and curate calls do.
+    ingest pass defers with the raw capture already durable, as classify and curate
+    do.
     """
 
 
@@ -130,15 +130,15 @@ class Analyser:
         """Analyse one OR MORE images in a SINGLE vision call (issues #84 and #124).
 
         A multi-image Slack batch is one unit of intent curated as one page, so every
-        image travels as its own ``image`` block in **one** call that produces one
-        shared summary and tag set, never N calls and a merge. Being one
+        image travels as its own ``image`` block in **one** call producing one shared
+        summary and tag set, never N calls and a merge. Being one
         :meth:`thoth.llm.LLM.complete` call, it counts as exactly ONE charge against the
-        daily budget guard, the same as a single-image analyse. The caller,
+        daily budget guard, like a single-image analyse. The caller,
         :meth:`thoth.ingest.Ingestor.analyse`, caps the count through
-        ``THOTH_MAX_ANALYSE_IMAGES`` before calling here.
+        ``THOTH_MAX_ANALYSE_IMAGES`` first.
 
         Each image's bytes are base64-encoded **transiently** (ADR 0006), and the caller
-        still stores the assets themselves as real binaries.
+        still stores the assets as real binaries.
 
         Args:
             images: One or more ``(image_bytes, ext)`` pairs in upload order, where each
@@ -166,8 +166,8 @@ class Analyser:
         """Analyse a PDF for extracted text, a summary and routing hints.
 
         The bytes are base64-encoded **transiently** into a ``document`` content block
-        (ADR 0006) that Claude reads natively, and the caller still stores the PDF
-        itself as a real binary. The daily budget guard charges it through the LLM.
+        (ADR 0006) that Claude reads natively, while the caller still stores the PDF as
+        a real binary. The daily budget guard charges it through the LLM.
 
         Args:
             pdf_bytes: The raw PDF bytes of the staged asset.
@@ -209,15 +209,15 @@ class Analyser:
         for a ``diagram``-kind image. It asks the model to re-draw the whiteboard or
         sketch as an *idealised* Excalidraw scene and return only the element list, then
         assembles the ``.excalidraw.md`` envelope **deterministically in code**, never
-        trusting the model with the file wrapper. The result is an additional asset
-        saved alongside the original, and the original is always kept.
+        trusting the model with the file wrapper. The result is an extra asset saved
+        beside the original, which is always kept.
 
         Excalidraw reconstruction is a pure enhancement, so this method **never raises
-        and never defers**. Any failure returns ``None`` and the capture proceeds with
+        and never defers**: any failure returns ``None`` and the capture proceeds with
         just the original image, whether an unparseable reply, an empty element list,
         the budget cap or a transport error. The model id is the injected
-        ``diagram_model``, and ``None`` falls back to ``config.anthropic_model`` through
-        the LLM.
+        ``diagram_model``, and ``None`` falls back to ``config.anthropic_model``
+        through the LLM.
 
         Args:
             image_bytes: The raw image bytes of the staged asset, reused rather than

@@ -28,19 +28,19 @@ def _build_excalidraw_elements(
     every property the renderer expects. The #68 live-verify found the earlier minimal
     shapes, with a ``label`` shorthand, rendering as empty boxes. Specifically:
 
-    * A ``rectangle``, ``ellipse`` or ``diamond`` becomes a shape element. When it
-      carries a ``text`` label it also becomes a **bound** text element: the label's
-      ``containerId`` points at the shape, and the shape's ``boundElements`` references
-      the label. The text is therefore a *property of the box*, which Excalidraw
-      centres, wraps and moves with the box, rather than a loose overlaid label.
+    * A ``rectangle``, ``ellipse`` or ``diamond`` becomes a shape element, and a
+      ``text`` label on it also becomes a **bound** text element: the label's
+      ``containerId`` points at the shape and the shape's ``boundElements`` references
+      the label, making the text a *property of the box* that Excalidraw centres, wraps
+      and moves with it, rather than a loose overlaid label.
     * A ``text`` spec becomes a free-standing text element.
     * An ``arrow`` or ``line`` joining two shapes, by ``from`` and ``to`` ids, is
-      **bound** to them. Each endpoint snaps to the point on that box's edge facing the
-      other box, not the centre, leaving a small gap. It carries ``startBinding`` and
-      ``endBinding``, and each shape's ``boundElements`` references the connector, so
-      the arrow tracks the boxes and never plunges into their middles. A connector with
-      explicit ``x``, ``y`` and ``points``, resolving to no shapes, is emitted unbound
-      as a fallback.
+      **bound** to them, each endpoint snapped to the point on that box's edge facing
+      the other box, not the centre, leaving a small gap. It carries ``startBinding``
+      and ``endBinding``, and each shape's ``boundElements`` references the connector,
+      so the arrow tracks the boxes and never plunges into their middles. A connector
+      with explicit ``x``, ``y`` and ``points``, resolving to no shapes, is emitted
+      unbound as a fallback.
     * A connector's own ``text`` label binds to the connector, with ``containerId`` set
       to the arrow, so Excalidraw places it at the line's midpoint over a masked
       background, near the line it labels and never crossing it.
@@ -111,8 +111,8 @@ def _attach_bound_label(
 
     One place owns the bound-label invariant. The label takes a deterministic 8-char id
     from :func:`_text_block_id`, seeded ``{eid}:label``, used identically for the text
-    element's JSON ``id``, the host's ``boundElements`` reference, and the
-    ``## Text Elements`` index row appended to ``text_rows``. ``box`` is the host's
+    element's JSON ``id``, the host's ``boundElements`` reference and the
+    ``## Text Elements`` row appended to ``text_rows``. ``box`` is the host's
     ``(x, y, w, h)``, and a connector passes its zero-size midbox.
     """
     label_id = _text_block_id(f"{eid}:label")
@@ -306,12 +306,12 @@ def _connector_element(
 ) -> dict[str, Any] | None:
     """Build an arrow or line, snapped to the edges of the ``from`` and ``to`` shapes.
 
-    When both endpoint ids resolve to shapes, the connector binds to them. Each
-    endpoint is the point on that box's edge facing the *other* box, plus a small gap,
-    and ``startBinding`` and ``endBinding`` record the bond, so Excalidraw keeps the
-    arrow snapped to the boxes' edges and never their centres. It falls back to the
-    spec's explicit ``x``, ``y`` and ``points``, unbound, when the ids do not resolve.
-    It returns ``None`` when neither a routable pair nor explicit points exist, so a
+    When both endpoint ids resolve to shapes the connector binds to them, each endpoint
+    the point on that box's edge facing the *other* box plus a small gap, with
+    ``startBinding`` and ``endBinding`` recording the bond, so Excalidraw keeps the
+    arrow on the boxes' edges and never their centres. It falls back to the spec's
+    explicit ``x``, ``y`` and ``points``, unbound, when the ids do not resolve, and
+    returns ``None`` when neither a routable pair nor explicit points exist, so a
     dangling connector is dropped rather than emitted malformed.
     """
     from_box = geometry.get(_as_ref(spec.get("from")))

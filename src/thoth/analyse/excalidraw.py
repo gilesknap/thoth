@@ -19,16 +19,15 @@ def _excalidraw_markdown(
 ) -> str:
     """Assemble the ``.excalidraw.md`` envelope around the built scene elements.
 
-    thoth builds the entire Obsidian-Excalidraw file format deterministically, and
-    trusts the model only for the node and connector *structure*, which
+    thoth builds the whole Obsidian-Excalidraw format deterministically, trusting the
+    model only for the node and connector *structure* that
     :func:`_build_excalidraw_elements` expands. The envelope holds the YAML frontmatter
-    that marks the note as a parsed Excalidraw drawing, the plugin's
-    switch-to-Excalidraw banner, a ``## Text Elements`` index carrying each label's text
-    and its ``^id`` anchor for Obsidian search, and a ``%%``-commented
-    ``# Excalidraw Data`` and ``## Drawing`` section holding the full scene object in a
-    fenced ``json`` block. The scene is stored **uncompressed**, as plain ``json``
-    rather than ``compressed-json``, because the plugin reads both and plain JSON keeps
-    the vault canonical as plain text.
+    marking the note as a parsed Excalidraw drawing, the plugin's switch-to-Excalidraw
+    banner, a ``## Text Elements`` index carrying each label's text and its ``^id``
+    anchor for Obsidian search, and a ``%%``-commented ``# Excalidraw Data`` and
+    ``## Drawing`` section holding the scene object in a fenced ``json`` block. It is
+    stored **uncompressed**, as plain ``json`` rather than ``compressed-json``, because
+    the plugin reads both and plain JSON keeps the vault canonical as plain text.
 
     Args:
         elements: The fully-formed Excalidraw element dicts, from
