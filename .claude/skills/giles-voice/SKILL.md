@@ -61,7 +61,7 @@ Understate the good news and trust demonstration over assertion. "I use claude-s
 
 Flag the counter-example, signposted early and delivered at the end. "podbench is my counter example... it's all gone a bit wrong."
 
-Budget 100 words per minute and count them, so a 15 minute demo is under 900 words.
+Budget 60 words per minute and count them, so a 15-minute demo is under 900 words. That is the measured rate, 914 words in 15 minutes, and it is slow because a demo is mostly showing rather than talking.
 
 Number the sections to match the talking points and close with a bulleted wrap-up, whose last bullet undercuts your own headline number.
 
@@ -181,9 +181,9 @@ Code: `"""Strips secrets from body and frontmatter before filing (SPEC section 1
 
 ## Check before you hand it over
 
-All three registers: 0 em dashes, longest paragraph three sentences or fewer, at least one real number and one honest limitation, and no word from the never list.
+All three registers: 0 em dashes, longest paragraph three sentences or fewer, and no word from the never list. Spoken and docs also want at least one real number and one honest limitation, which a docstring rarely has room for.
 
-Spoken: inside 100 words per minute. Read it aloud, and rewrite it if it sounds like it is selling.
+Spoken: inside 60 words per minute. Read it aloud, and rewrite it if it sounds like it is selling.
 
 Docs: `you` outnumbers `I`, contractions near zero, and every costly caveat sits in a `!!! warning`.
 
