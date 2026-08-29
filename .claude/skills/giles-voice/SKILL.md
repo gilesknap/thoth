@@ -141,11 +141,13 @@ Leave LLM-facing prompt strings and tool-description docstrings alone, because a
 
 **Rewriting an existing codebase: use the bundled scripts.** Prose rules alone did not hold across 14 files in the run that produced them, and a hand-rolled pass altered four model-facing tool descriptions before a check caught it.
 
+`scripts/setdoc.py <path> <qualname>` replaces one docstring with the text on stdin, taking `<module>` for the module's own. It adds the indentation and the quotes, and it finds the docstring by walking the AST rather than by matching its text, so a rewrite cannot land on the wrong copy of a repeated line.
+
 `scripts/codesame.py <ref> <path>...` strips docstrings and attribute docstrings from both sides and compares the ASTs, so "nothing behavioural changed" is proved rather than asserted. Run it on every file you touch.
 
 `scripts/degoogle.py <path>...` normalises what you wrote: it matches each function's `Args:` and `Returns:` to the ref's own layout, collapses prose to one block, and refuses to touch a `.tool`-decorated docstring. A function absent from the ref is new, so its sections are left alone, and a file absent from the ref is skipped entirely. It is idempotent, so re-running it is free.
 
-Neither replaces reading the file. They stop the two failures that judgement alone did not.
+None of them replaces reading the file. The last two stop the failures that judgement alone did not.
 
 ## Before and after
 
