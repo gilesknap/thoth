@@ -171,7 +171,9 @@ Leave LLM-facing prompt strings and tool-description docstrings alone, because a
 
 None of them replaces reading the file. Each exists because judgement alone did not hold: a hand-rolled pass altered four model-facing tool descriptions, a prose rule flattened 28 lists, a collapse rule buried 96 over-long paragraphs, and an 89-file pass left six parameters of one method undocumented while capitalising `sockaddr` into `Sockaddr`.
 
-Two mechanical traps to know before you start. A docstring's summary line has to fit the column limit **including its indent and its opening quotes**, and no script can wrap it for you, so keep a method summary under about 70 characters. And when you write a list, wrap its items for the indent that docstring actually sits at: text wrapped for a module docstring overflows once it is nested inside a method.
+Three mechanical traps to know before you start. A docstring's summary line has to fit the column limit **including its indent and its opening quotes**, and no script can wrap it for you, so keep a method summary under about 70 characters. And when you write a list, wrap its items for the indent that docstring actually sits at: text wrapped for a module docstring overflows once it is nested inside a method.
+
+**The third one is invisible, so a script has to catch it.** A docstring is a normal string, so writing a regex into one turns `\b` into a backspace, `\t` into a tab and `\n` into a newline. Doubling the backslash is the fix. One rewrite dropped the doubling the base had and shipped two literal 0x08 bytes into a published API page, invisible in the diff, in the review and in `git show`. Ruff's PLE2510 catches it only where `PL` is selected, which it often is not, so `keptfacts.py` checks for the control byte directly.
 
 ## Before and after
 

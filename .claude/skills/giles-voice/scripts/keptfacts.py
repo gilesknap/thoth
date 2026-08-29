@@ -5,8 +5,9 @@ parameter name, a literal symbol, a constant, an exception type, an issue refere
 a Sphinx cross-reference. This walks both ASTs, pairs each docstring by qualname, and
 lists what the old one said and the new one does not.
 
-It also flags the capitalisation slip the comment rule invites, where opening a sentence
-with a capital rewrites an identifier that is lowercase by nature.
+It also flags two things a diff hides: the control byte an unescaped regex escape leaves
+in a docstring, and the capitalisation slip the comment rule invites, where opening a
+sentence with a capital rewrites an identifier that is lowercase by nature.
 
 Usage: keptfacts.py <git-ref> [path]... , defaulting to src, exiting non-zero on a hit.
 """
@@ -126,6 +127,17 @@ def lost(
     return {k: v for k, v in out.items() if v}
 
 
+def control_bytes(source: str) -> list[tuple[int, str]]:
+    """Finds the control characters an unescaped regex escape leaves in a docstring."""
+    rows = []
+    for number, line in enumerate(source.split("\n"), start=1):
+        found = sorted({c for c in line if c in "\x07\x08\x0b\x0c\x00"})
+        if found:
+            names = ", ".join(f"0x{ord(c):02x}" for c in found)
+            rows.append((number, f"{names} in {line.strip()[:60]!r}"))
+    return rows
+
+
 def case_slips(source: str) -> list[tuple[int, str]]:
     """Finds comments whose opening capital rewrites a lowercase identifier."""
     rows = []
@@ -160,7 +172,7 @@ def at_ref(ref: str, path: Path) -> str:
 
 
 def report(ref: str, path: Path) -> int:
-    """Prints every dropped fact and case slip in one file, returning the hit count."""
+    """Prints one file's dropped facts and hidden slips, returning the hit count."""
     source = path.read_text()
     before = at_ref(ref, path)
     if not before:
@@ -182,6 +194,9 @@ def report(ref: str, path: Path) -> int:
         print(f"{path}::{name}{'  (no Args: block)' if blockless else ''}")
         for kind, values in sorted(gone.items()):
             print(f"    {kind:<7} {', '.join(values)}")
+    for number, text in control_bytes(source):
+        hits += 1
+        print(f"{path}:{number}  control  {text}")
     for number, text in case_slips(source):
         hits += 1
         print(f"{path}:{number}  case  {text}")
