@@ -72,7 +72,7 @@ class _StateStore:
     def close(self) -> None:
         """No-op: connections are per-operation and already closed.
 
-        Retained so existing callers and the context-manager protocol stay valid.
+        Kept so the context-manager protocol stays valid.
         """
         return None
 

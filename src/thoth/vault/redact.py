@@ -16,12 +16,12 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     # Bearer <token> authorization headers
     re.compile(r"\bBearer\s+[A-Za-z0-9._-]{10,}"),
-    # Key=VALUE / key: VALUE for a sensitive key name
+    # A key=VALUE or key: VALUE assignment for a sensitive key name
     re.compile(
         r"(?i)\b(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)\b"
         r"\s*[:=]\s*\S{6,}"
     ),
-    # Long opaque hex blob, e.g. A 32+ char digest used as a credential
+    # Long opaque hex blob, such as a 32+ char digest used as a credential
     re.compile(r"\b[0-9a-fA-F]{32,}\b"),
     # Long opaque base64-ish blob (mixed case + digits, no spaces)
     re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"),

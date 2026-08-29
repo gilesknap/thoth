@@ -163,6 +163,31 @@ class _FinalisePass(_IngestorBase):
         records the push marker (issue #15) once it is released. A conflict is surfaced
         on the report rather than raised, so content stays filed locally and nothing is
         ever force-pushed.
+
+        Args:
+            report: The report so far, returned with the git outcome folded in.
+            subject: The commit subject, which ``vault-commit`` prefixes with
+                ``agent:``.
+            paths: The exact vault-relative paths to stage, or None to commit the
+                already-staged index.
+            do_commit: False stages only and leaves the commit to the caller.
+            conflict_message: Builds the report message from a caught conflict.
+            staged_message: Replaces the report message on the stage-only path, or
+                None to return the report untouched.
+            success_message: Replaces the report message once committed, or None to
+                keep the existing one.
+            swallow_stage_error: Report a stage failure instead of raising.
+            swallow_git_error: Report a git failure instead of raising.
+            pre_commit: A tree-mutating step, such as the deferred path's ``log.md``
+                append, that has to share the one critical section with the stage or
+                commit (issue #85). It runs first under the lock on both paths.
+
+        Returns:
+            The report carrying the commit, conflict and message outcome.
+
+        Raises:
+            IngestError: on a stage or git failure the matching swallow flag does not
+                cover.
         """
         if not do_commit:
             with self._git.capture_lock:

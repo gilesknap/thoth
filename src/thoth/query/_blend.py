@@ -196,10 +196,10 @@ def _fuse(
 ) -> tuple[list[str], dict[str, tuple[str, ...]]]:
     """Merges the structural and recall sources by Reciprocal Rank Fusion (#143).
 
-    Each unique path scores the sum of one over the constant plus its rank, over the
-    sources it appears in. So a page in both outscores one topping a single source, and
-    a strong recall-only hit still scores enough to earn a cited slot even when the
-    structural source filled the budget.
+    Each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in,
+    with ``rank`` 0-based. So a page in both outscores one topping a single source, and
+    a strong recall-only hit (recall rank 0) still scores ``1 / RRF_K``, enough to earn
+    a cited slot even when the structural source filled the budget.
 
     Paths sort by fused score descending, with structural discovery order as a stable
     tie-break, so a grep hit leads a recall hit on a tie and an exact-token grep first

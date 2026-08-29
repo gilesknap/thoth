@@ -64,7 +64,7 @@ class IngestError(Exception):
 class LLMUnavailableError(IngestError):
     """Raised when an LLM client call in classify or curate itself fails.
 
-    A subclass of :class:`IngestError`, so existing handlers are unaffected, but
+    A subclass of :class:`IngestError`, so a handler catching that catches this too, but
     distinguishable so :meth:`Ingestor.ingest` can treat a transport failure as a
     deferred curation rather than a lost capture. The item is already persisted durably
     to ``inbox/`` before any LLM call (issue #14). A validation failure stays a plain

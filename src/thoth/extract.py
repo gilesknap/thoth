@@ -162,8 +162,8 @@ def _resolve_ips(host: str) -> list[str]:
     seen: list[str] = []
     for info in infos:
         sockaddr = info[4]
-        # Sockaddr[0] is the address string for both AF_INET and AF_INET6. The IPv6
-        # tuple types it as str|int in the stubs, so coerce it
+        # The sockaddr[0] entry is the address string for both AF_INET and AF_INET6.
+        # The IPv6 tuple types it as str|int in the stubs, so coerce it
         ip = str(sockaddr[0])
         if ip not in seen:
             seen.append(ip)

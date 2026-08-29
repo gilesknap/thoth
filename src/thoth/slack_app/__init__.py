@@ -16,8 +16,7 @@ classifier is wired.
 
 A slow request shows an immediate placeholder that is edited in place with the final
 render (issue #34), so a multi-second capture is not a dead pause, and it degrades to a
-single reply on a client-less path. This is a pure cutover from the old DM surface and
-supersedes the Assistant pane. Four constraints are enforced here:
+single reply on a client-less path. Four constraints are enforced here:
 
 * ``slack_bolt`` is never imported at module level, since it is absent in CI, and is
   pulled in lazily inside the two entry points. Everything else is pure and unit-tested
