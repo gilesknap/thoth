@@ -46,6 +46,29 @@ no-tool-call branch (model declined the tool) takes a plain-text follow-up. Inje
 fakes ignore this, so it passes CI and only shows up live — see `thoth-testing` for
 how to test it.
 
+## Some docstrings are read by the model, not by a person. Never reword them
+
+Most docstrings in `src/thoth` are for a human and can be rewritten freely. Three
+kinds are not: they are shipped to a model at runtime, so changing the wording
+changes behaviour and nothing in CI will catch it.
+
+* **The `@server.tool` docstrings in `mcp_server/server.py`.** FastMCP publishes each
+  one as the tool's `description`, which is what Claude reads when deciding whether
+  and how to call `pkm_search`, `pkm_read_page`, `pkm_edit_page` and the rest. The
+  wording carries real instructions ("preserve each source's clickable
+  `obsidian://open?...` link verbatim", "de-pluralise to the singular"). The
+  implementations of the same names in `tools_pages.py` / `tools_query.py` are
+  ordinary human docstrings and are safe to edit.
+* **The prompt strings**: `intent.INTENT_INSTRUCTIONS`, the classify and curate
+  prompt builders, and the `description` fields inside
+  `curate._SUBMIT_FILE_PLAN_TOOL`.
+* **`llm.persona.PERSONA`**, which is the cached system prefix on every call.
+
+A bulk docstring pass will hit these unless it is told not to. The
+`giles-voice` skill's `scripts/degoogle.py` refuses to touch a `.tool`-decorated
+docstring for exactly this reason; after any such pass, diff the tool docstrings
+against the base ref and confirm they are byte-identical.
+
 ## Clean slate — no backward-compat or migration prose
 
 Per `CLAUDE.md`: this is a personal, single-user project in an early, iterative
