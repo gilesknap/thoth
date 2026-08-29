@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# The banner Obsidian-Excalidraw writes at the top of a parsed drawing; reproduced
-# verbatim so a thoth-authored file is byte-shaped like a plugin-authored one.
+# The banner Obsidian-Excalidraw writes at the top of a parsed drawing, reproduced
+# verbatim so a thoth-authored file is byte-shaped like a plugin-authored one
 _EXCALIDRAW_BANNER = (
     "==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu of this document. ⚠== "
     "You can decompress Drawing data with the command palette: 'Decompress current "
@@ -19,23 +19,20 @@ def _excalidraw_markdown(
 ) -> str:
     """Assemble the ``.excalidraw.md`` envelope around the built scene elements.
 
-    thoth builds the entire Obsidian-Excalidraw file format deterministically (the model
-    is trusted only for the node/connector *structure*, expanded by
-    :func:`_build_excalidraw_elements`): the YAML frontmatter that marks the note as a
-    parsed Excalidraw drawing, the plugin's switch-to-Excalidraw banner, a
-    ``## Text Elements`` index (each label's text plus its ``^id`` anchor, for Obsidian
-    search), and a ``%%``-commented ``# Excalidraw Data`` / ``## Drawing`` section that
-    holds the full scene object in a fenced ``json`` block. The scene is stored
-    **uncompressed** (plain ``json``, not ``compressed-json``): the plugin reads both,
-    and plain JSON keeps the vault canonical-as-plain-text (a compressed blob does not).
+    thoth builds the whole Obsidian-Excalidraw file format deterministically, trusting
+    the model only for the node and connector structure: the frontmatter that marks the
+    note as a parsed drawing, the plugin's switch-to-Excalidraw banner, a ``## Text
+    Elements`` index carrying each label and its ``^id`` anchor for Obsidian search, and
+    a ``%%``-commented ``## Drawing`` section holding the scene in a fenced ``json``
+    block. The scene is stored uncompressed because the plugin reads both and plain JSON
+    keeps the vault canonical as plain text.
 
     Args:
-        elements: The fully-formed Excalidraw element dicts (from
-            :func:`_build_excalidraw_elements`).
-        text_elements: ``{"id", "text"}`` rows for the ``## Text Elements`` index.
+        elements: The fully-formed Excalidraw element dicts
+        text_elements: ``{"id", "text"}`` rows for the text index
 
     Returns:
-        The complete ``.excalidraw.md`` markdown string.
+        The complete ``.excalidraw.md`` markdown string
     """
     scene = {
         "type": "excalidraw",

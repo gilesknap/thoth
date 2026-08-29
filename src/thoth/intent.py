@@ -1,34 +1,27 @@
-"""The Slack free-text intent gate (issue #5): route bare prose to the right engine.
+"""The Slack free-text intent gate (issue #5), routing bare prose to an engine.
 
-The Slack surface (:mod:`thoth.slack_app`) routes a message with a deterministic
-``if/elif`` ladder -- a pending-save affirmative, a ``capture:``/``note:``/``save:``
-prefix, a bare URL, a shared file -- and historically defaulted *everything else* to a
-query. That made plain prose like "remind me to call the dentist tomorrow" get
-*searched* instead of *filed*; to capture a free thought you had to prefix it.
+The Slack surface routes a message with a deterministic ladder of a capture prefix, a
+bare URL or a shared file, and historically defaulted everything else to a query. That
+made plain prose like "remind me to call the dentist tomorrow" get searched rather than
+filed, so capturing a free thought needed a prefix. This adds the one missing decision:
+for a message hitting none of those short-circuits, ask a cheap model which engine the
+user meant.
 
-This module adds the one missing decision: for a message that hits **none** of those
-deterministic short-circuits, ask a cheap model which engine the user meant. The gate
-only *chooses* an engine -- it never blends them and never hands the read-only query
-path write access (least-privilege, SPEC sections 3 and 12). The deterministic
-prefixes stay as the explicit escape hatch when the model guesses wrong.
+The gate only chooses an engine. It never blends them and never gives the read-only
+query path write access (SPEC sections 3 and 12), and the deterministic prefixes stay as
+the escape hatch when the model guesses wrong.
 
-Design constraints:
+Three constraints hold:
 
-* **Slack-only.** MCP already exposes explicit tools (``pkm_ingest`` / ``pkm_search`` /
-  ``pkm_todos`` ...), so the calling agent does its own dispatch; no gate is needed
-  there.
-* **Total / fail-safe.** :meth:`IntentClassifier.classify` never raises: any model,
-  network, or parse failure returns the safe default (route to query). Silently filing a
-  real question as a note is the annoying failure mode; *answering* a misfiled note is
-  harmless, so the gate defaults to query whenever it is unsure -- including on a
-  low-confidence verdict (see :attr:`IntentDecision.route`).
-* **Cheap.** One small model call (a Haiku, :data:`DEFAULT_INTENT_MODEL`) per bare
-  free-text message only -- prefixed / URL / file messages skip the gate entirely. The
-  call reuses the cached :data:`thoth.llm.PERSONA` prefix, so it is a small marginal
-  cost on a busy appliance.
+* **Slack-only.** MCP already exposes explicit tools, so the calling agent does its own
+  dispatch.
+* **Total and fail-safe.** Any model, network or parse failure routes to query.
+  Answering a misfiled note is harmless, while silently filing a real question is not.
+* **Cheap.** One small model call per bare free-text message, reusing the cached persona
+  prefix.
 
-Only :mod:`thoth.llm` (the injectable model seam) is imported, so this module is
-import-safe under pytest collection and never pulls in the ``anthropic`` SDK by itself.
+Only :mod:`thoth.llm` is imported, so this module is import-safe under pytest collection
+and never pulls in the SDK by itself.
 """
 
 from __future__ import annotations
@@ -53,7 +46,7 @@ DEFAULT_INTENT_MODEL: str = "claude-haiku-4-5-20251001"
 _MAX_TOKENS: int = 64
 """The classifier emits a tiny JSON object; cap generation hard to stay cheap/fast."""
 
-# The two engines the gate can route a bare free-text message to.
+# The two engines the gate can route a bare free-text message to
 _VALID_INTENTS: frozenset[str] = frozenset({"capture", "query"})
 _VALID_CONFIDENCES: frozenset[str] = frozenset({"high", "medium", "low"})
 
@@ -90,12 +83,8 @@ carries no searchable terms (e.g. a pure reminder).
 class IntentDecision:
     """A routing verdict for one bare free-text Slack message.
 
-    ``intent`` is the model's best guess (one of ``capture`` / ``query``) and
-    ``confidence`` is ``high`` / ``medium`` / ``low``. Callers route on :attr:`route`,
-    not :attr:`intent` directly, so the low-confidence-to-query safety rule is applied
-    in one place. ``keywords`` are the de-pluralised, stop-word-stripped,
-    synonym-expanded search terms the gate extracted from the message (issue #102); they
-    seed the lexical grep on the query read path and are empty when the model gave none.
+    Callers route on :attr:`route` rather than the raw intent, so the
+    low-confidence-to-query safety rule is applied in one place.
     """
 
     intent: str
@@ -104,50 +93,46 @@ class IntentDecision:
 
     @property
     def route(self) -> str:
-        """The engine to route to, collapsing a low-confidence verdict to ``query``.
+        """The engine to route to, collapsing a low-confidence verdict to query.
 
-        Searching a misfiled note is harmless; silently filing a real question as a
-        note is the annoying failure (issue #5), so a ``low`` confidence -- whatever the
-        guessed intent -- routes to the safe query.
+        Searching a misfiled note is harmless, while silently filing a real question is
+        the annoying failure (issue #5), so low confidence routes to query whatever the
+        guessed intent was.
         """
         if self.confidence == "low":
             return "query"
         return self.intent
 
 
-# The safe verdict returned whenever the gate cannot get a usable answer: route to query
-# (least-privilege default).
+# The safe verdict when the gate cannot get a usable answer, routing to query as the
+# least-privilege default
 _DEFAULT_DECISION: IntentDecision = IntentDecision(intent="query", confidence="low")
 
 
 @dataclass
 class IntentClassifier:
-    """A cheap, total intent gate over an injected :class:`~thoth.llm.LLM` seam.
+    """A cheap, total intent gate over an injected LLM seam.
 
-    Consulted by :class:`thoth.slack_app.Handlers` only for a bare free-text message
-    that hit none of the deterministic short-circuits. :meth:`classify` makes one small
-    model call (the :data:`DEFAULT_INTENT_MODEL` Haiku unless ``model`` overrides it)
-    and parses a ``{"intent", "confidence"}`` object. The LLM is injectable, so a test
-    substitutes a fake exposing ``.complete(...)`` with no real SDK.
+    Consulted only for a bare free-text message that hit none of the deterministic
+    short-circuits. One small model call returns a tiny JSON verdict. The LLM is
+    injectable, so a test substitutes a fake and needs no real SDK.
     """
 
     llm: LLM
     model: str = DEFAULT_INTENT_MODEL
 
     def classify(self, text: str) -> IntentDecision:
-        """Return the routing verdict for ``text`` -- never raises (fail-safe to query).
+        """Returns the routing verdict for a message, and never raises.
 
-        Sends ``text`` as a single user turn under :data:`INTENT_INSTRUCTIONS` and
-        parses the model's JSON. Any failure -- a model/network error, missing or
-        invalid JSON, or an out-of-range ``intent`` -- returns the safe
-        :data:`_DEFAULT_DECISION` (route to query) rather than propagating, because the
-        gate is a routing optimisation and the user's message must still be served.
+        Sends the text as a single turn under the instructions and parses the JSON. Any
+        failure returns the safe default rather than propagating, because the gate is a
+        routing optimisation and the user's message must still be served.
 
         Args:
             text: The stripped free-text message body.
 
         Returns:
-            The parsed :class:`IntentDecision`, or the safe default on any failure.
+            The parsed verdict, or the safe query default on any failure.
         """
         try:
             response = self.llm.complete(
@@ -161,8 +146,8 @@ class IntentClassifier:
             decision = _DEFAULT_DECISION
         else:
             decision = _decision_from(obj)
-        # Concise operator-readable line (issue #52): the gate's verdict and the engine
-        # it routes to, so a misroute is diagnosable from the log. Grep-friendly prefix.
+        # Operator-readable line (issue #52) naming the verdict and the engine it
+        # routes to, with a grep-friendly prefix, so a misroute is diagnosable
         logger.info(
             "intent routed: %s (confidence=%s) -> %s",
             decision.intent,
@@ -173,15 +158,16 @@ class IntentClassifier:
 
 
 def _decision_from(obj: dict[str, object]) -> IntentDecision:
-    """Build an :class:`IntentDecision` from a parsed object, defaulting on bad shapes.
+    """Builds a verdict from a parsed object, defaulting on bad shapes.
 
-    An ``intent`` outside the two known engines is untrustworthy, so the whole verdict
-    falls back to the safe default. A missing or unknown ``confidence`` is treated as
-    ``low`` (which also routes to query) rather than rejected, so a model that names a
-    valid intent but botches the confidence still routes conservatively. ``keywords`` is
-    parsed leniently (issue #102): a missing, non-list, or garbled value degrades to an
-    empty tuple rather than rejecting the verdict, because the keywords only *seed* the
-    lexical search and the raw query is always available as the fallback.
+    An intent outside the two known engines is untrustworthy, so the whole verdict falls
+    back to the safe default. An unknown confidence is treated as low, which also routes
+    to query, so a model naming a valid intent but botching the confidence still routes
+    conservatively.
+
+    Keywords parse leniently (issue #102). A garbled value degrades to empty rather than
+    rejecting the verdict, because the keywords only seed the search and the raw query
+    is always the fallback.
     """
     intent = obj.get("intent")
     if intent not in _VALID_INTENTS:
@@ -197,13 +183,13 @@ def _decision_from(obj: dict[str, object]) -> IntentDecision:
 
 
 def _keywords_from(value: object) -> tuple[str, ...]:
-    """Coerce a parsed ``keywords`` value into a clean tuple of search terms.
+    """Coerces a parsed keywords value into a clean tuple of search terms.
 
-    Totality-preserving (issue #102): only a genuine list of strings yields keywords;
-    any other shape (missing, a bare string, a number, nested junk) degrades to ``()``
-    so a malformed field never raises and the caller simply falls back to grepping the
-    raw query. Each entry is stripped, empties are dropped, and order/duplicates are
-    preserved as the model emitted them (the grep ranker dedupes downstream).
+    Totality-preserving (issue #102). Only a genuine list of strings yields keywords,
+    and any other shape degrades to empty, so a malformed field never raises and the
+    caller falls back to grepping the raw query. Entries are stripped and empties
+    dropped, while order and duplicates survive as the model emitted them, since the
+    grep ranker dedupes downstream.
     """
     if not isinstance(value, list):
         return ()

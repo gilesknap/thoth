@@ -1,8 +1,8 @@
 """The ``thoth`` argument parser, split out of :mod:`thoth.__main__`.
 
-Import safety: only the standard library plus the package version is imported here,
-so building the parser -- and therefore ``--version`` / ``--help`` -- never needs the
-heavy optional clients (``anthropic`` / ``slack_bolt`` / ``mcp``) to be installed.
+Only the standard library plus the package version is imported here, so building the
+parser, and therefore ``--version`` and ``--help``, never needs the heavy optional
+clients (``anthropic``, ``slack_bolt``, ``mcp``) to be installed.
 """
 
 from __future__ import annotations
@@ -16,23 +16,16 @@ __all__ = ["build_parser"]
 
 
 def build_parser() -> ArgumentParser:
-    """Build the ``thoth`` argument parser with one subcommand per Phase-3 entrypoint.
+    """Builds the ``thoth`` argument parser, one subcommand per entrypoint.
 
-    Subcommands: ``init`` (seed the vault spine + dashboards, idempotent,
-    ``--force`` to overwrite), ``slack`` (the capture/retrieve daemon), ``mcp`` (the
-    MCP server -- ``--transport stdio`` by default, ``--transport http`` for the
-    bearer-authenticated network surface on ``--host``/``--port``, issue #103),
-    ``reindex`` (nightly incremental, ``--full-rebuild`` for
-    recovery, ``--budget`` for a transient cap override, issue #95), ``summary``
-    (``daily`` / ``weekly`` Slack digest), ``lint`` (the
-    13-check vault maintenance scan, ``--no-log`` to suppress the log entry), and
-    ``capture`` (backfill files/folders through the ingest pipeline -- ``--as-is`` for
-    a low-touch import, ``--budget`` for a transient cap override, plus
-    ``--dry-run``/``--limit``/``--batch-size``/``--include``/``--exclude``, issue #80).
-    ``-v/--version`` prints the version and exits.
+    The subcommands are ``init``, ``vault-bootstrap``, ``slack``, ``mcp``, ``reindex``,
+    ``summary``, ``lint`` and ``capture``, and ``-v/--version`` prints the version and
+    exits. Every flag carries its own help text below rather than a second copy here.
+    The capture backfill is issue #80, the HTTP MCP transport #103 and the transient
+    ``--budget`` override #95.
 
     Returns:
-        The configured :class:`argparse.ArgumentParser`.
+        The configured :class:`argparse.ArgumentParser`
     """
     parser = ArgumentParser(prog="thoth", description="thoth PKM appliance CLI")
     parser.add_argument(
@@ -69,10 +62,9 @@ def build_parser() -> ArgumentParser:
         help="stdio (default, spawn-as-child for Claude Code) or http (network "
         "streamable-HTTP, bearer-authenticated; THOTH_MCP_API_KEYS required) (#103)",
     )
-    # Defaults mirror thoth.mcp_server.DEFAULT_MCP_HOST/PORT; kept as literals here so
-    # parsing --help never imports the (heavy, mcp-dependent) server module. Loopback by
-    # default by design: network exposure is delegated to cloudflared + Cloudflare
-    # Access (ADR 0011), never a raw 0.0.0.0 socket.
+    # These mirror mcp_server.DEFAULT_MCP_HOST/PORT but stay literals, so --help never
+    # imports the heavy server module. Loopback by design: exposure goes through
+    # cloudflared and Cloudflare Access (ADR 0011), never a raw 0.0.0.0 socket
     mcp.add_argument(
         "--host",
         default="127.0.0.1",

@@ -18,12 +18,12 @@ class SlackError(Exception):
 
 
 def _is_image_file(file_info: dict[str, Any]) -> bool:
-    """Report whether a Slack file object is an image (issue #84 batch gate).
+    """Reports whether a Slack file object is an image (the issue #84 batch gate).
 
-    Used to decide whether a multi-file upload is a homogeneous image batch
-    (captured as one page). Prefers Slack's own ``mimetype`` (``image/...``), then
-    falls back to the filename extension so a file object without a mimetype still
-    routes; both mirror the image extensions the ingest pipeline recognises.
+    Decides whether a multi-file upload is a homogeneous image batch, captured as one
+    page. Slack's own ``mimetype`` is preferred, falling back to the filename extension
+    so a file object without one still routes; both mirror the extensions the ingest
+    pipeline recognises.
     """
     mimetype = file_info.get("mimetype")
     if isinstance(mimetype, str) and mimetype.lower().startswith("image/"):
@@ -35,7 +35,7 @@ def _is_image_file(file_info: dict[str, Any]) -> bool:
 
 
 def _download_url(file_info: dict[str, Any]) -> str | None:
-    """Pick the private download URL Slack exposes on a file object."""
+    """Picks the private download URL Slack exposes on a file object."""
     for key in ("url_private_download", "url_private"):
         value = file_info.get(key)
         if isinstance(value, str) and value:
@@ -48,10 +48,10 @@ def _download_to_tmp(
     client: SlackClientLike | None,
     responder: Responder,
 ) -> tuple[Path, str | None] | None:
-    """Download one Slack file object to a temp path (fail-loud), or ``None``.
+    """Downloads one Slack file object to a temp path, or returns ``None``.
 
-    Returns the staged ``(path, filename)`` on success; warns and returns ``None``
-    for a missing download URL or a failed download so a batch keeps the rest.
+    Returns the staged ``(path, filename)`` on success. A missing download URL or a
+    failed download warns and returns ``None``, so a batch keeps the rest of its files.
     """
     url = _download_url(file_info)
     if not url:
@@ -73,14 +73,14 @@ def _download_to_tmp(
 
 
 def _download_bytes(client: SlackClientLike | None, url: str) -> bytes:
-    """Download private Slack file bytes via an authenticated request.
+    """Downloads private Slack file bytes over an authenticated request.
 
-    A test injects a fake client exposing ``download`` (used directly, no
-    network). The real ``slack_sdk.WebClient`` has **no** download helper, so the
-    bytes are fetched with an authenticated ``GET`` to the file's private URL using
-    the client's bot ``token`` (``Authorization: Bearer ...``) -- the only way to
-    read a ``url_private``/``url_private_download`` link. Raises :class:`SlackError`
-    when there is no usable download path or the URL is not an ``https`` Slack URL.
+    A test injects a fake client exposing ``download``, which is used directly with no
+    network. The real ``slack_sdk.WebClient`` has no download helper, so the bytes come
+    from an authenticated ``GET`` to the file's private URL carrying the client's bot
+    token, which is the only way to read a ``url_private`` link. Raises
+    :class:`SlackError` when there is no usable download path or the URL is not an https
+    Slack URL.
     """
     downloader = getattr(client, "download", None)
     if callable(downloader):

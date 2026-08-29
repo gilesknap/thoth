@@ -19,7 +19,7 @@ from ._shared import (
 
 
 class _AssetStore(_IngestorBase):
-    """Stages binaries into ``raw/assets`` with the SHA-256 idempotency/drift rule."""
+    """Stages binaries into ``raw/assets`` under the digest idempotency rule."""
 
     def _obtain_primary_asset(
         self,
@@ -29,13 +29,12 @@ class _AssetStore(_IngestorBase):
         *,
         local_ext: str,
     ) -> tuple[RawCaptureResult, str | None]:
-        """Acquire a binary capture's primary asset; return it plus any provenance URL.
+        """Acquires a binary capture's primary asset and any provenance URL.
 
-        The shared acquisition step of :meth:`_capture_pdf` and :meth:`_capture_image`:
-        a ``url`` capture reuses the analyse pass's single download when present (no
-        second fetch, no leaked temp) -- falling back to fetching for a standalone
-        :meth:`capture_raw` call -- and carries the fetch's ``source_url``; a local
-        ``path`` capture is staged under ``local_ext`` with no provenance URL.
+        The shared acquisition step for both binary kinds. A URL capture reuses the
+        analyse pass's single download when present, so there is no second fetch and no
+        leaked temp, falling back to fetching for a standalone call. A local path
+        capture is staged under the given extension with no provenance URL.
         """
         if capture.url is not None:
             binary = (
@@ -50,13 +49,12 @@ class _AssetStore(_IngestorBase):
     def _save_fetched_asset(
         self, cls: Classification, fetched: FetchedBinary
     ) -> RawCaptureResult:
-        """Move a :class:`~thoth.extract.FetchedBinary` tmp file into ``raw/assets``.
+        """Moves a fetched binary's temp file into the asset folder.
 
-        Idempotent on the fetched bytes' SHA-256: if the destination asset already
-        holds byte-identical content the move is skipped (``'skipped_unchanged'``) and
-        the staged tmp file is cleaned up; a byte mismatch at the same slug is surfaced
-        as drift (never an overwrite). On the happy path :meth:`Vault.save_asset` moves
-        the tmp file; only the error/skip path must clean it up.
+        Idempotent on the bytes. An identical destination skips the move and cleans up
+        the staged file, and a byte mismatch at the same slug surfaces as drift rather
+        than an overwrite. The happy path moves the temp file, so only the skip and
+        error paths must clean it up.
         """
         asset_name = f"{cls.slug}.{fetched.suggested_ext}"
         return self._store_asset(fetched.tmp_path, asset_name)
@@ -64,40 +62,36 @@ class _AssetStore(_IngestorBase):
     def _save_local_asset_result_named(
         self, asset_slug: str, path: Path, ext: str
     ) -> RawCaptureResult:
-        """Stage a local file into ``raw/assets`` under an explicit asset slug.
+        """Stages a local file into the asset folder under an explicit slug.
 
-        The source is copied into a fresh tmp file first so :meth:`Vault.save_asset`'s
-        move never consumes the caller's original (the Slack/MCP tmp download), and a
-        multi-image batch (issue #84) can save each extra image under its own
-        ``<slug>-N`` name while the primary keeps the bare ``<slug>``. The same
-        bytes-SHA-256 idempotency/drift rule as :meth:`_save_fetched_asset` applies,
-        and the staged tmp copy is always cleaned up on the skip/error path.
+        The source is copied to a fresh temp file first, so the vault's move never
+        consumes the caller's original. That also lets a multi-image batch (issue #84)
+        save each extra under its own numbered name while the primary keeps the bare
+        slug. The same digest idempotency rule applies, and the staged copy is always
+        cleaned up on the skip and error paths.
         """
         staged = self._stage_bytes(path.read_bytes())
         return self._store_asset(staged, f"{asset_slug}.{ext}")
 
     @staticmethod
     def _stage_bytes(data: bytes) -> Path:
-        """Write ``data`` to a fresh tmp file consumed by :meth:`_store_asset`."""
+        """Writes bytes to a fresh temp file, consumed by :meth:`_store_asset`."""
         with tempfile.NamedTemporaryFile(delete=False) as handle:
             handle.write(data)
             return Path(handle.name)
 
     def _store_text_asset(self, asset_name: str, text: str) -> str | None:
-        """Stage a derived *text* artifact and store it under ``raw/assets``.
+        """Stages a derived text artifact and stores it under the asset folder.
 
-        Used for the ``<slug>.excalidraw.md`` reconstruction (issue #68). The text is
-        written to a fresh tmp file and handed to :meth:`_store_asset` (so the bytes-
-        SHA-256 idempotency/drift rule applies and the tmp is never leaked). Returns the
-        stored vault-relative path, or ``None`` if the (best-effort) write fails.
+        Used for the Excalidraw reconstruction (issue #68). The text is written to a
+        fresh temp file, so the same digest rule applies and nothing is leaked.
 
-        Crucially, a derived artifact is an *enhancement* and must never lose or defer
-        the already-durable primary capture: an :class:`IngestError` from
-        :meth:`_store_asset` -- most realistically *drift*, because
-        :meth:`~thoth.analyse.Analyser.reconstruct_excalidraw` is a non-deterministic
-        model call so a byte-identical re-ingest produces a *different*
-        ``<slug>.excalidraw.md`` -- is swallowed to ``None`` here (the existing asset
-        is left untouched) rather than aborting the capture (ADR 0009).
+        A derived artifact is an enhancement and must never lose or defer the
+        already-durable primary capture. A store failure is swallowed to None here,
+        leaving the existing asset untouched rather than aborting (ADR 0009).
+
+        Drift is the realistic failure: reconstruction is a non-deterministic model
+        call, so a byte-identical re-ingest produces a different scene.
         """
         staged = self._stage_bytes(text.encode("utf-8"))
         try:
@@ -107,18 +101,16 @@ class _AssetStore(_IngestorBase):
         return result.asset_paths[0] if result.asset_paths else None
 
     def _store_asset(self, tmp_path: Path, asset_name: str) -> RawCaptureResult:
-        """Move ``tmp_path`` into ``raw/assets`` idempotently, never leaking the tmp.
+        """Moves a staged file into the asset folder idempotently, leaking nothing.
 
-        Compares the staged bytes' SHA-256 to any existing asset of the same name
-        *before* the move: equal bytes mean an idempotent skip, different bytes mean
-        drift (a loud error, never a silent overwrite), and a missing asset means a
-        fresh create. The tmp/staged file is unlinked on every path that does not hand
-        it to :meth:`Vault.save_asset` (skip and drift), and on a ``save_asset`` failure
-        (for example a malformed asset filename), so no ``thoth-*`` temp file is leaked.
+        The staged bytes are compared to any existing asset of the same name before the
+        move. Equal bytes are an idempotent skip, different bytes are drift and a loud
+        error rather than a silent overwrite, and a missing asset is a fresh create. The
+        staged file is unlinked on every path that does not hand it to the vault, and on
+        a vault failure too, so no temp file is ever leaked.
 
         Raises:
-            IngestError: if the staged bytes differ from an existing asset's bytes
-                (drift), or the vault rejects the write.
+            IngestError: on drift against an existing asset, or a rejected write.
         """
         rel = f"raw/assets/{asset_name}"
         try:
@@ -142,8 +134,8 @@ class _AssetStore(_IngestorBase):
         except (SlugError, VaultError) as exc:
             raise IngestError(f"capture failed during vault write: {exc}") from exc
         finally:
-            # save_asset MOVES the tmp into the vault on success, leaving nothing to
-            # clean. On a skip, a drift error, or a save_asset failure the bytes are
-            # still staged, so unlink them here -- no thoth-* temp file is ever leaked.
+            # The vault moves the temp file in on success, leaving nothing to clean. On
+            # a skip, a drift error, or a failed write the bytes are still staged, so
+            # unlink them here and no temp file is ever leaked
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)

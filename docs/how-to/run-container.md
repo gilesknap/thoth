@@ -1,11 +1,10 @@
 # Run in a container
 
-Pre-built containers with thoth and its dependencies already
-installed are available on [Github Container Registry](https://ghcr.io/gilesknap/thoth).
+Pre-built containers with thoth and its dependencies already installed are available on the [Github Container Registry](https://ghcr.io/gilesknap/thoth).
 
 ## Starting the container
 
-To pull the container from github container registry and run:
+To pull the container from the GitHub container registry and run it:
 
 ```
 $ docker run ghcr.io/gilesknap/thoth:latest --version

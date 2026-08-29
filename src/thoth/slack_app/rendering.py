@@ -8,20 +8,19 @@ from thoth.render import render_vault_ref
 
 
 def render_citation(citation: Citation) -> str:
-    """Render one citation as the concise shared Slack reference (issue #53).
+    """Renders one citation as the concise shared Slack reference (issue #53).
 
     Delegates to :func:`thoth.render.render_vault_ref`, emitting a title-only clickable
-    ``<obsidian-uri|title>`` link over the harness-built ``obsidian://`` link, with no
-    trailing path (issue #63). The link target is taken verbatim from the
-    :class:`~thoth.query.Citation`; this function never constructs an ``obsidian://``
-    URI itself, and the dead ``[[wikilink]]`` is no longer shown (it is un-clickable in
-    Slack).
+    ``<obsidian-uri|title>`` with no trailing path (issue #63). The link target is taken
+    verbatim from the citation, so this never constructs an ``obsidian://`` URI itself,
+    and the dead ``[[wikilink]]`` is no longer shown because it is un-clickable in
+    Slack.
 
     Args:
-        citation: A harness-built citation handle.
+        citation: A harness-built citation handle
 
     Returns:
-        A single ``mrkdwn`` line for the citation.
+        A single ``mrkdwn`` line for the citation
     """
     return render_vault_ref(
         obsidian_uri=citation.obsidian_uri,
@@ -31,20 +30,19 @@ def render_citation(citation: Citation) -> str:
 
 
 def render_query_result(result: QueryResult) -> str:
-    """Render a composed answer plus its citation list as a ``mrkdwn`` block.
+    """Renders a composed answer plus its citation list as a ``mrkdwn`` block.
 
-    The answer prose comes first, followed by a ``Sources:`` list with one
-    :func:`render_citation` line per cited page (SPEC Appendix worked example). The
-    cited set is the pages the model said it actually used (issue #34's ``USED:`` line,
-    parsed in :mod:`thoth.query`), so the list reflects what the answer drew on rather
-    than the whole retrieval candidate set. When the answer has no citations the prose
-    stands alone -- no trailing note is added (issue #53).
+    The prose comes first, then a ``Sources:`` list with one :func:`render_citation`
+    line per cited page. The cited set is the pages the model said it actually used
+    (issue #34's ``USED:`` line, parsed in :mod:`thoth.query`), so the list reflects
+    what the answer drew on rather than the whole candidate set. With no citations the
+    prose stands alone and no trailing note is added (issue #53).
 
     Args:
-        result: The query result to render.
+        result: The query result to render
 
     Returns:
-        A ``mrkdwn`` string ready for ``chat.postMessage``.
+        A ``mrkdwn`` string ready for ``chat.postMessage``
     """
     lines = [result.answer.strip()]
     if result.citations:
@@ -55,23 +53,22 @@ def render_query_result(result: QueryResult) -> str:
 
 
 def render_ingest_report(report: IngestReport) -> str:
-    """Render a one-to-two-line capture confirmation in ``mrkdwn``.
+    """Renders a one or two line capture confirmation in ``mrkdwn``.
 
-    Names what was filed and renders one concise shared reference per curated page
-    (issue #63): a ``Filed N page(s):`` header followed by a title-only clickable
-    ``<obsidian-uri|title>`` line per page (no trailing path). When no curated page was
-    written the header names the raw/asset paths directly. A
-    :attr:`~thoth.ingest.IngestReport.conflict` is surfaced fail-loud (SPEC section 10)
-    with the conflicting path, never swallowed. A
-    :attr:`~thoth.ingest.IngestReport.deferred` capture (raw persisted but the LLM was
-    unavailable for curation) is surfaced as a partial-success note naming the held raw
-    page, so the user knows the item is safe and will be re-curated (SPEC section 6).
+    Names what was filed, with one concise reference per curated page under a ``Filed N
+    page(s):`` header and no trailing path (issue #63). When no curated page was written
+    the header names the raw or asset paths directly.
+
+    A conflict is surfaced fail-loud with the conflicting path and never swallowed (SPEC
+    section 10). A deferred capture, where the raw persisted but the LLM was
+    unavailable, becomes a partial-success note naming the held raw page, so the user
+    knows the item is safe and will be re-curated (SPEC section 6).
 
     Args:
-        report: The structured ingest outcome.
+        report: The structured ingest outcome
 
     Returns:
-        A concise ``mrkdwn`` confirmation (or conflict / deferred) string.
+        A concise ``mrkdwn`` confirmation, conflict or deferred string
     """
     if report.conflict:
         detail = report.message or "a vault conflict blocked the sync"
@@ -90,9 +87,8 @@ def render_ingest_report(report: IngestReport) -> str:
         if not report.committed:
             head += " (not yet committed)"
         parts.append(head)
-        # One title-only <uri|title> ref per curated page (issue #63: no trailing path).
-        # ``titles`` runs parallel to page_paths / obsidian_links (the slug-derived
-        # title is filled in upstream when missing).
+        # One title-only <uri|title> ref per curated page (issue #63). Titles runs
+        # parallel to page_paths and obsidian_links, filled in upstream when missing
         for path, uri, title in zip(
             report.page_paths,
             report.obsidian_links,

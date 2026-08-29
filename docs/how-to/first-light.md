@@ -1,16 +1,14 @@
 # First-light smoke checklist
 
-CI exercises every external boundary against an injected fake -- no real Slack,
-Anthropic, Hindsight, MCP, Firecrawl, Postgres, or git remote is touched (SPEC
-section 12). So the **first time** the appliance runs against the real services (on the
-VPS, after deploy) is the first time those seams are exercised for real. This page is the
-runbook for that *first light*: one happy-path check per real boundary, plus the single
-command that runs the opt-in live smoke suite.
+CI exercises every external boundary against an injected fake, so no real Slack, Anthropic, Hindsight, MCP, Firecrawl, Postgres or git remote is touched (SPEC section 12).
 
-Work through it top-to-bottom on the VPS, as the `pkm` user, with `~/.thoth/.env`
-populated and the venv on `PATH` (`source /opt/thoth/.venv/bin/activate`). Each step is a
-**one-shot** check; none of them mutate canonical knowledge beyond a single throwaway page
-you can delete afterwards.
+That means the first time the appliance runs against the real services, on the VPS after a deploy, is the first time those seams are exercised for real.
+
+This page is the runbook for that *first light*: one happy-path check per real boundary, plus the single command that runs the opt-in live smoke suite.
+
+Work through it top to bottom on the VPS, as the `pkm` user, with `~/.thoth/.env` populated and the venv on `PATH` via `source /opt/thoth/.venv/bin/activate`.
+
+Each step is a one-shot check, and none of them mutate canonical knowledge beyond a single throwaway page you can delete afterwards.
 
 ## 0. Prerequisites
 
@@ -21,27 +19,27 @@ you can delete afterwards.
 - [ ] `thoth --version` prints a version
 ```
 
-## 1. Anthropic -- a trivial classify returns valid JSON
+## 1. Anthropic: a trivial classify returns valid JSON
 
-The cheapest real LLM round-trip is the ingest *classify* call: one Claude message that
-must come back as a JSON routing object. If the model id, key, or system prompt is wrong
-this fails loud here rather than mid-capture.
+The cheapest real LLM round-trip is the ingest *classify* call, one Claude message that must come back as a JSON routing object.
+
+If the model id, the key or the system prompt is wrong, this fails loud here rather than mid-capture.
 
 ```console
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k anthropic
 ```
 
-Expected: the live test sends a one-line note, gets back a `Classification` with a
-non-empty `type` and `slug`, and passes. A `ConfigError` means `ANTHROPIC_API_KEY` is
-unset; a 404 means `ANTHROPIC_MODEL` is a retired id (use the dated fallback).
+The live test sends a one-line note, gets back a `Classification` with a non-empty `type` and `slug`, and passes.
 
-## 2. Hindsight -- retain then recall round-trips, with the vault path recoverable
+A `ConfigError` means `ANTHROPIC_API_KEY` is unset, and a 404 means `ANTHROPIC_MODEL` is a retired id, so use the dated fallback.
 
-The Hindsight seam is an HTTP client to the standalone `hindsight-api` server
-(`THOTH_HINDSIGHT_BASE_URL`, default `http://127.0.0.1:8888`). `retain` carries the
-vault-relative path as the memory's `document_id` (the in-band `SOURCE:` sentinel is only
-a fallback, because LLM fact-extraction can split a page into atomic facts and strand the
-sentinel). This check confirms the round-trip *and* that recall recovers the path.
+## 2. Hindsight: retain then recall round-trips, with the vault path recoverable
+
+The Hindsight seam is an HTTP client to the standalone `hindsight-api` server at `THOTH_HINDSIGHT_BASE_URL`, default `http://127.0.0.1:8888`.
+
+`retain` carries the vault-relative path as the memory's `document_id`. The in-band `SOURCE:` sentinel is only a fallback, because LLM fact-extraction can split a page into atomic facts and strand the sentinel.
+
+This check confirms the round-trip *and* that recall recovers the path.
 
 ```console
 $ curl -s -X POST "$THOTH_HINDSIGHT_BASE_URL/v1/default/banks/thoth/memories" \
@@ -52,22 +50,21 @@ $ curl -s -X POST "$THOTH_HINDSIGHT_BASE_URL/v1/default/banks/thoth/memories/rec
     -d '{"query":"first light smoke probe"}'
 ```
 
-Expected: the recall JSON contains a hit whose `document_id` is
-`concepts/first-light.md`, so `thoth.hindsight.parse_recall` recovers that path. Confirm
-the server is reachable on `THOTH_HINDSIGHT_BASE_URL` and the bank id matches
-`THOTH_HINDSIGHT_BANK`. The live suite does the same round-trip through
-`thoth.hindsight.Hindsight`:
+The recall JSON should contain a hit whose `document_id` is `concepts/first-light.md`, so `thoth.hindsight.parse_recall` recovers that path.
+
+Confirm the server is reachable on `THOTH_HINDSIGHT_BASE_URL` and the bank id matches `THOTH_HINDSIGHT_BANK`.
+
+The live suite does the same round-trip through `thoth.hindsight.Hindsight`:
 
 ```console
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k hindsight
 ```
 
-## 3. Slack -- Socket Mode connects and a channel post round-trips capture+reply
+## 3. Slack: Socket Mode connects and a channel post round-trips capture and reply
 
-This step assumes the Slack app already exists, the tokens are in `~/.thoth/.env`, and the
-bot has been `/invite`d to the private capture channel (`SLACK_CAPTURE_CHANNEL`). If you
-have not set that up yet, do {doc}`slack-setup` first (it creates the app from an embedded
-manifest, turns on Socket Mode, creates the channel, and lists the env vars thoth reads).
+This step assumes the Slack app already exists, the tokens are in `~/.thoth/.env`, and the bot has been `/invite`d to the private capture channel named by `SLACK_CAPTURE_CHANNEL`.
+
+If you have not set that up yet, do {doc}`slack-setup` first. It creates the app from an embedded manifest, turns on Socket Mode, creates the channel, and lists the env vars thoth reads.
 
 Start the daemon, then post in the capture channel from an allow-listed account.
 
@@ -75,7 +72,7 @@ Start the daemon, then post in the capture channel from an allow-listed account.
 $ thoth slack
 ```
 
-Then, in the capture channel (from a `SLACK_ALLOWED_USERS` account):
+Then, in the capture channel, from a `SLACK_ALLOWED_USERS` account:
 
 ```text
 - [ ] post "capture: first light test" -> bot replies IN A THREAD with an obsidian:// link
@@ -84,18 +81,17 @@ Then, in the capture channel (from a `SLACK_ALLOWED_USERS` account):
 - [ ] logs show "connected" (Socket Mode) and no auth errors
 ```
 
-Expected: a threaded reply within a few seconds. A `ConfigError` for `SLACK_BOT_TOKEN` /
-`SLACK_APP_TOKEN` / `SLACK_CAPTURE_CHANNEL` means that variable is missing; silence usually
-means the app token lacks Socket Mode, the bot was not invited to the channel, or
-`SLACK_CAPTURE_CHANNEL` is not the channel you posted in. Stop with `Ctrl-C` once it works.
+Expect a threaded reply within a few seconds.
 
-## 4. MCP -- the pkm_* tools list and one executes over the HTTP socket
+A `ConfigError` for `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` or `SLACK_CAPTURE_CHANNEL` means that variable is missing. Silence usually means the app token lacks Socket Mode, the bot was not invited to the channel, or `SLACK_CAPTURE_CHANNEL` is not the channel you posted in.
 
-The MCP server is the bearer-authenticated HTTP socket from
-{doc}`mcp-server-setup` (`thoth-mcp.service`, `127.0.0.1:8765`). With the unit
-running and a `THOTH_MCP_API_KEYS` bearer set, point a connected client (Claude
-Code via `claude mcp add --transport http …`, or claude.ai through the tunnel)
-at it:
+Stop with `Ctrl-C` once it works.
+
+## 4. MCP: the pkm_* tools list and one executes over the HTTP socket
+
+The MCP server is the bearer-authenticated HTTP socket from {doc}`mcp-server-setup`, meaning `thoth-mcp.service` on `127.0.0.1:8765`.
+
+With the unit running and a `THOTH_MCP_API_KEYS` bearer set, point a connected client at it. That is Claude Code via `claude mcp add --transport http …`, or claude.ai through the tunnel:
 
 ```text
 - [ ] tools/list returns the seven pkm_* tools (pkm_search, pkm_ingest,
@@ -103,14 +99,15 @@ at it:
 - [ ] pkm_recent (days=7) executes and returns recent pages
 ```
 
-Expected: the seven tools enumerate and `pkm_recent` returns without error. The live suite
-builds the server in-process and asserts the registered tool set:
+The seven tools should enumerate and `pkm_recent` should return without error.
+
+The live suite builds the server in-process and asserts the registered tool set:
 
 ```console
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k mcp
 ```
 
-## 5. Firecrawl -- one extract
+## 5. Firecrawl: one extract
 
 URL ingest uses Firecrawl to extract clean markdown from a public page.
 
@@ -118,25 +115,20 @@ URL ingest uses Firecrawl to extract clean markdown from a public page.
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live -k firecrawl
 ```
 
-Expected: the Firecrawl extract returns non-empty markdown for a stable public URL. An
-`ExtractError` mentioning a missing key means `FIRECRAWL_API_KEY` is unset.
+The Firecrawl extract should return non-empty markdown for a stable public URL. An `ExtractError` mentioning a missing key means `FIRECRAWL_API_KEY` is unset.
 
-## 6. Cron entrypoints -- incremental reindex and a summary post
+## 6. Cron entrypoints: incremental reindex and a summary post
 
-The two cron-driven entrypoints (SPEC section 9, the deploy crontab) are one-shot console
-commands; run them by hand once.
+The two cron-driven entrypoints, from SPEC section 9 and the deploy crontab, are one-shot console commands. Run them by hand once.
 
 ```console
 $ thoth reindex
 $ thoth summary daily
 ```
 
-Expected: `reindex` prints a `changed=/skipped=` line and is near-instant on a
-quiet vault (it is incremental -- unchanged pages are skipped via the body-`sha256`
-manifest); on success it chains the optional `bin/hindsight-backup.sh` snapshot (a no-op
-unless `THOTH_HINDSIGHT_BACKUP=1`). `summary daily` composes the digest from the vault and
-posts it to `SLACK_SUMMARY_CHANNEL`; check the channel for the post and the heartbeat
-"still alive" line.
+`reindex` prints a `changed=/skipped=` line and is near-instant on a quiet vault, because it is incremental and unchanged pages are skipped via the body-`sha256` manifest. On success it chains the optional `bin/hindsight-backup.sh` snapshot, which is a no-op unless `THOTH_HINDSIGHT_BACKUP=1`.
+
+`summary daily` composes the digest from the vault and posts it to `SLACK_SUMMARY_CHANNEL`. Check the channel for the post and the heartbeat "still alive" line.
 
 ```text
 - [ ] `thoth reindex` exits 0 with a changed=/skipped= line
@@ -146,14 +138,14 @@ posts it to `SLACK_SUMMARY_CHANNEL`; check the channel for the post and the hear
 
 ## Running the whole live suite
 
-All of the per-boundary tests above live in one opt-in module that is **skipped offline**
-(so CI stays green) and only runs when `THOTH_LIVE_SMOKE=1` is set. To run every live
-smoke test in one go on the VPS and get a pass/fail report:
+All of the per-boundary tests above live in one opt-in module that is skipped offline, so CI stays green, and it runs only when `THOTH_LIVE_SMOKE=1` is set.
+
+To run every live smoke test in one go on the VPS and get a pass or fail report:
 
 ```console
 $ THOTH_LIVE_SMOKE=1 uv run pytest -m live
 ```
 
-Without the env flag the module is collected but every test is skipped, so the same
-command in CI (or on a dev box) reports all-skipped and passes. Clean up the throwaway
-`concepts/first-light.md` page afterwards if you created one.
+Without the env flag the module is collected but every test is skipped, so the same command in CI, or on a dev box, reports all-skipped and passes.
+
+Clean up the throwaway `concepts/first-light.md` page afterwards if you created one.

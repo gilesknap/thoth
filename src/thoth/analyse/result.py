@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# The coarse image kinds the folded analyse call may report (ADR 0009). Anything the
-# model returns outside this set is normalised to "" (unknown), so the ingest pass never
-# branches on an unexpected value.
+# The coarse image kinds the folded analyse call may report (ADR 0009). Anything else
+# normalises to "" so the ingest pass never branches on an unexpected value
 _VALID_KINDS: frozenset[str] = frozenset({"diagram", "document", "photo", "screenshot"})
 
 
@@ -16,23 +15,19 @@ class Analysis:
     """The structured result of analysing one binary capture.
 
     Attributes:
-        text: The OCR'd / extracted text of the asset (an image's legible text, a PDF's
-            body text). Empty when the asset carries no text.
-        description: A structured natural-language description of the asset's content
-            (what the image shows / what the document is about).
-        summary: A short one-line summary suitable for a title / log subject.
-        suggested_type: A routing hint -- one of the four content types
-            (:data:`thoth.vault.TYPE_ENUMERATION`) -- so a whiteboard photo is routed to
-            a knowledge folder rather than defaulting to ``memories/``. ``None`` when
-            the model offered no usable hint.
-        entities: Named entities the model found (feed the candidate fetch).
-        concepts: Named concepts the model found (feed the candidate fetch).
-        kind: The coarse image kind the model reported -- one of ``"diagram"``,
-            ``"document"``, ``"photo"`` or ``"screenshot"``, ``""`` when unknown. This
-            single vision call folds the kind detection in (ADR 0009) rather than paying
-            a separate pre-call: the ingest pass branches on it to derive a best-effort
-            Excalidraw reconstruction of a hand-drawn ``diagram``, and to ask for a
-            faithful structured-markdown transcription of a ``document``.
+        text: The extracted text of the asset, empty when it carries none
+        description: A natural-language description of what the asset shows
+        summary: A short one-line summary, usable as a title or log subject
+        suggested_type: A routing hint, one of the four content types, so a whiteboard
+            photo lands in a knowledge folder rather than ``memories/``. ``None`` when
+            the model offered no usable hint
+        entities: Named entities the model found, feeding the candidate fetch
+        concepts: Named concepts the model found, feeding the candidate fetch
+        kind: The coarse image kind, one of ``diagram``, ``document``, ``photo`` or
+            ``screenshot``, and ``""`` when unknown. The single vision call folds this
+            detection in rather than paying a separate pre-call (ADR 0009), and ingest
+            branches on it to reconstruct a hand-drawn diagram in Excalidraw and to ask
+            for a structured-markdown transcription of a document
     """
 
     text: str = ""
@@ -44,17 +39,16 @@ class Analysis:
     kind: str = ""
 
     def is_empty(self) -> bool:
-        """Return ``True`` when the analysis carries no usable extracted content."""
+        """True when the analysis carries no usable extracted content."""
         return not (self.text.strip() or self.description.strip())
 
     def body_markdown(self) -> str:
-        """Render the analysis as a markdown block for the curated page body.
+        """Renders the analysis as a markdown block for the curated page body.
 
-        The block holds the real extracted meaning -- the description followed by the
-        verbatim OCR/extracted text under an ``Extracted text`` heading -- so the
-        curated page is searchable on the asset's content, not a blind stub. Returns an
-        empty string when there is nothing extracted (the caller then keeps its own
-        body).
+        The block holds the real extracted meaning, the description followed by the
+        verbatim text under an ``Extracted text`` heading, so the curated page is
+        searchable on the asset's content rather than a blind stub. Returns an empty
+        string when nothing was extracted, and the caller then keeps its own body.
         """
         parts: list[str] = []
         if self.description.strip():
@@ -65,7 +59,7 @@ class Analysis:
 
 
 def _analysis_from_obj(obj: dict[str, Any]) -> Analysis:
-    """Build an :class:`Analysis` from a parsed JSON object (missing keys tolerated)."""
+    """Builds an :class:`Analysis` from parsed JSON, tolerating missing keys."""
     suggested = obj.get("suggested_type")
     return Analysis(
         text=_as_str(obj.get("text")),
@@ -79,22 +73,23 @@ def _analysis_from_obj(obj: dict[str, Any]) -> Analysis:
 
 
 def _as_str(value: object) -> str:
-    """Coerce a JSON value to a string (empty string for a non-string)."""
+    """Coerces a JSON value to a string, empty for anything that is not one."""
     return value if isinstance(value, str) else ""
 
 
 def _as_str_list(value: object) -> list[str]:
-    """Return ``value`` as a list of non-empty strings (empty list otherwise)."""
+    """Returns ``value`` as a list of non-empty strings, empty for anything else."""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
 
 
 def _as_kind(value: object) -> str:
-    """Normalise a reported image kind to one of the four valid values or ``""``.
+    """Normalises a reported image kind to one of the four valid values or ``""``.
 
-    Anything outside :data:`_VALID_KINDS` (a missing key, a typo, an unexpected label)
-    collapses to ``""`` so the ingest pass never branches on a surprise value.
+    Anything outside :data:`_VALID_KINDS`, whether a missing key, a typo or an
+    unexpected label, collapses to ``""`` so the ingest pass never branches on a
+    surprise value.
     """
     if isinstance(value, str) and value in _VALID_KINDS:
         return value

@@ -1,54 +1,42 @@
 """The bounded-pass capture pipeline that files an inbound item into the vault.
 
 This module is the orchestration core of capture (SPEC section 6). It runs a fixed,
-ordered sequence of *validated passes* over one :class:`Capture` and never lets the
-appliance LLM touch disk or the network directly: every byte that reaches the vault
-goes through :class:`thoth.vault.Vault` (so paths are confined and the folder/type/slug
-contract is enforced) and every web fetch goes through the SSRF-guarded
+ordered sequence of validated passes over one :class:`Capture` and never lets the
+appliance LLM touch disk or the network directly: every byte that reaches the vault goes
+through :class:`thoth.vault.Vault`, so paths are confined and the folder/type/slug
+contract is enforced, and every web fetch goes through the SSRF-guarded
 :class:`thoth.extract.Extractor`. git is a deterministic collaborator, never an LLM
-tool. The passes are:
+tool.
 
-0. **orient** -- :meth:`thoth.git_sync.GitSync.pull` so writes land on current state.
-0b. **persist inbound (durable hold)** -- :meth:`Ingestor.persist_inbound` extracts the
-   inbound text/bytes (the only network step) and writes a durable ``inbox/`` holding
-   page keyed on the body SHA-256 *before any LLM call*, so an Anthropic outage can
-   never lose a capture (per issue #14 -- capture durability decoupled from the
-   classify call; SPEC section 6 "pass 0b").
-   If the later classify/curate cannot run because the LLM is unavailable, the held raw
-   is committed and a *deferred-curation* report is returned for a later reindex/sweep;
-   on success the now-superseded holding page is removed.
-1. **classify** -- one cheap Claude call -> a :class:`Classification` whose ``type`` and
-   ``slug`` are validated through :class:`~thoth.vault.Vault` before use.
-2. **capture raw** -- :class:`~thoth.extract.Extractor` by kind (reusing the text
-   already extracted in pass 0b, so the source is fetched once); the body SHA-256 is
-   compared to any existing raw page's stored digest *before* writing, so an identical
-   re-ingest is skipped and a changed body is flagged as drift (the idempotency rule).
-   A binary (image/PDF) capture applies the same rule over the *bytes* SHA-256: an
-   already-present asset with matching bytes is skipped, and a byte mismatch at the
-   same slug is surfaced as drift rather than overwriting (SPEC step 2 'Skip if sha256
-   exists'). A PDF additionally lands a ``raw/papers/<slug>.md`` page so the curate
-   pass and retrieval have a searchable text body; full PDF text extraction is deferred
-   to Phase 3, so the page records the provenance plus a pointer to the kept binary.
-3. **fetch candidates** -- a read-only lexical scan for each named entity/concept.
-4. **curate** -- a second Claude call returning a file-plan that is validated by
-   :func:`thoth.llm.validate_file_plan` *and* re-validated through the
-   :class:`~thoth.vault.Vault` write helpers, then written.
-5. **navigation** -- :meth:`~thoth.vault.Vault.append_log` for every file touched (a
-   reference page's one-line gloss rides in its own ``summary`` frontmatter, so there is
-   no separate ``index.md`` catalog pass; ADR 0008).
-6. **retain** -- :meth:`thoth.hindsight.Hindsight.retain` per curated page, then a
-   ``probe`` that the page came back.
-7. **commit** -- :meth:`~thoth.git_sync.GitSync.commit`; a rebase conflict is surfaced
-   loudly (never ``--force``).
-8. **report** -- a structured :class:`IngestReport` carrying the touched paths plus
-   ``obsidian://`` links built by the *harness* (via
-   :meth:`~thoth.vault.Vault.obsidian_uri`) so they cannot be fabricated by the model.
+0.  **orient** -- pull, so writes land on current state.
+0b. **persist inbound** -- extract the text or bytes, the only network step, and write a
+    durable ``inbox/`` holding page keyed on the body SHA-256 before any LLM call, so an
+    Anthropic outage can never lose a capture (issue #14). If classify and curate then
+    cannot run, the held raw is committed and a deferred-curation report is returned for
+    a later sweep; on success the superseded hold is removed.
+1.  **classify** -- one cheap Claude call, whose ``type`` and ``slug`` are validated
+    through the vault before use.
+2.  **capture raw** -- extract by kind, reusing pass 0b's text so the source is fetched
+    once, and compare the body SHA-256 to any existing raw page's digest before writing,
+    so an identical re-ingest is skipped and a changed body is flagged as drift. A
+    binary applies the same rule over the bytes digest. A PDF also lands a
+    ``raw/papers/<slug>.md`` page so curate and retrieval have a searchable body.
+3.  **fetch candidates** -- a read-only lexical scan per named entity or concept.
+4.  **curate** -- a second Claude call, whose file-plan is validated by
+    :func:`thoth.llm.validate_file_plan` and re-validated through the vault write
+    helpers before it is written.
+5.  **navigation** -- append to the log for every file touched. A reference page's gloss
+    rides in its own ``summary`` frontmatter, so there is no separate ``index.md``
+    catalog pass (ADR 0008).
+6.  **retain** -- retain each curated page in Hindsight, then probe that it came back.
+7.  **commit** -- surface a rebase conflict loudly, and never force.
+8.  **report** -- an :class:`IngestReport` of the touched paths plus ``obsidian://``
+    links built by the harness, so they cannot be fabricated by the model.
 
-All collaborators (``vault``, ``llm``, ``extractor``, ``hindsight``, ``git``) are
-injected, so a test substitutes fakes for every external boundary and a real
-:class:`~thoth.vault.Vault` over a temporary vault. Only the standard library plus
-``thoth.*`` are imported at module top level, so importing this module at pytest
-collection is always safe (the heavy clients live behind the injected seams).
+Every collaborator is injected, so a test substitutes fakes for each external boundary
+and a real :class:`~thoth.vault.Vault` over a temporary vault. Only the standard library
+plus ``thoth.*`` is imported at module level, so importing this at pytest collection is
+always safe and the heavy clients live behind the injected seams.
 """
 
 from ._shared import _TEXT_EXTS as _TEXT_EXTS

@@ -59,12 +59,12 @@ the real note in their own Obsidian.
 
 ## Timezone: Europe/London (GMT/BST)
 """
-"""The PKM Agent Persona system-prompt string (verbatim from the SPEC Appendix).
+"""The PKM Agent Persona system prompt, verbatim from the SPEC Appendix.
 
-It is the stable, cacheable prefix for every appliance Claude call. It encodes the
-load-bearing invariants the later phases rely on: the vault is canonical, Hindsight is
-a rebuildable index, the ``obsidian://open`` link template, the ``Europe/London``
-timezone, and the concise tone.
+It is the stable, cacheable prefix for every appliance Claude call, and it carries the
+load-bearing invariants the later phases rely on: the vault is canonical, Hindsight is a
+rebuildable index, the ``obsidian://open`` link template, the ``Europe/London`` timezone
+and the concise tone.
 """
 
 DEFAULT_MAX_TOKENS: int = 4096

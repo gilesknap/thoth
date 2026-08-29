@@ -37,49 +37,49 @@ from .responder import (
 
 logger = logging.getLogger("thoth.slack_app")
 
-# The safe routing verdict used when the gate is bypassed (no classifier wired): route
-# to the vault-only query with no keywords, so the read path greps the raw text -- the
-# safe fallback (issue #5 / #102).
+# The safe routing verdict when no classifier is wired. Route to the vault-only query
+# with no keywords, so the read path greps the raw text (issues #5 and #102)
 _QUERY_FALLBACK_DECISION: IntentDecision = IntentDecision(
     intent="query", confidence="high"
 )
 
-# The polite refusal sent to a user who is not on the allow-list, if anything at all.
+# The polite refusal sent to a user who is not on the allow-list
 _REFUSAL_TEXT: str = "Sorry, you are not authorised to use this assistant."
 
-# Appended to a confirmation when the intent gate (issue #5) routed *bare* free text to
-# capture, so a misfile is recoverable in one reply: the user can just re-send it as a
-# question. Explicit-prefix / URL / file captures never carry this -- they are
-# unambiguous, deliberate captures.
+# Appended when the intent gate (issue #5) routed bare free text to capture, so a
+# misfile is recoverable in one reply by re-sending it as a question. Explicit prefix,
+# URL and file captures never carry this, they are unambiguous
 _GATE_CAPTURE_HINT: str = (
     "_Filed as a note. If you meant to ask, just send it again as a question._"
 )
 
-# Rendered on the read paths (query/ask) when the daily LLM budget (issue #16) is spent;
-# captures still file durably (curation is deferred), but an answer needs a live model
-# call, so the user is told the cap is reached rather than left without a reply.
+# Rendered on the read paths when the daily LLM budget (issue #16) is spent. Captures
+# still file durably and defer curation, but an answer needs a live model call, so say
+# the cap is reached rather than leave the user without a reply
 _BUDGET_REACHED_TEXT: str = (
     ":money_with_wings: Daily LLM budget reached - answering is paused until tomorrow "
     "(Europe/London). Anything you capture is still saved and will be processed later."
 )
 
-# The vault ``source`` value for Slack-originated captures.
+# The vault source value for Slack-originated captures
 _SOURCE: str = "slack"
 
 
 def parse_allowed_users(raw: str | None) -> frozenset[str]:
-    """Parse ``SLACK_ALLOWED_USERS`` into a set of bare Slack user ids.
+    """Parses ``SLACK_ALLOWED_USERS`` into a set of bare Slack user ids.
 
-    Accepts a comma- and/or whitespace-separated list. Each token is trimmed of the
-    ``@`` and ``<@U...>`` mention wrappers Slack sometimes adds, so ``"<@U1>, @U2  U3"``
-    yields ``{"U1", "U2", "U3"}``. ``None`` or a blank string yields an empty set
-    (which, combined with :meth:`Handlers.is_allowed`, denies everyone -- fail-closed).
+    Accepts a comma or whitespace separated list. Each token is trimmed of the ``@`` and
+    ``<@U...>`` mention wrappers Slack sometimes adds, so ``"<@U1>, @U2  U3"`` yields
+    ``{"U1", "U2", "U3"}``.
+
+    A blank value yields an empty set, which denies everyone. That is deliberate and
+    fail-closed.
 
     Args:
-        raw: The raw environment value, or ``None`` if the variable is unset.
+        raw: The raw environment value, or None when unset.
 
     Returns:
-        A frozenset of normalised user ids.
+        The normalised user ids.
     """
     if not raw:
         return frozenset()
@@ -92,20 +92,20 @@ def parse_allowed_users(raw: str | None) -> frozenset[str]:
 
 
 class AlerterLike(Protocol):
-    """The slice of :class:`thoth.alerts.Alerter` the daemon + handlers use.
+    """The slice of :class:`thoth.alerts.Alerter` the daemon and handlers use.
 
-    Keeps :mod:`thoth.slack_app` decoupled from :mod:`thoth.alerts` (no hard import for
-    the type) so a test can inject a tiny fake recording the alerts that were posted.
+    Keeps :mod:`thoth.slack_app` decoupled from :mod:`thoth.alerts`, with no hard import
+    for the type, so a test can inject a fake that records the alerts posted.
     """
 
     def alert_exception(self, where: str, exc: BaseException) -> bool:
-        """Format and post an unhandled-exception alert from context ``where``."""
+        """Formats and posts an unhandled-exception alert."""
         ...
 
     def alert_unpushed_divergence(
         self, *, commits_ahead: int, since: datetime | None, detail: str = ...
     ) -> bool:
-        """Post the "N commits unpushed -- vault conflict" divergence alert."""
+        """Posts the "N commits unpushed" vault-conflict divergence alert."""
         ...
 
 
@@ -113,10 +113,9 @@ class AlerterLike(Protocol):
 class Handlers:
     """Pure Slack handler logic with all collaborators injected.
 
-    Holds the constructed :class:`~thoth.ingest.Ingestor` and
-    :class:`~thoth.query.QueryEngine`, the parsed allow-list, and the transient
-    :class:`EventDedupe`. Every method is unit-testable with fakes -- no live socket
-    and no ``slack_bolt`` import is required to exercise the routing/gating/rendering.
+    Holds the ingestor, the query engine, the parsed allow-list and the transient
+    dedupe. Every method is unit-testable with fakes, so exercising the routing, gating
+    and rendering needs no live socket and no ``slack_bolt`` import.
     """
 
     config: Config
@@ -130,7 +129,7 @@ class Handlers:
     capture_channel: str = ""
 
     def is_allowed(self, user_id: str) -> bool:
-        """Return ``True`` iff ``user_id`` is on the allow-list (fail-closed)."""
+        """Reports whether a user is on the allow-list, failing closed."""
         return bool(user_id) and user_id in self.allowed_users
 
     def handle_message(
@@ -139,54 +138,53 @@ class Handlers:
         say: Callable[..., None],
         client: SlackClientLike | None = None,
     ) -> None:
-        """Gate, route, and reply to a channel ``message`` event (issue #61).
+        """Gates, routes and replies to a channel message event (issue #61).
 
-        Ignores any message outside the dedicated capture channel
-        (:attr:`capture_channel`) so the bot never reacts in other conversations it has
-        been invited to; an empty :attr:`capture_channel` disables the gate (the daemon
-        enforces the configuration at startup, so this only relaxes the test/library
-        path). Ignores bot/own messages and edit/join subtypes so the daemon does not
-        loop on its own replies. Each reply is posted **in the message's thread**
-        (``thread_ts or ts``) and per-conversation state is keyed by that same thread
-        (issue #61). Enforces the allow-list (replying with a polite refusal to a known
-        but not-allowed sender) and the redelivery dedupe. Routing (SPEC section 6):
+        Messages outside the dedicated capture channel are ignored, so the bot never
+        reacts in other conversations it was invited to. An empty capture channel
+        disables the gate, which only relaxes the test path because the daemon enforces
+        the setting at startup.
 
-        * a **file upload** (a ``message`` with subtype ``file_share``) downloads and
-          ingests every attached file via :meth:`_ingest_uploaded_files` -- this event
-          carries the full file objects (download URL + name) and a usable ``channel``,
-          unlike the bare ``file_shared`` event the appliance ignores;
-        * a bare URL -- or text with a ``capture:``/``note:``/``save:`` prefix -- is an
-          ingest (:meth:`thoth.ingest.Ingestor.ingest`);
-        * any other **bare free text** is routed by the intent gate
-          (:meth:`_route_free_text`, issue #5): an injected
-          :class:`~thoth.intent.IntentClassifier` chooses capture / vault-query. With no
-          classifier wired the safe fallback holds -- the vault-only
-          :meth:`thoth.query.QueryEngine.answer`.
+        Bot and own messages and the edit and join subtypes are ignored, so the daemon
+        does not loop on its own replies.
+
+        Replies are posted in the message's thread and per-conversation state is keyed
+        by that thread. The allow-list and the redelivery dedupe are enforced here.
+        Routing follows SPEC section 6:
+
+        * a **file upload**, a message with the ``file_share`` subtype, downloads and
+          ingests every attached file. That event carries the full file objects and a
+          usable channel, unlike the bare ``file_shared`` event the appliance ignores.
+        * a **bare URL**, or text with a ``capture:``, ``note:`` or ``save:`` prefix, is
+          an ingest.
+        * any other **bare free text** goes through the intent gate (issue #5), where an
+          injected classifier chooses capture or vault-query. With no classifier wired
+          the safe vault-only answer holds.
 
         A surfaced :class:`~thoth.git_sync.VaultConflictError` is rendered fail-loud
         rather than swallowed.
 
         Args:
             event: The Slack event payload.
-            say: A callable that posts a reply string back to the channel; it accepts an
-                optional ``thread_ts`` keyword so the reply can be threaded.
-            client: The Slack web client (needed to download an uploaded file's bytes);
-                ``None`` for the text-only paths, which never touch it.
+            say: Callable posting a reply, accepting an optional ``thread_ts``.
+            client: Slack web client for downloading an upload's bytes, or None on
+                the text-only paths, which never touch it.
         """
         if not _should_handle(event):
             return
         channel = _channel(event)
         if self.capture_channel and channel != self.capture_channel:
-            # Not our dedicated capture channel: silently ignore (no refusal, no work).
+            # Not our dedicated capture channel, so ignore it with no refusal and no
+            # work
             return
         thread = _conversation_key(event)
         responder = Responder(say, client=client, channel=channel, thread_ts=thread)
         user = str(event.get("user", ""))
         if not self.is_allowed(user):
-            # Operator-readable refusal line (issue #52): names the rejected user id and
-            # the allow-list size. A size of 0 means the allow-list is empty -- the
-            # fail-closed deny-everyone case (SLACK_ALLOWED_USERS unset / not reaching
-            # this process), the usual cause of an unexpected "not authorised".
+            # Operator-readable refusal (issue #52) naming the rejected id and the
+            # allow-list size. A size of 0 is the fail-closed deny-everyone case, where
+            # SLACK_ALLOWED_USERS is unset or never reached this process, and is the
+            # usual cause of an unexpected "not authorised"
             logger.info(
                 "slack refused message from user %r (allow-list has %d id(s))",
                 user,
@@ -220,31 +218,23 @@ class Handlers:
         client: SlackClientLike | None,
         responder: Responder,
     ) -> None:
-        """Download and ingest the files on a ``file_share`` message (SPEC section 6).
+        """Downloads and ingests the files on a ``file_share`` message.
 
-        The ``message``/``file_share`` event carries the full ``files`` objects -- each
-        with a private download URL and ``name`` -- and a usable ``channel`` to reply
-        in. Each file is downloaded server-side to a temporary path (never base64) and
-        the ingestor moves binaries into the vault via ``save_asset``. A missing URL or
-        a download failure is surfaced fail-loud **per file** so the rest still ingest.
+        This event carries the full file objects, each with a private download URL and
+        name, plus a usable channel to reply in. Each file is downloaded server-side to
+        a temporary path, never base64. A missing URL or a failed download is surfaced
+        fail-loud per file, so the rest still ingest.
 
-        A single Slack message that attaches **several images at once** is the natural
-        unit of intent (issue #84): the user meant them as one thing, so an all-image
-        batch is captured as ONE :class:`~thoth.ingest.Capture` -- the first image is
-        the primary ``path``, the rest ride on ``extra_paths`` and are saved as extra
-        assets under the same slug and embedded in the same curated page, giving the
-        batch one shared summary + one tag set. A single-file message is unchanged, and
-        a heterogeneous batch (mixed images with PDFs/text) is still ingested per file
-        -- the per-page-type classification of mixed kinds is deferred (issue #84 open
-        questions).
+        A message attaching several images at once is one unit of intent (issue #84), so
+        an all-image batch becomes one capture with one summary and one tag set. A
+        heterogeneous batch is still ingested per file, because per-type classification
+        of mixed kinds is deferred.
 
-        A text caption typed alongside the upload (issue #130) is threaded onto the
-        :class:`~thoth.ingest.Capture` as its ``text`` so it reaches the model
-        *alongside* the file's own OCR/analysis -- the caption augments, it does not
-        replace, the image content. A batch shares the one caption (one unit of
-        intent, per #84). A capture-prefix (``note:``/``save:``) in the caption does
-        not change routing for an upload: a file_share is always a capture, so the
-        prefix is left verbatim in the caption text.
+        A caption typed alongside the upload (issue #130) rides on the capture as its
+        text, so it reaches the model alongside the file's own analysis. The caption
+        augments the image content rather than replacing it, and a batch shares the one
+        caption. A capture prefix in a caption is left verbatim, because a file_share is
+        always a capture.
         """
         files = event.get("files")
         if not isinstance(files, list) or not files:
@@ -267,15 +257,15 @@ class Handlers:
         responder: Responder,
         caption: str | None = None,
     ) -> None:
-        """Capture a multi-image Slack message as ONE capture/page (issue #84).
+        """Captures a multi-image Slack message as one capture and page (issue #84).
 
-        Downloads every image server-side (fail-loud per file, so one bad download does
-        not sink the batch), then hands the ingestor a single
-        :class:`~thoth.ingest.Capture` whose primary ``path`` is the first image and
-        whose ``extra_paths`` carry the rest in upload order. The batch is curated once
-        -- one summary, one tag set, every image embedded in the one page. A batch that
-        survives with only a single downloadable file falls back to the normal
-        single-file ingest.
+        Every image is downloaded server-side, fail-loud per file so one bad download
+        does not sink the batch. The first image becomes the primary path and the rest
+        ride on ``extra_paths`` in upload order.
+
+        The batch is curated once, giving one summary, one tag set and every image
+        embedded in the one page. A batch left with a single downloadable file falls
+        back to the normal single-file ingest.
         """
         downloaded: list[tuple[Path, str | None]] = []
         for file_info in infos:
@@ -302,7 +292,7 @@ class Handlers:
         responder: Responder,
         caption: str | None = None,
     ) -> None:
-        """Download one Slack file object to a temp path and ingest it (fail-loud)."""
+        """Downloads one Slack file object to a temp path and ingests it, fail-loud."""
         staged = _download_to_tmp(file_info, client, responder)
         if staged is None:
             return
@@ -313,30 +303,26 @@ class Handlers:
     # ---- internals ---------------------------------------------------------------
 
     def _route_free_text(self, text: str, source: str, responder: Responder) -> None:
-        """Route bare free text through the intent gate (issue #5).
+        """Routes bare free text through the intent gate (issue #5).
 
-        Only reached for a message that hit none of the deterministic short-circuits
-        (``capture:``/``note:``/``save:`` prefix, bare URL, shared file). The injected
-        :class:`~thoth.intent.IntentClassifier` -- when wired -- chooses the engine:
+        Only reached when a message hit none of the deterministic short-circuits: a
+        capture prefix, a bare URL, or a shared file. The injected classifier, when
+        wired, chooses the engine:
 
-        * ``capture`` files the text as a note, appending :data:`_GATE_CAPTURE_HINT`
-          so a misfile is recoverable in one reply;
-        * ``query`` (the safe fallback) runs the vault-only
-          :meth:`thoth.query.QueryEngine.answer`.
+        * ``capture`` files the text as a note, appending :data:`_GATE_CAPTURE_HINT` so
+          a misfile is recoverable in one reply;
+        * ``query``, the safe fallback, runs the vault-only answer.
 
-        With no classifier wired the route is always ``query`` (the safe vault path).
-
-        The gate's keywords (issue #102) ride along on the :class:`~thoth.intent.
-        IntentDecision` and are passed to :meth:`_do_query` as ``search_terms`` to seed
-        the lexical grep; capture ignores them (it has its own classify/curate
-        enrichment). On the no-classifier ``query`` fallback there are no keywords, so
-        the read path greps the raw text.
+        With no classifier wired the route is always ``query``. The gate's keywords
+        (issue #102) ride along on the decision and seed the read path's lexical grep.
+        Capture ignores them, because it has its own classify and curate enrichment, and
+        the no-classifier fallback has none, so the read path greps the raw text.
         """
         decision = self._free_text_route(text)
         route = decision.route
         keywords = list(decision.keywords)
-        # Concise operator-readable line (issue #52): the engine bare free text was
-        # routed to (capture / query), so a misroute is visible in the log.
+        # Operator-readable line (issue #52) naming the engine bare free text was
+        # routed to, so a misroute is visible in the log
         logger.info("slack routed free text to %s", route)
         if route == "capture":
             capture = Capture(text=text, source=source)
@@ -345,15 +331,15 @@ class Handlers:
             self._do_query(text, responder, search_terms=keywords)
 
     def _free_text_route(self, text: str) -> IntentDecision:
-        """Pick the routing verdict for bare free text (issue #5 + #102 keywords).
+        """Picks the routing verdict for bare free text (issues #5 and #102).
 
-        Returns the safe ``query`` decision (no keywords) when no classifier is wired,
-        so the fallback in :meth:`_route_free_text` is the vault-only path. Otherwise it
-        consults the gate and returns the full :class:`~thoth.intent.IntentDecision`,
-        whose :attr:`~thoth.intent.IntentDecision.route` already collapses a low-
-        confidence verdict to the safe ``query`` and whose ``keywords`` seed the read
-        path's grep (issue #102). The classifier is itself total, so a model/parse
-        failure also yields the safe default rather than raising.
+        With no classifier wired the safe query decision holds, carrying no keywords, so
+        the fallback is the vault-only path.
+
+        Otherwise the gate is consulted. Its route already collapses a low-confidence
+        verdict to the safe query, and its keywords seed the read path's grep. The
+        classifier is total, so a model or parse failure also yields the safe default
+        rather than raising.
         """
         if self.intent_classifier is None:
             return _QUERY_FALLBACK_DECISION
@@ -366,29 +352,22 @@ class Handlers:
         *,
         hint: str | None = None,
     ) -> None:
-        """Run an ingest and reply; render a conflict/error fail-loud, never crash.
+        """Runs an ingest and replies, rendering a conflict or error fail-loud.
 
-        Posts an immediate ":hourglass_flowing_sand: Filing…" placeholder (issue #34,
-        Slice B) so a multi-second capture is not a dead pause, then edits it in place
-        with the final confirmation (or the conflict/error line). When the responder has
-        no web client (the text-only/test paths) this degrades to a single reply.
+        An immediate placeholder is posted (issue #34) so a multi-second capture is not
+        a dead pause, then edited in place with the final line. A responder with no web
+        client degrades to a single reply.
 
-        A vault conflict (the ingestor's :attr:`~thoth.ingest.IngestReport.conflict`, or
-        a raised :class:`~thoth.git_sync.VaultConflictError`) means content was filed
-        locally but the push was refused, so the local branch now diverges from the
-        remote. Beyond the in-thread ``:warning:`` reply, an explicit
-        unpushed-divergence alert is routed to the errors-to-Slack target (issue #15) --
-        the daily channel the user actually watches -- with the commits-ahead count +
-        oldest-unpushed time computed from git.
-
-        ``hint`` is an optional extra line appended to the confirmation; the intent gate
-        passes :data:`_GATE_CAPTURE_HINT` so a gate-routed capture is recoverable (issue
-        #5). It is not appended to the early conflict/error replies above.
+        A vault conflict means content was filed locally but the push was refused, so
+        the branch now diverges. Beyond the in-thread warning, an explicit divergence
+        alert goes to the errors-to-Slack target (issue #15), the channel the user
+        actually watches, carrying the commits-ahead count and oldest-unpushed time from
+        git.
         """
         responder.progress(_INGEST_PLACEHOLDER)
 
         def on_phase(label: str) -> None:
-            """Stream a per-phase line into the placeholder (#137, best-effort)."""
+            """Streams a per-phase line into the placeholder, best-effort (#137)."""
             responder.update(f"{_INGEST_PLACEHOLDER} — {label}")
 
         try:
@@ -412,19 +391,17 @@ class Handlers:
         responder.finish(message)
 
     def _alert_divergence(self, detail: str) -> None:
-        """Route an unpushed-divergence alert to the errors-to-Slack target (issue #15).
+        """Routes an unpushed-divergence alert to the errors-to-Slack target (#15).
 
-        Best-effort and total: with no alerter wired it no-ops; the commits-ahead count
-        and oldest-unpushed time are read from git via :meth:`~thoth.git_sync.GitSync.
-        divergence` (which itself swallows git errors), so this never raises out of a
-        conflict handler.
+        Best-effort and total. With no alerter wired it no-ops, and the counts come from
+        :meth:`~thoth.git_sync.GitSync.divergence`, which swallows git errors itself, so
+        this never raises out of a conflict handler.
         """
         if self.alerter is None:
             return
-        # Prefer the explicitly-injected GitSync; otherwise fall back to the one the
-        # ingestor already holds (a real production Ingestor always has ``_git``). The
-        # call is duck-typed so a test fake exposing ``divergence`` works without being
-        # a GitSync subclass.
+        # Prefer the injected GitSync, else fall back to the one the ingestor holds, as
+        # a real Ingestor always has _git. The call is duck-typed so a fake exposing
+        # divergence works without subclassing GitSync
         git = self.git if self.git is not None else getattr(self.ingestor, "_git", None)
         ahead, since = -1, None
         if git is not None and hasattr(git, "divergence"):
@@ -445,14 +422,11 @@ class Handlers:
         *,
         search_terms: list[str] | None = None,
     ) -> None:
-        """Run a vault-only query and reply; render an error fail-loud, never crash.
+        """Runs a vault-only query and replies, rendering an error fail-loud.
 
-        Posts an immediate ":mag: Looking…" placeholder (issue #34, Slice B) then edits
-        it in place with the rendered answer; degrades to a single reply on a
-        client-less path. The ``Sources:`` block lists only the pages the model said it
-        used (issue #34's ``USED:`` filter, parsed in :mod:`thoth.query`).
-        ``search_terms`` are the intent gate's keywords (issue #102): they seed the grep
-        while the prose is composed from ``text``; empty/``None`` greps ``text`` itself.
+        An immediate placeholder is posted (issue #34) then edited in place with the
+        rendered answer, degrading to a single reply on a client-less path. The sources
+        block lists only the pages the model said it used.
         """
         responder.progress(_ASK_PLACEHOLDER)
         try:
@@ -471,20 +445,16 @@ def _build_handlers(
     ingestor: Ingestor,
     query_engine: QueryEngine,
 ) -> tuple[Handlers, str]:
-    """Construct the Slack :class:`Handlers` graph; return it with the bot token.
+    """Constructs the Slack handler graph and returns it with the bot token.
 
-    Factored out of :func:`~thoth.slack_app.build_app` so the startup wiring -- the
-    fail-fast required-config checks (both Slack tokens and, issue #61,
-    ``SLACK_CAPTURE_CHANNEL``) and the collaborator construction -- is reachable and
-    unit-testable **without** importing the optional ``slack_bolt`` dependency that
-    :func:`~thoth.slack_app.build_app` needs for the ``App`` itself (absent in CI). The
-    required-config checks run **first**, before any collaborator is built, so a missing
-    token / capture channel raises :class:`~thoth.config.ConfigError` at startup rather
-    than after side effects (e.g. opening the state DB).
+    Factored out of :func:`~thoth.slack_app.build_app` so the startup wiring is
+    reachable and unit-testable without importing the optional ``slack_bolt``
+    dependency, which is absent in CI. The required-config checks run first, before any
+    collaborator is built, so a missing token or capture channel raises at startup
+    rather than after a side effect such as opening the state DB.
 
     Returns:
-        A ``(handlers, bot_token)`` pair: the wired :class:`Handlers` and the Slack bot
-        token :func:`~thoth.slack_app.build_app` passes to the ``App``.
+        The wired handlers and the Slack bot token for the app.
     """
     from thoth.alerts import make_alerter
     from thoth.budget import make_budget_guard
@@ -492,41 +462,39 @@ def _build_handlers(
     from thoth.llm import LLM
 
     bot_token, _ = config.require_slack()
-    # Fail fast at startup if the dedicated capture channel is unset (issue #61): the
-    # daemon has no DM fallback, so without it there is nowhere to listen.
+    # Fail fast if the capture channel is unset (issue #61). The daemon has no DM
+    # fallback, so without it there is nowhere to listen
     capture_channel = config.require_slack_capture_channel()
-    # The daily cost guard (issue #16) also caps the intent gate's cheap Haiku calls; it
-    # shares the same state.db counters as the ingest/query graph and alerts once per
-    # day via the same errors-to-Slack target the Handlers use.
+    # The daily cost guard (issue #16) also caps the intent gate's cheap calls. It
+    # shares the state.db counters with the ingest and query graph and alerts once a day
+    # through the same errors-to-Slack target
     alerter = make_alerter(config)
     intent_guard = make_budget_guard(config, alerter=alerter)
     handlers = Handlers(
         config=config,
         ingestor=ingestor,
         query_engine=query_engine,
-        # Resolve the allow-list from the dotenv-seeded config, NOT os.environ directly:
-        # the value must work whether the daemon was started by systemd (which exports
-        # the .env) or run by hand relying on ~/.thoth/.env (dotenv-only). Reading
-        # os.environ alone would yield an empty -- fail-closed, deny-everyone -- list on
-        # the manual path, unlike the rest of the Slack config (issue #61).
+        # Resolve the allow-list from the dotenv-seeded config rather than os.environ.
+        # It must work whether systemd started the daemon, exporting the .env, or it was
+        # run by hand relying on the dotenv alone. Reading os.environ would give an
+        # empty deny-everyone list on the manual path (issue #61)
         allowed_users=parse_allowed_users(config.slack_allowed_users),
-        # The one private channel the daemon listens/replies in; messages elsewhere are
-        # ignored (issue #61).
+        # The one private channel the daemon listens and replies in, everything
+        # elsewhere is ignored (issue #61)
         capture_channel=capture_channel,
-        # Free-text intent gate (issue #5): one cheap Haiku call routes bare prose to
-        # capture / vault-query instead of always defaulting to query. Its own lazy LLM
-        # client (a different, cheaper model than the curate Sonnet); the model is
-        # overridable without a redeploy via THOTH_INTENT_MODEL.
+        # Free-text intent gate (issue #5). One cheap call routes bare prose to capture
+        # or vault-query instead of always defaulting to query. It holds its own lazy
+        # client on a cheaper model than curate, overridable without a redeploy
         intent_classifier=IntentClassifier(
             LLM(config, guard=intent_guard),
             model=config.intent_model or DEFAULT_INTENT_MODEL,
         ),
-        # Durable redelivery dedupe so a Slack retry across a daemon restart is still
-        # dropped (the in-memory cache alone is lost on restart, SPEC section 10).
+        # Durable redelivery dedupe, so a Slack retry across a daemon restart is still
+        # dropped. The in-memory cache alone is lost on restart (SPEC section 10)
         dedupe=EventDedupe(store=EventStore(config.state_db_path)),
-        # Errors-to-Slack target + a GitSync for the unpushed-divergence alert (#15);
-        # the ingestor already holds a GitSync, so a separate one here is only the
-        # divergence probe and need not be the same instance.
+        # Errors-to-Slack target plus a GitSync for the divergence alert (#15). The
+        # ingestor holds one already, so this one is only the divergence probe and need
+        # not be the same instance
         alerter=alerter,
         git=GitSync(config),
     )

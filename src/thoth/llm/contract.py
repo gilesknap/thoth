@@ -11,36 +11,31 @@ from thoth.vault import (
     VALID_SOURCES,
 )
 
-# Valid actions for the file-plan ``log`` block (mirrors thoth.vault.append_log).
+# Valid actions for the file-plan log block, mirroring thoth.vault.append_log
 _VALID_LOG_ACTIONS: frozenset[str] = frozenset(
     {"ingest", "create", "update", "query", "lint", "archive", "delete", "reindex"}
 )
-# Minimum outbound links every curated page should carry. Enforced by the prompt and the
-# lint orphan/broken-link checks, not the file-plan validator (issue #189).
+# Minimum outbound links per curated page, enforced by the prompt and the lint orphan
+# and broken-link checks rather than the file-plan validator (issue #189)
 _MIN_LINKS: int = 2
 
 
 def file_plan_contract_text() -> str:
-    """Render the authoritative curate file-plan contract for the curate prompt.
+    """Renders the authoritative curate file-plan contract for the curate prompt.
 
-    The curate pass asks the model for a JSON file plan, but historically gave it only
-    a one-line "return a file plan (see the file-plan schema)" instruction with the
-    schema never actually shown -- so the model guessed the envelope and **every**
-    capture was rejected by :func:`validate_file_plan` (empty ``folder``, missing
-    ``slug``/``updated``, a file path mistaken for ``source``, a malformed
-    ``log`` block). This spells out the exact JSON shape and the enums.
+    The curate pass asks the model for a JSON file plan, but historically gave it only a
+    one-line "return a file plan (see the file-plan schema)" instruction with the schema
+    never shown, so the model guessed the envelope and every capture was rejected by
+    :func:`validate_file_plan`. This spells out the exact JSON shape and the enums.
 
-    It is rendered from the **same canonical constants the validator enforces**
-    (:data:`~thoth.vault.FOLDER_TYPE_CONTRACT`, :data:`~thoth.vault.VALID_SOURCES`,
-    :data:`~thoth.vault.REQUIRED_COMMON_FIELDS`, the actionable ``status`` and
-    ``priority``/``media_type`` vocabularies, :data:`_VALID_LOG_ACTIONS`,
-    :data:`_MIN_LINKS`), so the instructions and :func:`validate_file_plan` cannot
-    drift -- a new folder/type/source/vocab-value/log-action flows into the prompt
-    automatically. The internal ``inbox`` holding folder is excluded: it is the durable
-    pre-LLM hold, never a curate target.
+    It renders from the same canonical constants the validator enforces, so the
+    instructions and :func:`validate_file_plan` cannot drift and a new folder, type,
+    source, vocabulary value or log action flows into the prompt automatically. The
+    internal ``inbox`` holding folder is excluded, because it is the durable pre-LLM
+    hold and never a curate target.
 
     Returns:
-        A multi-line contract string to embed in the curate prompt.
+        A multi-line contract string to embed in the curate prompt
     """
     offered = [folder for folder in FOLDER_TYPE_CONTRACT if folder != "inbox"]
     folder_types = ", ".join(

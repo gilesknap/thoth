@@ -9,16 +9,13 @@ class BudgetStore(_StateStore):
     """Durable, single-writer per-day call counters in the state DB (issue #16).
 
     Two tables share the disposable, not-backed-up state DB (the P1 guardrail, SPEC
-    section 10): ``daily_budget(day, kind, count)`` holds one row per (London day, kind)
-    counter, and ``budget_alerts(day, ts)`` records the single per-day "cap tripped"
-    alert claim. Keying on the calendar-day string makes the reset implicit -- a new day
-    simply has no rows yet -- and makes the counter survive a daemon restart (it is on
-    disk, not in memory).
-
-    The connection-per-operation lifecycle (WAL mode, bounded busy-timeout, no handle
-    outliving an operation) comes from the shared ``_StateStore`` base in
-    :mod:`thoth.state`; the same file backs :class:`thoth.state.EventStore` /
-    :class:`~thoth.state.MarkerStore` and the tables coexist.
+    section 10): ``daily_budget(day, kind, count)`` holds one row per London day and
+    kind, and ``budget_alerts(day, ts)`` records the single per-day cap-tripped claim.
+    Keying on the calendar-day string makes the reset implicit, since a new day simply
+    has no rows yet, and puts the counter on disk so it survives a daemon restart. The
+    connection-per-operation lifecycle comes from the shared ``_StateStore`` base in
+    :mod:`thoth.state`, and the same file backs :class:`thoth.state.EventStore` and
+    :class:`~thoth.state.MarkerStore` with the tables coexisting.
     """
 
     _SCHEMA_BUDGET: str = (
@@ -33,7 +30,7 @@ class BudgetStore(_StateStore):
     _SCHEMAS = (_SCHEMA_BUDGET, _SCHEMA_ALERTS)
 
     def total(self, day: str) -> int:
-        """Return the combined call count recorded for ``day`` across every counter."""
+        """Returns the combined call count recorded for ``day`` across every counter."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(count), 0) FROM daily_budget WHERE day = ?",
@@ -42,10 +39,10 @@ class BudgetStore(_StateStore):
         return int(row[0]) if row and row[0] is not None else 0
 
     def increment(self, day: str, kind: str, *, amount: int = 1) -> int:
-        """Add ``amount`` to ``(day, kind)``'s counter and return its new value.
+        """Adds ``amount`` to the ``(day, kind)`` counter and returns its new value.
 
-        Upserts the per-(day, kind) row so the first charge of a kind creates it and
-        later charges accumulate. Returns the counter's value after the increment.
+        The row is upserted, so the first charge of a kind creates it and later charges
+        accumulate.
         """
         with self._connect() as conn:
             conn.execute(
@@ -61,7 +58,7 @@ class BudgetStore(_StateStore):
         return int(row[0]) if row and row[0] is not None else 0
 
     def breakdown(self, day: str) -> dict[str, int]:
-        """Return ``{kind: count}`` for ``day`` (only counters that were charged)."""
+        """Returns ``{kind: count}`` for ``day``, only counters that were charged."""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT kind, count FROM daily_budget WHERE day = ?", (day,)
@@ -69,20 +66,19 @@ class BudgetStore(_StateStore):
         return {str(kind): int(count) for kind, count in rows if count is not None}
 
     def claim_alert(self, day: str, *, ts: float) -> bool:
-        """Atomically claim the one-per-day "cap tripped" alert; report if newly won.
+        """Claims the one-per-day cap-tripped alert, reporting whether it won.
 
-        Uses ``INSERT OR IGNORE`` on the ``day`` primary key as a test-and-set: the
-        first caller of the day inserts its row and gets ``True`` (post the alert);
-        every later caller is ignored and gets ``False`` (stay silent). This is what
-        makes the notification fire exactly once per day even across many blocked calls
-        and a daemon restart.
+        ``INSERT OR IGNORE`` on the ``day`` primary key is the test-and-set: the first
+        caller of the day inserts its row and posts the alert, and every later caller is
+        ignored and stays silent. That is what makes the notification fire exactly once
+        per day across many blocked calls and a daemon restart.
 
         Args:
-            day: The London calendar-day key the cap was tripped on.
-            ts: The wall-clock seconds to stamp the claim with.
+            day: The London calendar-day key the cap was tripped on
+            ts: The wall-clock seconds to stamp the claim with
 
         Returns:
-            ``True`` if this call claimed the day's alert, ``False`` if already claimed.
+            True if this call claimed the day's alert, False if it was already claimed
         """
         with self._connect() as conn:
             cursor = conn.execute(

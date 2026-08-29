@@ -1,46 +1,29 @@
-"""The daily LLM spend guard: a persistent, fail-safe cost circuit-breaker (issue #16).
+"""The daily LLM spend guard, a persistent fail-safe circuit-breaker (issue #16).
 
-thoth runs unattended on pay-as-you-go Anthropic + Gemini keys with no spend ceiling.
-Because Hindsight does **LLM fact-extraction** (SPEC section 8), every ingest *and*
-every reindexed page is a model call, so a redelivery storm, a flapping dependency
-retried to death, or an accidental ``reindex --full-rebuild`` of a large vault has
-unbounded cost. This package is the concrete guard the SPEC's "budget-ready" Phase-3
-goal calls for: a small **daily call-count budget**, checked *before* each model call,
-that **fails safe** (defers rather than spends) once the day's cap is reached and emits
-**exactly one** notification via the errors-to-Slack surface (:mod:`thoth.alerts`).
+thoth runs unattended on pay-as-you-go keys with no spend ceiling, and because the index
+does LLM fact-extraction (SPEC section 8) every ingest and every reindexed page is a
+model call. So a redelivery storm, a flapping dependency retried to death, or an
+accidental full rebuild of a large vault has unbounded cost. This is a small daily
+call-count budget, checked before each call, that fails safe by deferring rather than
+spending once the cap is reached, and emits exactly one notification through the
+errors-to-Slack surface. Four things shape the design:
 
-The design mirrors the rest of the closed-surface appliance:
+* **One combined budget.** The appliance's own calls and the extraction behind Hindsight
+  retain both count against one ceiling. They are tracked as separate counters purely so
+  the alert can report the split, and the check is on their sum. A non-positive budget
+  disables the guard, the escape hatch for a box that wants no cap.
+* **Persisted in the disposable state DB.** The counters are keyed by the Europe/London
+  day, so the cap survives a restart and resets at the midnight the persona runs on.
+  Losing the DB only resets today's count, never knowledge.
+* **Fail-safe, not fail-loud.** The charge raises before the spend, and the ingest
+  pipeline already treats a model failure as a deferral, so a trip there loses nothing
+  while reindex aborts cleanly mid-walk. A capture is deferred, never dropped.
+* **Exactly one alert per day.** The first charge to trip the cap claims a per-day row
+  atomically, so every later blocked call stays silent.
 
-* **One combined daily budget.** Both the appliance's own Anthropic calls
-  (:meth:`thoth.llm.LLM.complete`) and the Gemini extraction triggered through Hindsight
-  ``retain`` (:meth:`thoth.hindsight.Hindsight.retain`, the only observable Gemini cost
-  -- token usage is not) count against a single ``THOTH_DAILY_LLM_BUDGET`` ceiling. The
-  two are tracked as **separate counters** (:data:`KIND_ANTHROPIC` /
-  :data:`KIND_HINDSIGHT`) purely so the alert can report the split; the *check* is on
-  their sum. A non-positive budget **disables** the guard (unlimited), the escape hatch
-  for a box that wants no cap.
-* **Persisted in the disposable state DB.** The per-day counters live in
-  :attr:`thoth.config.Config.state_db_path` (the same gitignored, not-backed-up
-  ``~/.thoth/state.db`` that backs :class:`thoth.state.EventStore` /
-  :class:`~thoth.state.MarkerStore`), keyed by the **Europe/London** calendar day so the
-  cap survives a daemon restart and resets at the London midnight the persona runs on.
-  Losing the DB only resets today's count -- never a knowledge loss (the P1 guardrail).
-* **Fail-safe, not fail-loud.** :meth:`BudgetGuard.charge` raises
-  :class:`BudgetExceededError` *before* the spend when the cap is reached. The ingest
-  pipeline already treats any classify/curate model failure as a *deferral* (the raw is
-  held durably and re-curated by a later sweep, see :mod:`thoth.ingest`), so a budget
-  trip there loses nothing; reindex aborts the rebuild cleanly mid-walk. A capture is
-  deferred, never dropped.
-* **Exactly one alert per day.** The first charge that trips the cap claims a per-day
-  alert row (an atomic ``INSERT OR IGNORE``, the same test-and-set
-  :class:`~thoth.state.EventStore` uses) so every *later* blocked call that day stays
-  silent -- one notification, not one per blocked call.
-
-Only the standard library, ``thoth._time``, :mod:`thoth.state`, and :mod:`thoth.config`
-(themselves standard-library-only at import) are imported at module level, so importing
-this package at pytest collection is always safe. The clock is injectable so the day
-boundary and the alert timestamp are deterministic in tests without touching the wall
-clock.
+Only the standard library and the stdlib-only thoth modules are imported here, so
+importing this at pytest collection is always safe. The clock is injectable, so the day
+boundary and the alert timestamp are deterministic in tests without the wall clock.
 """
 
 from __future__ import annotations
@@ -83,29 +66,22 @@ def make_budget_guard(
     clock: Callable[[], datetime] | None = None,
     limit: int | None = None,
 ) -> BudgetGuard:
-    """Build a :class:`BudgetGuard` over the deployment's state DB and configured cap.
+    """Builds a guard over the deployment's state DB and configured cap.
 
-    The cap defaults to :attr:`thoth.config.Config.daily_llm_budget`
-    (``THOTH_DAILY_LLM_BUDGET``); a non-positive value yields a disabled guard. The same
-    state DB backs every guard, so independently-constructed guards at the Slack / MCP /
-    reindex entrypoints share one set of per-day counters (the DB is the coordination
-    point) -- no single instance need be threaded through the graph.
-
-    ``limit`` is a **transient per-run override** (issue #80): the ``thoth capture``
-    backfill passes ``--budget N`` so a bulk import can raise (or, with ``0``, disable
-    via the guard's ``limit <= 0`` rule) the cap for that one run without mutating the
-    frozen :class:`~thoth.config.Config`. ``None`` (the default) preserves today's
-    behaviour, so the Slack / MCP / reindex callers that pass nothing are unaffected.
+    The same state DB backs every guard, so guards built independently at the Slack, MCP
+    and reindex entrypoints share one set of per-day counters. The DB is the
+    coordination point, so no single instance need be threaded through the graph.
 
     Args:
-        config: The frozen runtime configuration (the budget + the state DB path).
-        alerter: The optional errors-to-Slack seam for the one-per-day notification.
-        clock: An injectable current-time source forwarded to the guard.
-        limit: An optional transient override for the daily cap; ``None`` uses
-            ``config.daily_llm_budget``. A non-positive value disables the guard.
+        config: Frozen runtime config, supplying the budget and state DB path.
+        alerter: Optional errors-to-Slack seam for the one-per-day notification.
+        clock: Injectable current-time source forwarded to the guard.
+        limit: Transient per-run override (issue #80), letting a bulk import raise or
+            disable the cap for one run without mutating the frozen config. None uses
+            the configured budget, and a non-positive value disables the guard.
 
     Returns:
-        A wired :class:`BudgetGuard` (disabled when the effective budget is <= 0).
+        The wired guard, disabled when the effective budget is not positive.
     """
     return BudgetGuard(
         store=BudgetStore(config.state_db_path),

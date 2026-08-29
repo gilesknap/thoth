@@ -8,7 +8,7 @@ from datetime import date
 from thoth.render import SlackPoster as SlackPoster
 from thoth.vault import CURATED_DIRS
 
-# Human labels for the liveness markers, shown in the daily heartbeat line (issue #15).
+# Human labels for the liveness markers, shown in the daily heartbeat line (#15)
 _MARKER_LABELS: dict[str, str] = {
     "capture": "ingest",
     "reindex": "reindex",
@@ -21,37 +21,35 @@ ACTION_OPEN_STATUSES: frozenset[str] = frozenset({"todo", "in_progress"})
 MEDIA_BACKLOG_STATUS: str = "todo"
 """The media ``status`` value treated as an unconsumed backlog item (ADR 0013).
 
-Media items share the single action lifecycle (``todo``/``in_progress``/``done``/
-``cancelled``); an untouched backlog item is simply still ``todo``.
+Media items share the single action lifecycle, so an untouched backlog item is simply
+still ``todo``.
 """
 
 DUE_SOON_DAYS: int = 3
 """The inclusive look-ahead window (in days) for the daily "next N days" bucket."""
 
-# Reference folders whose pages count as "ingests" for the recent/week scans. The
-# actionable folder (actions/) churns for unrelated reasons (status changes), so it is
-# excluded from the ingest-count view (SPEC Appendix: "new/changed curated pages").
-# Derived from the canonical vault.CURATED_DIRS so the folder vocabulary lives in
-# exactly one place (ADR 0005); a divergence is caught by the tests.
+# The folders whose pages count as ingests for the recent and week scans. actions/
+# churns on status changes alone, so it is excluded from the ingest-count view. Derived
+# from vault.CURATED_DIRS so the vocabulary lives in one place (ADR 0005)
 _CURATED_DIRS: tuple[str, ...] = CURATED_DIRS
 
-# Folder holding todo/errand actions (``type: action``). ADR 0015 split the media
-# consume queue back out into its own media/ folder, so this folder is todos only.
+# The todo and errand actions. ADR 0015 split the media consume queue back out into
+# its own folder, so this one is todos only
 _ACTIONS_DIR: str = "actions"
 
-# Folder holding the media consume queue (``type: media``, ADR 0015).
+# The media consume queue (ADR 0015)
 _MEDIA_DIR: str = "media"
 
-# The ``type`` value that marks a media-queue item (ADR 0015, was ``kind: media``).
+# The type value marking a media-queue item, which was kind: media before ADR 0015
 _MEDIA_TYPE: str = "media"
 
-# Weekly window length in days.
+# Weekly window length in days
 _WEEK_DAYS: int = 7
 
-# Cap on how many media-backlog nudges the daily digest surfaces (SPEC: "one or two").
+# Cap on the media-backlog nudges the daily digest surfaces (SPEC: "one or two")
 _MEDIA_NUDGE_LIMIT: int = 2
 
-# A status value that, on any page, flags it for review.
+# A status value that flags any page for review
 _REVIEW_STATUS: str = "review"
 
 

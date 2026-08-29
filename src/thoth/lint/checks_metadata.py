@@ -1,11 +1,10 @@
-"""Frontmatter / metadata checks: 3 (summary gloss), 4 (frontmatter), 6
-(contradictions), 8 (quality signals) and 10 (tag audit), plus the frontmatter
-vocabularies they validate against.
+"""Metadata checks 3, 4, 6, 8 and 10, plus the vocabularies they validate against.
 
-Each check is a pure function over the parsed pages handed to it by
-:class:`thoth.lint.LintEngine`. The folder / type / slug contract constants AND the
-status / priority / media_type vocabularies are imported from
-:mod:`thoth.vault` (the single source, ADR 0013); the per-type mappings below only
+The checks are the summary gloss (3), the frontmatter contract (4), contradictions (6),
+quality signals (8) and the tag audit (10). Each is a pure function over the parsed
+pages handed to it by :class:`thoth.lint.LintEngine`. Every folder, type and slug
+constant and every status, priority and media_type vocabulary is imported from
+:mod:`thoth.vault`, the single source (ADR 0013), and the per-type mappings below only
 shape them for the check loop.
 """
 
@@ -41,22 +40,21 @@ TYPE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "action": ("status",),
     "media": ("status",),
 }
-"""Type-specific required frontmatter fields beyond the common set (SPEC check 4).
+"""Type-specific required frontmatter fields beyond the common set (check 4).
 
-ADR 0013/0015: every actionable page (``action`` or ``media``) carries the single
-``status`` lifecycle. ADR 0015 retired the ``kind`` facet -- media-ness is now the
-``type`` itself, so there is no per-action ``kind`` field to require.
+Every actionable page carries the single ``status`` lifecycle. ADR 0015 retired the
+``kind`` facet, since media-ness is now the ``type`` itself, so there is no per-action
+``kind`` field to require.
 """
 
 STATUS_VOCAB: dict[str, frozenset[str]] = {
     "action": frozenset(ACTION_STATUS_VOCAB),
     "media": frozenset(ACTION_STATUS_VOCAB),
 }
-"""Allowed ``status`` values per ``type``
-(from :data:`thoth.vault.ACTION_STATUS_VOCAB`).
+"""Allowed ``status`` values per ``type``, from :mod:`thoth.vault`.
 
-ADR 0013/0015: one lifecycle for every actionable page regardless of type -- media-ness
-is carried by the ``type`` (ADR 0015), not by parallel status values.
+One lifecycle covers every actionable page whatever its type, because media-ness is
+carried by the ``type`` (ADR 0015) rather than by parallel status values.
 """
 
 PRIORITY_VOCAB: frozenset[str] = frozenset(_PRIORITY_VOCAB)
@@ -67,7 +65,7 @@ MEDIA_TYPE_VOCAB: frozenset[str] = frozenset(_MEDIA_TYPE_VOCAB)
 
 
 def _check_summaries(pages: list[_Page]) -> list[Finding]:
-    """Flag content pages missing a one-line ``summary:`` gloss (check 3)."""
+    """Flags a content page missing its one-line ``summary:`` gloss (check 3)."""
     findings: list[Finding] = []
     for page in pages:
         page_type = _str_field(page.meta.get("type"))
@@ -87,7 +85,7 @@ def _check_summaries(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_frontmatter(pages: list[_Page]) -> list[Finding]:
-    """Validate frontmatter on every curated and life-admin page (check 4)."""
+    """Validates frontmatter on every curated and life-admin page (check 4)."""
     findings: list[Finding] = []
     for page in pages:
         findings.extend(_frontmatter_findings(page))
@@ -95,7 +93,7 @@ def _check_frontmatter(pages: list[_Page]) -> list[Finding]:
 
 
 def _frontmatter_findings(page: _Page) -> list[Finding]:
-    """Return the frontmatter findings for one scanned page."""
+    """Returns the frontmatter findings for one scanned page."""
     meta = page.meta
     out: list[Finding] = []
 
@@ -103,9 +101,8 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
         out.append(_finding(4, "frontmatter", Severity.STYLE, page.path, message))
 
     page_type = _str_field(meta.get("type"))
-    # Inbox holds are machinery with their own set (no tags, ADR 0013); content pages
-    # carry the universal set. ``summary`` is skipped here: check 3 owns the gloss
-    # finding, so a missing summary is not double-flagged.
+    # Inbox holds are machinery with their own set and no tags, while content pages
+    # carry the universal one. Summary is skipped because check 3 owns that finding
     required = (
         INBOX_REQUIRED_FIELDS if page_type == INBOX_TYPE else CONTENT_COMMON_FIELDS
     )
@@ -113,9 +110,9 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
         if field == "summary":
             continue
         value = meta.get(field)
-        # A present-but-empty tags list is legal (tags are descriptive only, ADR
-        # 0013, and the as-is import files pages with tags: []); for every other
-        # field an empty list is as missing as None/"".
+        # A present-but-empty tags list is legal, since tags are descriptive only and
+        # the as-is import files pages with tags: []. For every other field an empty
+        # list is as missing as None
         if value in (None, "") or (value == [] and field != "tags"):
             flag(f"missing required common field {field!r}")
     if page_type is not None and page_type not in VALID_TYPES:
@@ -135,8 +132,8 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
         if meta.get(field) in (None, "", []):
             flag(f"{page_type} page is missing required field {field!r}")
     personal = meta.get("personal")
-    # A real boolean is required (isinstance, not truthy): the Bases view filters
-    # compare ``personal != true``, so a string "false" would silently read as set.
+    # A real boolean, not a truthy value: the Bases view filters compare personal !=
+    # true, so the string "false" would silently read as set
     if personal is not None and not isinstance(personal, bool):
         flag(f"personal {personal!r} must be a boolean (true/false)")
     status = _str_field(meta.get("status"))
@@ -157,7 +154,7 @@ def _frontmatter_findings(page: _Page) -> list[Finding]:
 
 
 def _check_contradictions(pages: list[_Page]) -> list[Finding]:
-    """Flag pages marked ``contested`` or carrying ``contradictions`` (check 6)."""
+    """Flags a page marked ``contested`` or carrying ``contradictions`` (check 6)."""
     findings: list[Finding] = []
     for page in pages:
         if _is_truthy(page.meta.get("contested")):
@@ -186,7 +183,7 @@ def _check_contradictions(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_quality_signals(pages: list[_Page]) -> list[Finding]:
-    """Flag low-confidence and uncorroborated single-source pages (check 8)."""
+    """Flags low-confidence and uncorroborated single-source pages (check 8)."""
     findings: list[Finding] = []
     for page in pages:
         confidence = _str_field(page.meta.get("confidence"))
@@ -216,7 +213,7 @@ def _check_quality_signals(pages: list[_Page]) -> list[Finding]:
 
 
 def _check_tag_audit(schema_text: str, pages: list[_Page]) -> list[Finding]:
-    """Flag pages using a tag absent from ``SCHEMA.md``'s taxonomy (check 10)."""
+    """Flags a page using a tag absent from ``SCHEMA.md``'s taxonomy (check 10)."""
     taxonomy = parse_taxonomy_tags(schema_text)
     findings: list[Finding] = []
     for page in pages:

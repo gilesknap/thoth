@@ -54,12 +54,11 @@ from .types import (
 
 
 class SummaryEngine:
-    """Compose daily/weekly digests from vault frontmatter against an injected clock.
+    """Composes daily and weekly digests from vault frontmatter.
 
-    All retrieval is a pure read over the vault's curated and life-admin folders; no
-    LLM and no network are used to compose. The single non-deterministic input -- the
-    current time -- is injected as ``now`` so every date window is reproducible under a
-    frozen clock in tests.
+    All retrieval is a pure read over the vault folders, with no LLM and no network. The
+    one non-deterministic input, the current time, is injected as ``now``, so every date
+    window is reproducible under a frozen clock.
     """
 
     def __init__(
@@ -70,20 +69,17 @@ class SummaryEngine:
         now: datetime | None = None,
         markers: MarkerStore | None = None,
     ) -> None:
-        """Store collaborators and resolve the injected clock to Europe/London.
+        """Stores collaborators and resolves the injected clock to Europe/London.
 
         Args:
-            config: The frozen runtime config (for the vault name / Slack defaults).
-            vault: The path-confined vault facade (the only disk surface used).
-            now: A tz-aware "current time" used for all date math; when ``None``,
-                :meth:`datetime.now` in :data:`~thoth.summary.LONDON` is used. A
-                tz-aware value is coerced into :data:`~thoth.summary.LONDON`; a naive
-                value is assumed to already be London-local.
-            markers: Optional liveness :class:`~thoth.state.MarkerStore`; when wired,
-                the daily digest gains a terse "still alive -- last
-                ingest/reindex/push at T" heartbeat so silence is itself diagnostic
-                (issue #15). ``None`` (the default) omits it, so callers/tests are
-                unaffected.
+            config: Frozen runtime config, for the vault name and Slack defaults.
+            vault: The path-confined vault facade, the only disk surface used.
+            now: Current time for all date math. None reads the London clock. An
+                aware value is coerced to London and a naive one is assumed to be
+                London already.
+            markers: Optional liveness store. When wired, the daily digest gains a
+                terse heartbeat so silence is itself diagnostic (issue #15). None
+                omits it.
         """
         self._config = config
         self._vault = vault
@@ -110,16 +106,15 @@ class SummaryEngine:
     # ---- digest composition ---------------------------------------------------------
 
     def daily_digest(self) -> Digest:
-        """Compose the daily digest from vault frontmatter using :attr:`today`.
+        """Composes the daily digest from vault frontmatter.
 
-        Sections (SPEC Appendix "Summary content"): overdue / today / next-N-days
-        actions, yesterday's curated ingests grouped by ``type``, a media-backlog
-        nudge, and review-flagged pages. A section is omitted from the body when it has
-        no items; the digest's :attr:`~thoth.summary.Digest.is_empty` is ``True`` only
-        when every section is empty.
+        The sections follow the SPEC appendix: overdue, today and next-N-days actions,
+        yesterday's curated ingests grouped by type, a media-backlog nudge, and
+        review-flagged pages. An empty section is omitted from the body, and the digest
+        counts as empty only when every section is.
 
         Returns:
-            The rendered daily :class:`~thoth.summary.Digest`.
+            The rendered daily digest.
         """
         overdue = self.overdue_actions()
         today_due = self._actions_due_on(self._today)
@@ -154,27 +149,25 @@ class SummaryEngine:
                 _section("FLAGGED FOR REVIEW", [_review_line(p) for p in review])
             )
 
-        # The actionable sections decide emptiness; the heartbeat is diagnostic
-        # plumbing, not "news", so it must NOT make an otherwise-empty digest look
-        # non-empty. It is rendered as a trailing line that appears whether or not the
-        # digest is empty, so silence (a stale "last push") shows on a quiet day (#15).
+        # The actionable sections decide emptiness. The heartbeat is diagnostic
+        # plumbing rather than news, so it must not make an empty digest look full. It
+        # trails the body either way, so a stale last-push shows on a quiet day (#15)
         is_empty = not sections
         heartbeat = self.heartbeat_line()
         text = _render(title, sections, is_empty, footer=heartbeat)
         return Digest(kind="daily", title=title, text=text, is_empty=is_empty)
 
     def weekly_digest(self) -> Digest:
-        """Compose the weekly digest (seven-day windows) from vault frontmatter.
+        """Composes the weekly digest over seven-day windows.
 
-        Sections (SPEC Appendix): a week-in-review of curated ingest counts by ``type``,
-        an actions-status summary (open / overdue counts), the next week's deadlines
-        (``due_date`` within seven days), and a suggested review / stale section
-        (review-flagged pages plus the oldest media backlog). A section is omitted when
-        empty; :attr:`~thoth.summary.Digest.is_empty` is ``True`` only when every
-        section is empty.
+        The sections follow the SPEC appendix: a week-in-review of ingest counts by
+        type, an actions-status summary, the next week's deadlines, and a
+        suggested-review section of flagged pages plus the oldest media backlog. An
+        empty section is omitted, and the digest counts as empty only when every section
+        is.
 
         Returns:
-            The rendered weekly :class:`~thoth.summary.Digest`.
+            The rendered weekly digest.
         """
         week_pages = self.recent_pages(days=_WEEK_DAYS)
         counts = _counts_by_type(week_pages)
@@ -213,7 +206,7 @@ class SummaryEngine:
             sections.append(_section("SUGGESTED REVIEW", review_lines))
 
         # The actions-status section is always present, so the weekly digest is empty
-        # only when there is genuinely nothing to report (no actions, no ingests, etc.).
+        # only when there is genuinely nothing to report
         is_empty = not (
             counts or open_actions or overdue or next_week or review or media
         )
@@ -228,17 +221,16 @@ class SummaryEngine:
         channel: str,
         skip_when_empty: bool = False,
     ) -> bool:
-        """Deliver ``digest`` to ``channel`` via ``poster.chat_postMessage``.
+        """Delivers a digest to a Slack channel.
 
         Args:
             poster: The injected Slack delivery seam.
             digest: The composed digest to post.
-            channel: The Slack channel (or DM) id to post to.
-            skip_when_empty: When ``True`` and ``digest.is_empty``, do not post.
+            channel: The channel or DM id to post to.
+            skip_when_empty: Do not post an empty digest.
 
         Returns:
-            ``True`` if a message was posted, ``False`` if skipped because the digest
-            was empty and ``skip_when_empty`` was set.
+            True when a message was posted, False when it was skipped as empty.
         """
         if skip_when_empty and digest.is_empty:
             return False
@@ -248,17 +240,14 @@ class SummaryEngine:
     # ---- liveness / heartbeat (issue #15) -------------------------------------------
 
     def heartbeat_line(self) -> str | None:
-        """Render the terse "still alive -- last ingest/reindex/push at T" line.
+        """Renders the terse "still alive" line naming each stage's last success.
 
-        Reads the liveness :class:`~thoth.state.MarkerStore` (each pipeline stage
-        records its last-success wall-clock time): for each of capture/reindex/push it
-        reports the recorded time (formatted in :data:`~thoth.summary.LONDON`) or
-        ``never`` when no success has been recorded, so a stale or missing marker is
-        visible on the daily digest. Returns ``None`` when no marker store is wired
-        (heartbeat then omitted).
+        Each pipeline stage records its last-success wall-clock time, and a stage with
+        no success reads as never, so a stale or missing marker is visible on the daily
+        digest.
 
         Returns:
-            The ``mrkdwn`` heartbeat line, or ``None`` when no markers are available.
+            The heartbeat line, or None when no marker store is wired.
         """
         if self._markers is None:
             return None
@@ -274,7 +263,7 @@ class SummaryEngine:
         return "still alive -- last " + ", ".join(parts)
 
     def _format_marker_ts(self, ts: float | None) -> str:
-        """Format a marker epoch as ``YYYY-MM-DD HH:MM`` in London, or ``never``."""
+        """Formats a marker epoch in London time."""
         if ts is None:
             return "never"
         when = datetime.fromtimestamp(ts, tz=LONDON)
@@ -283,12 +272,12 @@ class SummaryEngine:
     # ---- pure frontmatter scans (reused by mcp_server) ------------------------------
 
     def open_actions(self) -> list[ActionItem]:
-        """Return the open actions (``status`` in the open-status set).
+        """Returns the open actions, sorted by due date then path.
 
-        Sorted by due date (items with no due date last), then by path for stability.
+        Items with no due date sort last, and the path breaks ties for stability.
 
         Returns:
-            The open :class:`~thoth.summary.ActionItem` list.
+            The open actions.
         """
         items = [
             item for item in self._scan_actions() if item.status in ACTION_OPEN_STATUSES
@@ -296,13 +285,13 @@ class SummaryEngine:
         return _sort_actions(items)
 
     def closed_actions(self) -> list[ActionItem]:
-        """Return closed actions (a non-blank ``status`` not in the open set).
+        """Returns closed actions, meaning a non-blank status outside the open set.
 
-        A missing/blank status counts as open and is therefore excluded. Kept in scan
-        order (path-sorted) for determinism.
+        A missing or blank status counts as open and is excluded. Scan order is kept for
+        determinism.
 
         Returns:
-            The closed :class:`~thoth.summary.ActionItem` list.
+            The closed actions.
         """
         return [
             item
@@ -311,13 +300,13 @@ class SummaryEngine:
         ]
 
     def overdue_actions(self) -> list[ActionItem]:
-        """Return open actions whose ``due_date`` is strictly before :attr:`today`.
+        """Returns open actions due strictly before today.
 
-        An action with ``due_date`` equal to today is *not* overdue (it is "today").
-        Actions with no due date are never overdue.
+        An action due today is not overdue, it belongs to the today bucket, and an
+        action with no due date is never overdue.
 
         Returns:
-            The overdue :class:`~thoth.summary.ActionItem` list, earliest due first.
+            The overdue actions, earliest due first.
         """
         return [
             item
@@ -326,18 +315,16 @@ class SummaryEngine:
         ]
 
     def due_soon_actions(self, *, days: int = DUE_SOON_DAYS) -> list[ActionItem]:
-        """Return open actions due strictly after today through ``today + days``.
+        """Returns open actions due after today through ``today + days``.
 
-        The window is ``today < due_date <= today + days`` -- it excludes today (those
-        belong to the "today" bucket and to :meth:`overdue_actions` only when past) and
-        is inclusive of the far edge. So with ``days == DUE_SOON_DAYS`` a due date of
-        ``today + DUE_SOON_DAYS`` is included and ``today + DUE_SOON_DAYS + 1`` is not.
+        The window excludes today, which belongs to its own bucket, and includes the far
+        edge. So a due date exactly ``days`` out is included and one day later is not.
 
         Args:
-            days: The inclusive look-ahead window length in days.
+            days: The inclusive look-ahead window in days.
 
         Returns:
-            The due-soon :class:`~thoth.summary.ActionItem` list, earliest due first.
+            The due-soon actions, earliest due first.
         """
         horizon = self._today + _dt.timedelta(days=days)
         return [
@@ -347,15 +334,13 @@ class SummaryEngine:
         ]
 
     def media_backlog(self) -> list[MediaItem]:
-        """Return the unconsumed media backlog, oldest first.
+        """Returns the unconsumed media backlog, oldest first.
 
-        Keeps items whose ``status`` equals
-        :data:`~thoth.summary.MEDIA_BACKLOG_STATUS`, sorted by their ``added``
-        (``created``) date ascending so the longest-waiting backlog item is first;
-        items with no date sort last.
+        Sorted by the added date ascending, so the longest-waiting item leads. Items
+        with no date sort last.
 
         Returns:
-            The media-backlog :class:`~thoth.summary.MediaItem` list, oldest first.
+            The backlog items, oldest first.
         """
         items = [
             item
@@ -365,21 +350,20 @@ class SummaryEngine:
         return sorted(items, key=lambda item: _date_key(item.added, item.path))
 
     def recent_pages(self, *, days: int = 1) -> list[PageRef]:
-        """Return curated pages whose ``updated``/``created`` is within ``days``.
+        """Returns curated pages updated within the look-back window.
 
-        The window is ``today - days <= page_date <= today``, so ``days == 1`` covers
-        yesterday and today (the daily digest's "yesterday's ingests"), and ``days ==
-        7`` covers the last week (the weekly week-in-review). A page with no date
-        is excluded (it cannot be placed in the window). Only the reference folders
-        (entities/notes/memories) are scanned; the actionable ``actions/`` folder is
-        excluded (its status churn is not an "ingest").
+        A window of one day covers yesterday and today, which is the daily digest's
+        ingests, and seven covers the weekly review. A page with no date is excluded,
+        since it cannot be placed in the window.
+
+        Only the reference folders are scanned. The actionable folder is excluded,
+        because its status churn is not an ingest.
 
         Args:
-            days: The look-back window length in days (``1`` = yesterday + today).
+            days: The look-back window in days.
 
         Returns:
-            The recent :class:`~thoth.summary.PageRef` list, most-recently-updated
-            first.
+            The recent pages, most recently updated first.
         """
         floor = self._today - _dt.timedelta(days=max(days, 1))
         refs = [
@@ -391,13 +375,13 @@ class SummaryEngine:
         return refs
 
     def review_flagged(self) -> list[PageRef]:
-        """Return curated pages flagged for review.
+        """Returns curated pages flagged for review.
 
-        A page is flagged when its frontmatter has ``review: true`` (any truthy form)
-        or ``status: review``. Sorted by path for stability.
+        A page is flagged when its frontmatter carries a truthy ``review`` or a status
+        of review. Sorted by path for stability.
 
         Returns:
-            The review-flagged :class:`~thoth.summary.PageRef` list.
+            The flagged pages.
         """
         flagged = [
             ref for ref, meta in self._scan_curated_with_meta() if _is_flagged(meta)
@@ -408,14 +392,12 @@ class SummaryEngine:
     # ---- internal scans -------------------------------------------------------------
 
     def _scan_actions(self) -> list[ActionItem]:
-        """Parse every ``actions/*.md`` page (excluding strays) into an action item.
+        """Parses every ``actions/*.md`` page into an action item, skipping strays.
 
-        Media items share the actionable lifecycle (``status: todo``...) but are their
-        own ``type: media`` in the ``media/`` folder (ADR 0015), so this scans
-        ``actions/`` and skips any ``type: media`` page manually moved in -- without it
+        Media shares the actionable lifecycle but is its own type in its own folder (ADR
+        0015), so a media page manually moved into ``actions/`` is skipped. Without that
         an unwatched film could surface as an open action in the daily digest and the
-        ``pkm_actions`` MCP tool. The media queue has its own scan
-        (:meth:`_scan_media_with_status`) and digest section.
+        ``pkm_actions`` tool.
         """
         items: list[ActionItem] = []
         for rel, meta in self._iter_pages(_ACTIONS_DIR):
@@ -436,14 +418,12 @@ class SummaryEngine:
         return items
 
     def _scan_media_with_status(self) -> list[tuple[MediaItem, str]]:
-        """Parse every ``media/*.md`` page into a (item, status) pair.
+        """Parses every ``media/*.md`` page into an item and status pair.
 
-        The media queue lives in ``media/`` as ``type: media`` (ADR 0015), so this walks
-        ``media/`` and keeps only pages whose ``type`` is media (guarding against a
-        stray non-media page manually moved in). The status is returned with the item
-        (rather than stored on the frozen :class:`~thoth.summary.MediaItem`, whose
-        contract has no status field) so :meth:`media_backlog` can filter on the backlog
-        status without the item carrying a field it does not declare.
+        Only pages whose type is media are kept, which guards against a stray page moved
+        into the folder. The status rides alongside the item rather than on it, because
+        the frozen item contract declares no status field, so :meth:`media_backlog` can
+        still filter on it.
         """
         pairs: list[tuple[MediaItem, str]] = []
         for rel, meta in self._iter_pages(_MEDIA_DIR):
@@ -462,11 +442,11 @@ class SummaryEngine:
         return pairs
 
     def _scan_curated(self) -> list[PageRef]:
-        """Parse every curated page into a :class:`~thoth.summary.PageRef`."""
+        """Parses every curated page into a page reference."""
         return [ref for ref, _ in self._scan_curated_with_meta()]
 
     def _scan_curated_with_meta(self) -> list[tuple[PageRef, dict[str, object]]]:
-        """Parse every curated page into a (``PageRef``, frontmatter) pair."""
+        """Parses every curated page into a reference and frontmatter pair."""
         pairs: list[tuple[PageRef, dict[str, object]]] = []
         for folder in _CURATED_DIRS:
             for rel, meta in self._iter_pages(folder):
@@ -489,13 +469,14 @@ class SummaryEngine:
         return pairs
 
     def _iter_pages(self, folder: str) -> list[tuple[str, dict[str, object]]]:
-        """Return the ``(vault_relative_path, frontmatter)`` pairs for ``folder``.
+        """Returns the path and frontmatter pairs for one folder.
 
-        The folder is resolved through the vault for confinement; a missing folder
-        yields nothing. A file that cannot be parsed is skipped rather than crashing the
-        scan (a malformed page must never wedge the daily digest). The list is read once
-        per folder and cached on the engine -- every caller builds a fresh engine per
-        invocation, so the cache only dedupes the repeated scans within one digest.
+        The folder is resolved through the vault for confinement, and a missing one
+        yields nothing. A file that will not parse is skipped rather than crashing the
+        scan, because a malformed page must never wedge the daily digest.
+
+        The list is read once per folder and cached. Every caller builds a fresh engine
+        per invocation, so the cache only dedupes repeated scans within one digest.
         """
         cached = self._page_cache.get(folder)
         if cached is not None:
@@ -518,7 +499,7 @@ class SummaryEngine:
     # ---- rendering helpers ----------------------------------------------------------
 
     def _actions_due_on(self, day: date) -> list[ActionItem]:
-        """Return open actions whose ``due_date`` equals ``day``."""
+        """Returns open actions due on one day."""
         return [
             item
             for item in self.open_actions()
@@ -526,11 +507,11 @@ class SummaryEngine:
         ]
 
     def _grouped_recent_lines(self, refs: Sequence[PageRef]) -> list[str]:
-        """Render recent pages as one concise shared ref per page, grouped by type.
+        """Renders recent pages as one concise shared ref each, grouped by type.
 
-        Each line is ``type: <obsidian-uri|title>`` via the one shared
-        :func:`thoth.render.render_vault_ref` helper -- a title-only clickable link with
-        no trailing path and no dead ``[[wikilink]]`` (issue #63).
+        Every line goes through the one shared :func:`thoth.render.render_vault_ref`
+        helper, giving a title-only clickable link with no trailing path and no dead
+        wikilink (issue #63).
         """
         lines: list[str] = []
         for ref in sorted(refs, key=lambda r: (r.page_type, r.path)):
@@ -542,7 +523,7 @@ class SummaryEngine:
         return lines
 
     def _action_line(self, item: ActionItem, bucket: str) -> str:
-        """Render one action line: bucket flag + due/priority + the shared ref (#53)."""
+        """Renders one action line: bucket flag, due and priority, then the ref."""
         flag = {"Overdue": "[overdue]", "Today": "[today]"}.get(bucket, f"[{bucket}]")
         due = (
             "due today"
@@ -562,12 +543,12 @@ class SummaryEngine:
 
 
 def _wikilink(rel: str) -> str:
-    """Render the folder-qualified ``[[wikilink]]`` for a vault-relative md path."""
+    """Renders the folder-qualified wikilink for a vault path."""
     return f"[[{rel.removesuffix('.md')}]]"
 
 
 def _title(meta: dict[str, object], slug: str) -> str:
-    """Return the frontmatter ``title`` as a string, falling back to ``slug``."""
+    """Returns the frontmatter title, falling back to the slug."""
     value = meta.get("title")
     if isinstance(value, str) and value.strip():
         return value
@@ -575,7 +556,7 @@ def _title(meta: dict[str, object], slug: str) -> str:
 
 
 def _is_flagged(meta: dict[str, object]) -> bool:
-    """Return ``True`` if frontmatter marks a page for review (``review`` / status)."""
+    """Reports whether frontmatter marks a page for review."""
     if _is_truthy(meta.get("review")):
         return True
     status = meta.get("status")

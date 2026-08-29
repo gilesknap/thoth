@@ -1,9 +1,9 @@
-"""The full cost-ordered pass: structural + recall sources fused by RRF (issue #143).
+"""The full cost-ordered pass, fusing the structural and recall sources (#143).
 
-:func:`_answer` is the orchestration behind :meth:`thoth.query.QueryEngine.answer`
-(which documents the user-facing contract and delegates here): it overlaps the
-expensive recall pass with the cheap structural one, fuses the two ranked lists by
-Reciprocal Rank Fusion, and composes the answer with its harness-built citations.
+:func:`_answer` is the orchestration behind the engine's public method, which documents
+the user-facing contract and delegates here. It overlaps the expensive recall pass with
+the cheap structural one, fuses the two ranked lists by Reciprocal Rank Fusion, and
+composes the answer with its harness-built citations.
 """
 
 from __future__ import annotations
@@ -43,28 +43,26 @@ def _answer(
     use_recall: bool = True,
     search_terms: list[str] | None = None,
 ) -> QueryResult:
-    """Blend structural + semantic retrieval (RRF), compose an answer (issue #143)."""
+    """Blends structural and semantic retrieval, then composes an answer (#143)."""
     if max_pages < 1:
         raise QueryError("max_pages must be at least 1")
-    # The keywords from the intent gate (issue #102) seed the lexical grep; the raw
-    # query is the fallback so the pre-gate behaviour holds when none were given.
+    # The intent gate's keywords (issue #102) seed the lexical grep, with the raw query
+    # as the fallback so the pre-gate behaviour holds when none were given
     grep_term = " ".join(search_terms) if search_terms else query
 
     started = time.monotonic()
 
-    # Submit the expensive recall pass to a worker thread FIRST so its latency
-    # overlaps the cheap structural pass below (issue #143 criterion D). The worker
-    # is PURE: it only reads the vault (page_exists/is_inside) and returns a list,
-    # mutating no shared accumulator -- all dedup/merge happens single-threaded
-    # after the join. When use_recall is false no thread is spawned at all.
+    # Submit the expensive recall pass first so its latency overlaps the cheap
+    # structural pass below (issue #143). The worker is pure: it only reads the vault
+    # and returns a list, mutating no shared accumulator, so all merging happens
+    # single-threaded after the join. With recall off, no thread is spawned at all
     recall_ms = 0.0
     recall_ran = use_recall
     recall_failed = False
     recall_paths: list[str] = []
     if use_recall:
-        # If future.result() raises, the context manager __exit__ (via
-        # shutdown(wait=True)) joins the worker thread before the exception leaves
-        # this block, so the pool is never leaked on the error path.
+        # If the result raises, the context manager joins the worker before the
+        # exception leaves this block, so the pool is never leaked on the error path
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
                 _recall_paths,
@@ -77,16 +75,15 @@ def _answer(
             structural, grep_hits = _structural_paths(
                 vault, grep_term, max_pages=max_pages
             )
-            # Time spent WAITING on recall (grep already ran concurrently above), so
-            # the logged figure is recall's marginal wall-clock contribution (C/D).
+            # Time spent waiting on recall, since grep already ran concurrently above,
+            # so the logged figure is recall's marginal wall-clock contribution
             recall_started = time.monotonic()
             try:
                 recall_paths = future.result()
             except HindsightError:
-                # A recall failure (daemon down, CLI timeout, subprocess error) is a
-                # DEGRADATION, not a query failure: fall back to the structural-only
-                # results rather than crashing answer(). The structural pass already
-                # ran concurrently above, so its hits are intact.
+                # A recall failure is a degradation rather than a query failure, so
+                # fall back to structural-only results rather than crashing. The
+                # structural pass already ran concurrently, so its hits are intact
                 recall_failed = True
                 recall_paths = []
                 logger.warning(
@@ -96,8 +93,8 @@ def _answer(
     else:
         structural, grep_hits = _structural_paths(vault, grep_term, max_pages=max_pages)
 
-    # Merge the two ranked sources by Reciprocal Rank Fusion (issue #143). The merge
-    # is single-threaded: by here both lists are fully materialised and confined.
+    # Merge the two ranked sources by Reciprocal Rank Fusion (issue #143). The merge is
+    # single-threaded, since by here both lists are materialised and confined
     ordered, methods = _fuse(
         structural, recall_paths, grep_hits=grep_hits, max_pages=max_pages
     )
@@ -111,12 +108,11 @@ def _answer(
         for rank, path in enumerate(ordered, start=1)
     ]
     answer, used = _compose(vault, llm, query, consulted)
-    # Recall "contributed" only if a recall-surfaced page is in the *used* subset
-    # (a consulted-but-unused recall page no longer counts as recall having helped).
+    # Recall counts as having contributed only when a recall-surfaced page reaches the
+    # used subset. A consulted-but-unused recall page does not count
     used_recall = any(METHOD_RECALL in methods[c.path] for c in used)
-    # Concise operator-readable success line (issue #52): grep-friendly "query
-    # answered:" with the consulted/cited counts, whether the recall pass helped,
-    # and the wall-clock duration so the happy path is no longer silent. UNCHANGED.
+    # Operator-readable success line (issue #52) carrying the consulted and cited
+    # counts, whether recall helped, and the duration, so the happy path is not silent
     logger.info(
         "query answered: consulted=%d cited=%d recall=%s in %.0fms",
         len(consulted),
@@ -124,9 +120,9 @@ def _answer(
         used_recall,
         (time.monotonic() - started) * 1000,
     )
-    # DEBUG-only blend breakdown (issue #143 criterion C/D): per-page method
-    # attribution + the semantic pass's marginal wall-clock, guarded so the happy
-    # INFO path stays quiet and pays no formatting cost.
+    # Debug-only blend breakdown (issue #143), giving per-page method attribution and
+    # the semantic pass's marginal wall-clock. Guarded so the happy path stays quiet and
+    # pays no formatting cost
     if logger.isEnabledFor(logging.DEBUG):
         lines = [f"  #{p.rank} {p.path} via {','.join(p.methods)}" for p in provenance]
         if not recall_ran:
@@ -153,26 +149,23 @@ def _answer(
 def _structural_paths(
     vault: Vault, grep_term: str, *, max_pages: int
 ) -> tuple[list[str], set[str]]:
-    """Build the structural source: grep hits then their wikilink hops, deduped.
+    """Builds the structural source: grep hits then their link hops, deduped.
 
-    Runs the two cheap, lexical passes on the calling thread and threads them into a
-    single ordered list of real, confined paths (issue #143). grep over the curated
-    folders comes first (it scans frontmatter, so a page's ``summary:`` gloss
-    matches here -- ADR 0008), then ``[[wikilink]]`` navigation expands from those
-    hits (bounded, so a giant link farm cannot blow up the pass). Each path is
-    existence-checked via :meth:`~thoth.vault.Vault.page_exists` and recorded once,
-    in discovery order -- the same structural ordering the pre-blend code produced,
-    now isolated so RRF can fuse it with the recall source.
+    Runs both cheap lexical passes on the calling thread into one ordered list of real,
+    confined paths. Grep comes first and scans frontmatter, so a page's gloss matches
+    here (ADR 0008), then link navigation expands from those hits, bounded so a giant
+    link farm cannot blow up the pass. Each path is existence-checked and recorded once
+    in discovery order, the same structural ordering as before the blend, now isolated
+    so RRF can fuse it with recall.
 
     Args:
-        vault: The real, path-confined vault facade.
-        grep_term: The (keyword-seeded) text to grep.
-        max_pages: The page budget, used to bound the grep/wikilink fan-out.
+        vault: The path-confined vault facade.
+        grep_term: The keyword-seeded text to grep.
+        max_pages: The page budget bounding the fan-out.
 
     Returns:
-        A ``(ordered, grep_hits)`` pair: the deduped, existence-checked structural
-        paths in discovery order, and the subset that came from grep (the rest are
-        wikilink hops) so the caller can attribute each path's provenance method.
+        The deduped structural paths in discovery order, and the subset that came from
+        grep so the caller can attribute each path's method.
     """
     ordered: list[str] = []
     seen: set[str] = set()
@@ -201,43 +194,38 @@ def _fuse(
     grep_hits: set[str],
     max_pages: int,
 ) -> tuple[list[str], dict[str, tuple[str, ...]]]:
-    """Merge the structural + recall sources by Reciprocal Rank Fusion (issue #143).
+    """Merges the structural and recall sources by Reciprocal Rank Fusion (#143).
 
-    Each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in
-    (``rank`` 0-based), so a page in both sources outscores one topping only a
-    single source, and a strong recall-only hit (recall rank 0) still scores
-    ``1 / RRF_K`` -- enough to earn a cited slot even when the structural source
-    already filled the budget. Paths sort by fused score **descending**, with
-    structural discovery order as a stable tie-break (a structural/grep hit leads a
-    recall hit on a score tie, and an exact-token grep #1 stays #1). The top
-    ``max_pages`` are returned.
+    Each unique path scores ``Σ 1 / (RRF_K + rank)`` over the sources it appears in,
+    with ``rank`` 0-based. So a page in both outscores one topping a single source, and
+    a strong recall-only hit (recall rank 0) still scores ``1 / RRF_K``, enough to earn
+    a cited slot even when the structural source filled the budget.
 
-    Each returned path also carries the set of methods that surfaced it, in
-    :data:`_METHOD_ORDER`: a structural path is tagged :data:`METHOD_GREP` when it
-    came from grep, else :data:`METHOD_WIKILINK` (the structural list is grep hits
-    first, then wikilink hops -- :func:`_structural_paths`), and a recall path is
-    tagged :data:`METHOD_RECALL`; a page in both carries both tags.
+    Paths sort by fused score descending, with structural discovery order as a stable
+    tie-break, so a grep hit leads a recall hit on a tie and an exact-token grep first
+    place stays first.
+
+    Each returned path carries the methods that surfaced it. A structural path is tagged
+    grep or wikilink depending on which pass found it, a recall path is tagged recall,
+    and a page in both carries both.
 
     Args:
-        structural: The deduped structural paths in discovery order (grep hits, then
-            wikilink hops).
-        recall: The existence-filtered recall paths in recall-rank order.
-        grep_hits: The subset of ``structural`` that came from grep (the rest are
-            wikilink hops), used to tag each structural path's provenance method.
+        structural: Deduped structural paths in discovery order.
+        recall: Existence-filtered recall paths in recall-rank order.
+        grep_hits: The structural subset that came from grep, used to tag each
+            structural path's method.
         max_pages: The cap on the returned cited set.
 
     Returns:
-        A ``(ordered_paths, methods)`` pair: the fused, capped path list in final
-        rank order, and a path -> methods-tuple map covering those paths.
+        The fused, capped paths in final rank order, and a map of path to methods.
     """
     method_sets: defaultdict[str, set[str]] = defaultdict(set)
     scores: defaultdict[str, float] = defaultdict(float)
     order_index: dict[str, int] = {}
 
-    # Structural discovery order is the stable tie-break key; record it first so a
-    # recall-only path (absent from structural) sorts AFTER any structural path with
-    # the same fused score (structural leads on a tie). Tag each structural path
-    # grep vs wikilink from the caller's grep set.
+    # Structural discovery order is the stable tie-break key, so record it first and a
+    # recall-only path sorts after any structural path with the same fused score. Tag
+    # each structural path grep or wikilink from the caller's set
     for rank, path in enumerate(structural):
         order_index[path] = rank
         scores[path] += 1.0 / (RRF_K + rank)
@@ -251,8 +239,7 @@ def _fuse(
         scores[path] += 1.0 / (RRF_K + rank)
         method_sets[path].add(METHOD_RECALL)
 
-    # Sort by descending fused score, with structural-then-recall discovery order
-    # as the tie-break key.
+    # Sort by descending fused score, with discovery order as the tie-break
     ordered = sorted(order_index, key=lambda p: (-scores[p], order_index[p]))[
         :max_pages
     ]

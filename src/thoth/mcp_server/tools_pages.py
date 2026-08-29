@@ -16,29 +16,25 @@ from .render import _ref, _render_raw_page
 def _commit_written_page(
     ctx: ToolContext, rel: str, *, action: str, uri: str, wikilink: str
 ) -> ToolResult:
-    """Commit+push exactly the just-written page and render the outcome.
+    """Commits and pushes exactly the just-written page, then renders the outcome.
 
-    The page is already validated and on disk (the write tools call this *after* the
-    atomic disk write); this stages **only** ``rel`` (``git add -- <rel>``, the
-    issue #85 one-path discipline), commits with an ``agent:`` subject, rebases+pushes,
-    under the re-entrant capture lock so it never races the Slack ingest committer. A
-    :class:`~thoth.git_sync.VaultConflictError` or any other
-    :class:`~thoth.git_sync.GitSyncError` is surfaced as ``ToolResult(ok=False, ...)``
-    (the page stays on disk locally; only the sync failed) rather than raised into the
-    MCP runtime. On success ``committed`` is echoed in ``data`` and a "(not yet
-    committed)" note is appended when nothing was staged (mirrors
-    :func:`_render_ingest_report`).
+    The page is already validated and on disk, since the write tools call this after the
+    atomic write. Only that one path is staged, keeping the issue #85 discipline, and
+    the commit runs under the re-entrant capture lock so it never races the Slack
+    committer. A conflict or any other git failure is surfaced as a failed result rather
+    than raised into the MCP runtime, because the page stays on disk locally and only
+    the sync failed.
 
     Args:
-        ctx: The injected collaborator bundle (its ``git`` does the commit).
-        rel: The vault-relative path that was written (the only thing staged).
-        action: The past-tense verb for the success line ("Wrote", "Saved").
-        uri: The harness-built ``obsidian://`` link for ``rel``.
-        wikilink: The ``[[wikilink]]`` for ``rel``.
+        ctx: The injected collaborator bundle, whose git does the commit.
+        rel: The written vault path, and the only thing staged.
+        action: Past-tense verb for the success line.
+        uri: The harness-built deep link.
+        wikilink: The wikilink for the page.
 
     Returns:
-        A :class:`ToolResult`: ``ok=True`` once the write synced (``committed`` in
-        ``data``), else ``ok=False`` with the conflict/sync-failure guidance.
+        A successful result once the write synced, otherwise a failure carrying the
+        conflict or sync guidance. A note is appended when nothing was staged.
     """
     try:
         with ctx.git.capture_lock:
@@ -83,29 +79,26 @@ def pkm_write_page(
     body: str,
     today: date | None = None,
 ) -> ToolResult:
-    """Write a page through the validated vault surface (the low-level escape hatch).
+    """Writes a page through the validated vault surface, the low-level hatch.
 
-    Delegates straight to :meth:`thoth.vault.Vault.write_page`, which performs the full
-    folder-by-type, slug, source, and confinement validation plus secret redaction and
-    an atomic write. The written path is then staged, committed and pushed via
-    :func:`_commit_written_page` (exactly that one path, under the capture lock). On
-    success the path is returned with a harness-built ``obsidian://`` link and
-    ``[[wikilink]]`` plus the ``committed`` flag. A :class:`~thoth.vault.SchemaError`
-    (bad folder/type or missing field) or :class:`~thoth.vault.SlugError` (bad/escaping
-    slug) is surfaced as ``ToolResult(ok=False, ...)`` and nothing is written (no commit
-    is attempted); a vault git conflict/sync failure after the disk write is likewise
-    surfaced ``ok=False`` (the page stays on disk locally).
+    Delegates straight to the vault, which runs the full folder, slug, source and
+    confinement validation plus redaction and an atomic write. The path is then staged,
+    committed and pushed under the capture lock.
+
+    A schema or slug rejection is surfaced as a failed result with nothing written and
+    no commit attempted. A git conflict after the disk write is likewise a failure, with
+    the page staying on disk locally.
 
     Args:
         ctx: The injected collaborator bundle.
-        folder: A top-level vault folder (key of ``thoth.vault.FOLDER_TYPE_CONTRACT``).
-        slug: The page slug (validated by :meth:`thoth.vault.Vault.validate_slug`).
-        frontmatter: The page frontmatter (must carry a valid ``type`` and ``source``).
+        folder: A top-level vault folder.
+        slug: The page slug.
+        frontmatter: Page frontmatter, carrying a valid type and source.
         body: The page body markdown.
-        today: The date to stamp; defaults to today (kept injectable for tests).
+        today: Date to stamp, kept injectable for tests.
 
     Returns:
-        A :class:`ToolResult` with the written path on success, else the rejection.
+        The written path on success, otherwise the rejection.
     """
     try:
         rel = ctx.vault.write_page(folder, slug, frontmatter, body, today=today)
@@ -118,22 +111,18 @@ def pkm_write_page(
 
 
 def _resolve_page(ctx: ToolContext, path: str) -> str | ToolResult:
-    """Resolve ``path`` to a confined vault-relative page path, or a failure result.
+    """Resolves a path or bare slug to a confined vault path, or fails typed.
 
-    ``path`` may be a full vault-relative path (``notes/foo.md``) or a bare slug
-    (``foo``). A full path is confined through the vault exactly like :func:`pkm_ingest`
-    (outside the vault -> ``ToolResult(ok=False, ...)``). A bare slug (no ``/`` and not
-    an existing in-vault path) is resolved by globbing the vault for a unique
-    ``<slug>.md``: zero or several matches yields a ``ToolResult(ok=False, ...)`` with a
-    clear message so the caller can disambiguate. Returns the resolved vault-relative
-    path on success, otherwise the failure :class:`ToolResult` to return as-is.
+    A full path is confined through the vault exactly as ingest does. A bare slug is
+    resolved by globbing for a unique file, and zero or several matches yields a clear
+    failure so the caller can disambiguate.
     """
     if not ctx.vault.is_inside(path):
         return _reject_outside(path)
-    # A full path (or a slug that happens to resolve to an existing file) is used as-is.
+    # A full path, or a slug that happens to resolve to a real file, is used as-is
     if ctx.vault.page_exists(path):
         return PurePosixPath(path).as_posix()
-    # A bare slug (no separator) is resolved by a unique-filename glob over the vault.
+    # A bare slug is resolved by a unique-filename glob over the vault
     if "/" not in path:
         slug = path.removesuffix(".md")
         matches = sorted(
@@ -164,12 +153,9 @@ def _resolve_page(ctx: ToolContext, path: str) -> str | ToolResult:
 
 
 def _load_page(ctx: ToolContext, path: str) -> tuple[str, Page] | ToolResult:
-    """Resolve ``path`` (full path or bare slug) and read the page, or fail typed.
+    """Resolves a path or slug and reads the page, or fails typed.
 
-    Combines :func:`_resolve_page` with :meth:`thoth.vault.Vault.read_page`: returns
-    ``(rel, page)`` on success, otherwise the failure :class:`ToolResult` to return
-    as-is (a :class:`~thoth.vault.VaultError` on the read is surfaced ``ok=False``,
-    never raised into the MCP runtime).
+    A read failure is surfaced as a failed result and never raised into the MCP runtime.
     """
     resolved = _resolve_page(ctx, path)
     if isinstance(resolved, ToolResult):
@@ -181,24 +167,21 @@ def _load_page(ctx: ToolContext, path: str) -> tuple[str, Page] | ToolResult:
 
 
 def pkm_read_page(ctx: ToolContext, *, path: str) -> ToolResult:
-    """Read a page's raw frontmatter + body verbatim (the read-then-write-back half).
+    """Reads a page's raw frontmatter and body verbatim, the read half of a write-back.
 
-    Resolves ``path`` (a full vault-relative path or a bare slug) and reads it through
-    :meth:`thoth.vault.Vault.read_page`, returning the parsed frontmatter and body
-    *verbatim* so an agent can read -> modify -> write the page back safely (the result
-    data round-trips into :func:`pkm_write_page` / :func:`pkm_edit_page`). The path is
-    confined to the vault exactly like :func:`pkm_ingest` (outside the vault ->
-    ``ok=False``); a bare slug is resolved to a unique ``<slug>.md`` (zero/several
-    matches -> ``ok=False``). A :class:`~thoth.vault.VaultError` (missing file) is
-    surfaced as ``ToolResult(ok=False, ...)`` and never raised into the MCP runtime.
+    The frontmatter and body come back untouched, so an agent can read, modify and write
+    the page back safely, and the result data round-trips into the write and edit tools.
+    The path is confined exactly as ingest does, and a bare slug is resolved to a unique
+    file. A missing file is surfaced as a failure rather than raised into the MCP
+    runtime.
 
     Args:
         ctx: The injected collaborator bundle.
-        path: A vault-relative path (``notes/foo.md``) or a bare slug (``foo``).
+        path: A vault-relative path or a bare slug.
 
     Returns:
-        A :class:`ToolResult`: ``ok=True`` with ``{path, frontmatter, body}`` in
-        ``data`` plus a rendered raw-markdown block in ``text``, else ``ok=False``.
+        The path, frontmatter and body with a rendered markdown block, otherwise the
+        failure.
     """
     loaded = _load_page(ctx, path)
     if isinstance(loaded, ToolResult):
@@ -220,27 +203,26 @@ def pkm_read_page(ctx: ToolContext, *, path: str) -> ToolResult:
 def pkm_edit_page(
     ctx: ToolContext, *, path: str, old_string: str, new_string: str
 ) -> ToolResult:
-    """Make a targeted, exact-string replace on a page body (the file-edit primitive).
+    """Makes a targeted, exact-string replacement on a page body.
 
-    Resolves and reads the page (same path/slug resolution as :func:`pkm_read_page`),
-    then replaces a **unique** occurrence of ``old_string`` in the *body* with
-    ``new_string`` and writes the result back by delegating to :func:`pkm_write_page`
-    (full reuse: the page's existing frontmatter is preserved and the write runs the
-    whole validation + #153 commit surface, so the edit is committed/pushed exactly like
-    a write). ``old_string`` must appear exactly once: zero occurrences -> ``ok=False``
-    ("not found"); more than one -> ``ok=False`` (asking for more surrounding context).
-    A no-op edit (``old_string == new_string``) is refused. Nothing raises into the MCP
-    runtime.
+    Resolves and reads the page with the same rules as the read tool, replaces a unique
+    occurrence in the body, and writes the result back through the write tool. That
+    reuse preserves the existing frontmatter and runs the whole validation and commit
+    surface, so an edit is committed exactly like a write.
+
+    The old string must appear exactly once. Zero occurrences fails as not found, and
+    more than one fails asking for more surrounding context.
+
+    A no-op edit is refused. Nothing raises into the MCP runtime.
 
     Args:
         ctx: The injected collaborator bundle.
-        path: A vault-relative path (``notes/foo.md``) or a bare slug (``foo``).
-        old_string: The exact body substring to replace (must be unique in the body).
+        path: A vault-relative path or a bare slug.
+        old_string: The exact body substring to replace, which must be unique.
         new_string: The replacement text.
 
     Returns:
-        A :class:`ToolResult`: the :func:`pkm_write_page` outcome (``ok=True`` with the
-        committed path) on a successful edit, else ``ok=False`` with the reason.
+        The write outcome on a successful edit, otherwise the failure and its reason.
     """
     if old_string == new_string:
         return ToolResult(
@@ -271,9 +253,9 @@ def pkm_edit_page(
         )
     new_body = page.body.replace(old_string, new_string, 1)
 
-    # Write back through the validated write surface so all guardrails + the #153
-    # commit apply: folder is the first path segment, slug the filename stem, and the
-    # existing frontmatter ('created' preserved, 'updated' restamped) is reused.
+    # Write back through the validated surface so every guardrail and the #153 commit
+    # apply. Folder is the first path segment, slug the filename stem, and the existing
+    # frontmatter is reused with created preserved and updated restamped
     parts = PurePosixPath(rel)
     folder = parts.parts[0]
     slug = parts.stem

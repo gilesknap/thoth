@@ -15,26 +15,25 @@ def pkm_search(
     max_pages: int = 5,
     search_keywords: list[str] | None = None,
 ) -> ToolResult:
-    """Run a fast, vault-only lookup and return the answer with vault citations.
+    """Runs a fast, vault-only lookup and returns the answer with its citations.
 
     Delegates to :meth:`thoth.query.QueryEngine.answer`, rendering the composed answer
     plus its harness-built citations in MCP Markdown style. A
-    :class:`~thoth.query.QueryError` (for example no matching page) is surfaced as
-    ``ToolResult(ok=False, ...)``. The structured ``data`` also carries ``provenance``
-    (issue #143): one ``{path, methods, rank}`` entry per consulted page recording which
-    retrieval method(s) -- grep / wikilink / recall -- surfaced it in the RRF blend.
+    :class:`~thoth.query.QueryError` is surfaced as ``ToolResult(ok=False, ...)``. The
+    structured ``data`` also carries one ``{path, methods, rank}`` provenance entry per
+    consulted page, recording which retrieval methods surfaced it in the RRF blend
+    (issue #143).
 
     Args:
-        ctx: The injected collaborator bundle.
-        query: The natural-language query.
-        max_pages: The maximum number of vault pages to cite.
-        search_keywords: De-pluralised, synonym-expanded keywords that seed the vault's
-            lexical grep (forwarded as ``search_terms``). The grep matches whole words,
-            so a plural query misses singular page content unless the calling model
-            supplies the singular keyword here.
+        ctx: The injected collaborator bundle
+        query: The natural-language query
+        max_pages: The maximum number of vault pages to cite
+        search_keywords: De-pluralised, synonym-expanded keywords seeding the lexical
+            grep. The grep matches whole words, so a plural query misses singular page
+            content unless the calling model supplies the singular here
 
     Returns:
-        A :class:`ToolResult` with the rendered answer or the error message.
+        The rendered answer, or the error message
     """
     try:
         result = ctx.query_engine.answer(
@@ -49,9 +48,8 @@ def pkm_search(
             "answer": result.answer,
             "citations": [c.path for c in result.citations],
             "used_recall": result.used_recall,
-            # Per-page retrieval provenance from the RRF blend (issue #143): which
-            # method(s) surfaced each consulted page and its final rank, so a
-            # programmatic caller sees the grep ∪ recall attribution behind the answer.
+            # Per-page provenance from the RRF blend, so a programmatic caller sees
+            # the grep and recall attribution behind the answer (issue #143)
             "provenance": [
                 {"path": p.path, "methods": list(p.methods), "rank": p.rank}
                 for p in result.provenance
@@ -61,26 +59,19 @@ def pkm_search(
 
 
 def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
-    """List open (and optionally done) actions from ``actions/*.md`` frontmatter.
+    """Lists open, and optionally done, actions from ``actions/*.md`` frontmatter.
 
-    Reuses the canonical action scans on :class:`thoth.summary.SummaryEngine` (so the
-    todo/overdue logic lives in exactly one place): open actions come from
-    :meth:`~thoth.summary.SummaryEngine.open_actions`, with overdue items flagged via
-    :meth:`~thoth.summary.SummaryEngine.overdue_actions` and the optional done section
-    from :meth:`~thoth.summary.SummaryEngine.closed_actions`. Each item is rendered
-    with its harness-built ``[title](obsidian-uri)`` link plus the plain vault path and
-    the ``[[wikilink]]`` (the MCP citation style the other tools use), then its status,
-    due date and priority. Done/cancelled actions are left out unless ``include_done``
-    is true.
+    Reuses the canonical action scans on :class:`thoth.summary.SummaryEngine`, so the
+    todo and overdue logic lives in exactly one place. Each item renders in the MCP
+    citation style the other tools use, followed by its status, due date and priority.
+    Done and cancelled actions are left out unless ``include_done`` is true.
 
     Args:
-        ctx: The injected collaborator bundle.
-        include_done: When true, also list actions whose status is not open (rendered as
-            a separate "Done/closed" section).
+        ctx: The injected collaborator bundle
+        include_done: When true, add a separate section for non-open actions
 
     Returns:
-        A :class:`ToolResult` listing the actions (always ``ok=True``; an empty vault
-        yields a "no open actions" note).
+        The listed actions, always ``ok=True``, with a note when the vault is empty
     """
     from thoth.summary import SummaryEngine
 
@@ -117,21 +108,19 @@ def pkm_todos(ctx: ToolContext, *, include_done: bool = False) -> ToolResult:
 
 
 def pkm_recent(ctx: ToolContext, *, days: int = 7, limit: int = 20) -> ToolResult:
-    """List recently created/updated curated pages from their frontmatter dates.
+    """Lists recently created or updated pages from their frontmatter dates.
 
-    Reuses :meth:`thoth.summary.SummaryEngine.recent_pages` (the canonical recent scan)
-    so the recency logic lives in one place; each page is rendered with a harness-built
-    ``obsidian://`` link (via :meth:`thoth.vault.Vault.obsidian_uri`), plain path, and
-    ``[[wikilink]]``. The result is capped at ``limit`` pages.
+    Reuses :meth:`thoth.summary.SummaryEngine.recent_pages` so the recency logic lives
+    in one place, and renders each page with a harness-built ``obsidian://`` link, its
+    plain path and its wikilink.
 
     Args:
-        ctx: The injected collaborator bundle.
-        days: The recency window in days (a page counts if its frontmatter date falls
-            within this many days of today).
-        limit: The maximum number of pages to list.
+        ctx: The injected collaborator bundle
+        days: The recency window, matched against the page's frontmatter date
+        limit: The maximum number of pages to list
 
     Returns:
-        A :class:`ToolResult` listing the recent pages (always ``ok=True``).
+        The recent pages, always ``ok=True``
     """
     from thoth.summary import SummaryEngine
 
