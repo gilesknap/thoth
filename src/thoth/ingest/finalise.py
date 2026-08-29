@@ -173,7 +173,7 @@ class _FinalisePass(_IngestorBase):
         ``swallow_stage_error``, and a given ``staged_message`` rewrites the report's
         message. Otherwise the commit, rebase and push run under the lock. A
         :class:`~thoth.git_sync.VaultConflictError` surfaces on the report through
-        ``conflict_message``, leaving content filed locally and never forcing the push,
+        ``conflict_message``, leaving content filed locally and never a ``--force``,
         a :class:`~thoth.git_sync.GitSyncError` is swallowed or raised per
         ``swallow_git_error``, and a real push records the push liveness marker (issue
         #15) once the lock is released. A given ``success_message`` replaces the
@@ -281,11 +281,12 @@ class _FinalisePass(_IngestorBase):
 
         Mirrors :meth:`_commit_deferred`'s git handling, but preserves the ``unchanged``
         report's message instead of synthesising a "Filed N page(s)" line. A conflict
-        surfaces on the report, the removal being local and never forced, a benign
-        "nothing to commit" leaves ``committed=False``, and a real push records the push
-        marker. ``do_commit=False`` defers the commit to the batch caller. The ONLY path
-        this run touched is the superseded ``inbox/`` hold deletion, so exactly that is
-        staged (issue #85), never an ``add -A`` that could sweep a concurrent capture.
+        surfaces on the report, the removal being local and never a ``--force``. A
+        benign "nothing to commit" leaves ``committed=False``, a real push records the
+        push marker, and ``do_commit=False`` defers the commit to the batch caller. The
+        ONLY path this run touched is the superseded ``inbox/`` hold deletion, so
+        exactly that is staged (issue #85), never an ``add -A`` that could sweep a
+        concurrent capture.
         """
         # The only working-tree change is the hold deletion; stage exactly that.
         commit_paths = [hold_rel] if hold_rel is not None else []

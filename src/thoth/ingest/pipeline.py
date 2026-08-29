@@ -54,29 +54,20 @@ class Ingestor(
           :meth:`thoth.git_sync.GitSync.commit`, so staged changes accumulate in the
           working tree for one batched commit. The returned report has
           ``committed=False``, and the deferred LLM-unavailable path honours it too.
-        * ``as_is=True`` is the low-touch import mode (ADR 0010). The cheap classify
-          call still runs, for routing only, but the expensive **curate** is SKIPPED.
-          The page is filed ONCE with the original body verbatim and a minimal derived
-          frontmatter into the classify-chosen folder, then indexed through the SAME
-          retain pass. There is no file-plan, no reshaping, no wikilink or dedup merge
-          and no summary synthesis, so it literally files and indexes while skipping
-          curate.
+        * ``as_is=True`` is the low-touch import mode (ADR 0010), where the cheap
+          classify call still runs for routing but the expensive **curate** is SKIPPED.
+          :meth:`_file_as_is` documents what it files.
 
-        Capture durability is **decoupled from the classify LLM call** (issue #14). The
-        inbound item is extracted and persisted to a durable ``inbox/`` holding page,
-        idempotent on the body SHA-256, *before* any LLM call, so an Anthropic outage
-        can never lose a capture. Classify and curate then run as a best-effort second
-        stage. When the LLM is unavailable, raising :class:`LLMUnavailableError`, the
-        held raw is already safe, the holding page is committed, and a
-        *deferred-curation* report returns for a later reindex or sweep to re-curate. On
-        success the now-superseded holding page is removed and the curate, raw,
-        navigation and retain passes run as before.
+        Capture durability is **decoupled from the classify LLM call** (issue #14), as
+        the package docstring's pass 0b describes. When the LLM is unavailable, raising
+        :class:`LLMUnavailableError`, the held raw is already safe, the holding page is
+        committed, and a *deferred-curation* report returns for a later sweep.
 
         The **validation gate is preserved**. A rejected plan, from a bad type or slug
         or an unparseable or schema-invalid output, still raises :class:`IngestError`,
         and only a *transport* failure defers. A rebase conflict at commit surfaces as
-        :attr:`IngestReport.conflict`, leaving content filed locally and never forcing
-        the push.
+        :attr:`IngestReport.conflict`, leaving content filed locally with no
+        ``--force``.
 
         Args:
             capture: The inbound item to ingest.
