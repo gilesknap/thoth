@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# The coarse image kinds the folded analyse call may report (ADR 0009). Anything the
-# model returns outside this set is normalised to "" (unknown), so the ingest pass never
-# branches on an unexpected value.
+# The coarse image kinds the folded analyse call may report (ADR 0009). The parse
+# normalises anything the model returns outside this set to "", which means unknown, so
+# the ingest pass never branches on an unexpected value.
 _VALID_KINDS: frozenset[str] = frozenset({"diagram", "document", "photo", "screenshot"})
 
 
@@ -16,23 +16,23 @@ class Analysis:
     """The structured result of analysing one binary capture.
 
     Attributes:
-        text: The OCR'd / extracted text of the asset (an image's legible text, a PDF's
-            body text). Empty when the asset carries no text.
-        description: A structured natural-language description of the asset's content
-            (what the image shows / what the document is about).
-        summary: A short one-line summary suitable for a title / log subject.
-        suggested_type: A routing hint -- one of the four content types
-            (:data:`thoth.vault.TYPE_ENUMERATION`) -- so a whiteboard photo is routed to
-            a knowledge folder rather than defaulting to ``memories/``. ``None`` when
-            the model offered no usable hint.
-        entities: Named entities the model found (feed the candidate fetch).
-        concepts: Named concepts the model found (feed the candidate fetch).
-        kind: The coarse image kind the model reported -- one of ``"diagram"``,
-            ``"document"``, ``"photo"`` or ``"screenshot"``, ``""`` when unknown. This
-            single vision call folds the kind detection in (ADR 0009) rather than paying
-            a separate pre-call: the ingest pass branches on it to derive a best-effort
-            Excalidraw reconstruction of a hand-drawn ``diagram``, and to ask for a
-            faithful structured-markdown transcription of a ``document``.
+        text: The OCR'd or extracted text of the asset. That is an image's legible text
+            or a PDF's body text. Empty when the asset carries no text.
+        description: A structured natural-language description of the asset's content:
+            what the image shows, or what the document is about.
+        summary: A short one-line summary suitable for a title or a log subject.
+        suggested_type: A routing hint, one of the four content types
+            (:data:`thoth.vault.TYPE_ENUMERATION`). The hint routes a whiteboard photo
+            to a knowledge folder rather than to the ``memories/`` default. ``None``
+            when the model offered no usable hint.
+        entities: Named entities the model found. They feed the candidate fetch.
+        concepts: Named concepts the model found. They feed the candidate fetch.
+        kind: The coarse image kind the model reported: ``"diagram"``, ``"document"``,
+            ``"photo"``, ``"screenshot"``, or ``""`` when unknown. This single vision
+            call folds the kind detection in (ADR 0009) rather than paying for a
+            separate pre-call. The ingest pass branches on the kind to derive a
+            best-effort Excalidraw reconstruction of a hand-drawn ``diagram``, and to
+            ask for a faithful structured-markdown transcription of a ``document``.
     """
 
     text: str = ""
@@ -50,11 +50,11 @@ class Analysis:
     def body_markdown(self) -> str:
         """Render the analysis as a markdown block for the curated page body.
 
-        The block holds the real extracted meaning -- the description followed by the
-        verbatim OCR/extracted text under an ``Extracted text`` heading -- so the
-        curated page is searchable on the asset's content, not a blind stub. Returns an
-        empty string when there is nothing extracted (the caller then keeps its own
-        body).
+        The block holds the real extracted meaning: the description, followed by the
+        verbatim OCR or extracted text under an ``Extracted text`` heading. The curated
+        page is therefore searchable on the asset's content rather than a blind stub.
+        The method returns an empty string when nothing was extracted, and the caller
+        then keeps its own body.
         """
         parts: list[str] = []
         if self.description.strip():
@@ -65,7 +65,7 @@ class Analysis:
 
 
 def _analysis_from_obj(obj: dict[str, Any]) -> Analysis:
-    """Build an :class:`Analysis` from a parsed JSON object (missing keys tolerated)."""
+    """Build an :class:`Analysis` from a parsed JSON object, tolerating missing keys."""
     suggested = obj.get("suggested_type")
     return Analysis(
         text=_as_str(obj.get("text")),
@@ -79,22 +79,23 @@ def _analysis_from_obj(obj: dict[str, Any]) -> Analysis:
 
 
 def _as_str(value: object) -> str:
-    """Coerce a JSON value to a string (empty string for a non-string)."""
+    """Coerce a JSON value to a string, or to an empty string for a non-string."""
     return value if isinstance(value, str) else ""
 
 
 def _as_str_list(value: object) -> list[str]:
-    """Return ``value`` as a list of non-empty strings (empty list otherwise)."""
+    """Return ``value`` as a list of non-empty strings, or an empty list otherwise."""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
 
 
 def _as_kind(value: object) -> str:
-    """Normalise a reported image kind to one of the four valid values or ``""``.
+    """Normalise a reported image kind to one of the four valid values, or to ``""``.
 
-    Anything outside :data:`_VALID_KINDS` (a missing key, a typo, an unexpected label)
-    collapses to ``""`` so the ingest pass never branches on a surprise value.
+    Anything outside :data:`_VALID_KINDS` collapses to ``""``, so the ingest pass never
+    branches on a surprise value. A missing key, a typo and an unexpected label all
+    collapse this way.
     """
     if isinstance(value, str) and value in _VALID_KINDS:
         return value
