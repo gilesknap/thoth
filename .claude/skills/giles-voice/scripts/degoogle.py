@@ -24,9 +24,9 @@ from pathlib import Path
 
 WIDTH = 88
 SECT = re.compile(r"^(Args|Returns|Yields|Raises|Attributes):\s*$")
-# a line opening a list item: "- ", "* ", "1. ", "0b. ". a block holding one is an
-# enumeration, not prose, so it is never collapsed
+# a line opening a list item: "- ", "* ", "1. ", "0b. "
 ITEM = re.compile(r"^\s*(?:[-*+]|\d+[a-z]?\.)\s+\S")
+FENCE = re.compile(r"^\s*(?:```|~~~)")
 
 
 def sections(doc: str) -> set[str]:
@@ -74,6 +74,20 @@ def split_doc(doc: str) -> tuple[list[str], list[tuple[str, list[str]]]]:
     return prose, blocks
 
 
+def structured(block: list[str], indent: str) -> bool:
+    """True when a block is layout the author meant, not prose to be reflowed.
+
+    A list, a fenced code block, and a reST literal block indented under a ``::`` line
+    all carry meaning in their line breaks, so collapsing one destroys it.
+    """
+    if any(ITEM.match(line) or FENCE.match(line) for line in block):
+        return True
+    base = len(block[0]) - len(block[0].lstrip(" "))
+    return any(
+        len(line) - len(line.lstrip(" ")) > max(base, len(indent)) for line in block[1:]
+    )
+
+
 def paragraphs(lines: list[str]) -> list[list[str]]:
     """Splits lines into the blank-line-separated blocks they already form."""
     out: list[list[str]] = []
@@ -117,9 +131,9 @@ def rebuild(doc: str, keep: set[str], indent: str) -> str:
 
     # everything after the summary line, keeping the blank lines that mark its blocks
     for block in paragraphs(prose[prose.index(text[0]) + 1 :]):
-        if any(ITEM.match(line) for line in block):
-            # a list keeps its own line breaks and its relative indentation, so only
-            # the docstring's own indent comes off
+        if structured(block, indent):
+            # a list or a code block keeps its own line breaks and its relative
+            # indentation, so only the docstring's own indent comes off
             flush()
             out.append("")
             out.extend(unindent(line) for line in block)
@@ -191,10 +205,7 @@ def process(path: str, ref: str = "main") -> int:
             base_sects = sections(base[name])
             keep = base_sects | ({"Raises"} if base_sects else set())
             keep &= sections(doc)
-        new_doc = rebuild(doc, keep, indent)
-        if new_doc == doc:
-            return
-        nl = new_doc.split("\n")
+        nl = rebuild(doc, keep, indent).split("\n")
         rebuilt = [f'{indent}"""{nl[0]}']
         for x in nl[1:]:
             rebuilt.append(f"{indent}{x}" if x.strip() else "")
@@ -202,7 +213,11 @@ def process(path: str, ref: str = "main") -> int:
             rebuilt[0] += '"""'
         else:
             rebuilt.append(f'{indent}"""')
-        edits.append((s, e, rebuilt))
+        # compare the rendered SOURCE, not the rebuild against the raw docstring value:
+        # the raw value carries the indent on every continuation line, so it never
+        # matches and the run would report every docstring it looked at as rewritten
+        if rebuilt != lines[s : e + 1]:
+            edits.append((s, e, rebuilt))
 
     handle(tree, "<module>")
     visit(tree, "")
