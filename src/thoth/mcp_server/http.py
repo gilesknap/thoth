@@ -14,17 +14,18 @@ def _run_http(server: Any, config: Config, *, host: str, port: int) -> None:
     """Serve a built FastMCP over streamable-HTTP with the two-tier auth gate.
 
     Points the FastMCP settings at ``host``:``port``, wraps the streamable-HTTP ASGI app
-    with the bearer (+ optional Cf-Access JWT) middleware
-    (:func:`thoth.mcp_auth.build_auth_middleware`) so every request is authenticated
-    BEFORE any tool dispatch, and serves it with uvicorn. All web-stack imports
-    (``uvicorn``, ``starlette`` via the middleware) happen here, never at module top
-    level, so importing this module stays CI-safe. This is exercised live, not in CI
-    (the suite has no ``mcp``/``uvicorn``).
+    with :func:`thoth.mcp_auth.build_auth_middleware`, the bearer middleware plus the
+    optional Cf-Access JWT, so every request is authenticated BEFORE any tool dispatch,
+    and serves it with uvicorn. Every web-stack import, ``uvicorn`` and ``starlette``
+    through the middleware, happens here rather than at module top level, so importing
+    this module stays CI-safe. Live use exercises this, not CI, since the suite has
+    neither ``mcp`` nor ``uvicorn``.
 
     Args:
         server: The built FastMCP instance.
-        config: The frozen runtime config (bearer keys + optional Cf-Access settings).
-        host: The bind address (loopback by default).
+        config: The frozen runtime config, carrying the bearer keys and the optional
+            Cf-Access settings.
+        host: The bind address, loopback by default.
         port: The listen port.
     """
     import uvicorn

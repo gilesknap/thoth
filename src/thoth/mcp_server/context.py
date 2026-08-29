@@ -1,4 +1,4 @@
-"""Shared MCP server contract: constants, errors, and the tool injection bundle."""
+"""Shared MCP server contract: constants, errors and the tool injection bundle."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ TOOL_NAMES: tuple[str, ...] = (
 
 
 class McpServerError(Exception):
-    """Raised for an MCP wiring failure (for example a missing collaborator)."""
+    """Raised for an MCP wiring failure, such as a missing collaborator."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,12 +46,13 @@ class ToolResult:
     """The structured outcome of a ``pkm_*`` tool, rendered by the MCP host.
 
     Attributes:
-        ok: ``True`` on success, ``False`` when a typed collaborator error was caught
-            and surfaced (the tool never raises into the MCP runtime).
-        text: A Markdown reply (MCP style: ``[label](obsidian-uri)`` plus the plain
-            vault path and the ``[[wikilink]]``) suitable for a chat host to display.
-        data: A structured echo (paths, ``used_web`` and the like) for programmatic
-            callers that want the fields rather than the rendered prose.
+        ok: ``True`` on success, and ``False`` when a typed collaborator error was
+            caught and surfaced, since the tool never raises into the MCP runtime.
+        text: A Markdown reply a chat host can display, in the MCP style of
+            ``[label](obsidian-uri)``, the plain vault path and the
+            ``[[wikilink]]``.
+        data: A structured echo, of paths, ``used_web`` and the like, for a programmatic
+            caller wanting the fields rather than the rendered prose.
     """
 
     ok: bool
@@ -64,18 +65,18 @@ class ToolContext:
     """The single injection bundle the ``pkm_*`` tools delegate through.
 
     Holds the frozen config and the already-constructed Phase 0-3 collaborators. The
-    tool functions take this explicitly (the FastMCP wrappers in :func:`build_server`
-    close over one instance and forward the same arguments), so each tool is a pure,
+    tool functions take it explicitly, the FastMCP wrappers in :func:`build_server`
+    closing over one instance and forwarding the same arguments, so each tool is a pure,
     testable delegation with no global state.
 
     Attributes:
         config: The frozen runtime configuration.
-        vault: The path-confined read/write vault facade (the only disk surface).
-        ingestor: The constructed ingest pipeline (``pkm_ingest``).
-        query_engine: The vault-only retrieval engine (``pkm_search``).
-        git: The vault git two-way sync used to commit+push the disk writes the
-            write tools make (``pkm_write_page``), staging exactly the path each
-            wrote (mirrors ``pkm_ingest``'s commit discipline, issue #85).
+        vault: The path-confined read and write vault facade, the only disk surface.
+        ingestor: The constructed ingest pipeline, behind ``pkm_ingest``.
+        query_engine: The vault-only retrieval engine, behind ``pkm_search``.
+        git: The vault git two-way sync that commits and pushes the disk writes the
+            write tools make, such as ``pkm_write_page``, staging exactly the path each
+            wrote and mirroring ``pkm_ingest``'s commit discipline (issue #85).
     """
 
     config: Config

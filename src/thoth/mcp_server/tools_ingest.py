@@ -20,13 +20,13 @@ _BASE64_BLOB_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9+/]{256,}={0,2}$")
 
 
 def _looks_like_base64_blob(value: str) -> bool:
-    """Return ``True`` if ``value`` looks like inline binary (data-URI or base64 blob).
+    """Return ``True`` when ``value`` looks like inline binary: a data-URI or blob.
 
-    The closed surface (SPEC section 6) never accepts inline binary: a capture carries
-    text, a URL, or a server-resolvable in-vault path, and any image/PDF/audio is
-    fetched server-side. A leading ``data:...;base64,`` URI is an unambiguous blob; so
-    is a long, unbroken run of base64-alphabet characters with no whitespace (ordinary
-    prose has spaces and is far shorter).
+    The closed surface (SPEC section 6) never accepts inline binary. A capture carries
+    text, a URL, or a server-resolvable in-vault path, and the server fetches any image,
+    PDF or audio itself. A leading ``data:...;base64,`` URI is an unambiguous blob, and
+    so is a long, unbroken run of base64-alphabet characters with no whitespace, since
+    ordinary prose has spaces and is far shorter.
     """
     if _DATA_URI_RE.match(value):
         return True
@@ -43,22 +43,23 @@ def pkm_ingest(
 ) -> ToolResult:
     """Capture text, a URL, or a server-resolvable in-vault path into the vault.
 
-    Builds a :class:`~thoth.ingest.Capture` with ``source='mcp'`` and delegates to
-    :meth:`thoth.ingest.Ingestor.ingest`, rendering the resulting report. The closed
-    surface is enforced before any work: a base64/data-URI argument is refused (binary
-    never travels inline -- SPEC section 6), and a ``path`` is confined to the vault
-    root via the :class:`~thoth.vault.Vault` (a server-resolvable in-vault path only)
-    before the ingestor is called. A :class:`~thoth.ingest.IngestError` or a conflict is
-    surfaced as ``ToolResult(ok=False, ...)`` and never raised into the MCP runtime.
+    Builds a :class:`~thoth.ingest.Capture` with ``source='mcp'``, delegates to
+    :meth:`thoth.ingest.Ingestor.ingest` and renders the resulting report. The closed
+    surface is enforced before any work. A base64 or data-URI argument is refused,
+    because binary never travels inline (SPEC section 6), and the
+    :class:`~thoth.vault.Vault` confines a ``path`` to the vault root, admitting only a
+    server-resolvable in-vault path, before the ingestor is called. A
+    :class:`~thoth.ingest.IngestError`, or a conflict, surfaces as
+    ``ToolResult(ok=False, ...)`` and never raises into the MCP runtime.
 
     Args:
         ctx: The injected collaborator bundle.
-        text: Inline text/markdown to capture, if any.
+        text: Inline text or markdown to capture, if any.
         url: A URL to fetch server-side, if any.
-        path: A vault-relative path the server can read (image/PDF/audio), if any.
+        path: A vault-relative image, PDF or audio path the server can read, if any.
 
     Returns:
-        A :class:`ToolResult`: ``ok=True`` with the rendered report on success, else
+        A :class:`ToolResult`, ``ok=True`` with the rendered report on success, else
         ``ok=False`` with the rejection or error message.
     """
     if not (text or url or path):

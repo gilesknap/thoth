@@ -1,4 +1,4 @@
-"""Citation / report rendering in MCP Markdown (mirrors slack_app's mrkdwn)."""
+"""Citation and report rendering in MCP Markdown, mirroring slack_app's mrkdwn."""
 
 from __future__ import annotations
 
@@ -10,22 +10,22 @@ from thoth.query import Citation, QueryResult
 
 
 def _ref(label: str, uri: str, path: str, wikilink: str) -> str:
-    """Render the MCP reference triple: link, plain path, and ``[[wikilink]]``.
+    """Render the MCP reference triple: link, plain path and ``[[wikilink]]``.
 
-    Emits ``[label](obsidian-uri)`` (the Markdown link form), then the plain
-    vault-relative path and the ``[[wikilink]]`` on the same line, so the reference is
-    still usable when a host will not make the custom ``obsidian://`` scheme clickable
-    (SPEC Appendix). The link target is always harness-built by a collaborator; this
-    never constructs an ``obsidian://`` URI itself.
+    Emits ``[label](obsidian-uri)``, the Markdown link form, then the plain
+    vault-relative path and the ``[[wikilink]]`` on the same line, so the reference
+    stays usable when a host will not make the custom ``obsidian://`` scheme clickable
+    (SPEC Appendix). A collaborator always builds the link target, and this never
+    constructs an ``obsidian://`` URI itself.
     """
     return f"[{label}]({uri}) - `{path}` {wikilink}"
 
 
 def _render_citation(citation: Citation) -> str:
-    """Render one vault citation as Markdown: link, plain path, and ``[[wikilink]]``.
+    """Render one vault citation as Markdown: link, plain path and ``[[wikilink]]``.
 
-    The link target is taken verbatim from the harness-built
-    :class:`~thoth.query.Citation` (see :func:`_ref`).
+    The link target comes verbatim from the harness-built
+    :class:`~thoth.query.Citation`, as :func:`_ref` shows.
     """
     label = citation.title or citation.path
     return _ref(label, citation.obsidian_uri, citation.path, citation.wikilink)
@@ -47,12 +47,12 @@ def _render_query_result(result: QueryResult) -> str:
 def _render_ingest_report(report: IngestReport) -> str:
     """Render a one-to-two-line capture confirmation in Markdown.
 
-    Names what was filed (the curated page paths, or the raw/asset paths when no curated
-    page was written) and lists every harness-built ``obsidian://`` link and
-    ``[[wikilink]]`` the report carries (SPEC step 8). A conflict is surfaced fail-loud
-    with the conflicting path, never swallowed (SPEC section 10). A ``deferred`` capture
-    (raw persisted but the LLM was unavailable for curation) is surfaced as a
-    partial-success note naming the held raw page (SPEC section 6).
+    Names what was filed, the curated page paths, or the raw and asset paths when no
+    curated page was written, and lists every harness-built ``obsidian://`` link and
+    ``[[wikilink]]`` the report carries (SPEC step 8). A conflict surfaces fail-loud
+    with the conflicting path, never swallowed (SPEC section 10). A ``deferred``
+    capture, where the raw persisted but the LLM was unavailable for curation, surfaces
+    as a partial-success note naming the held raw page (SPEC section 6).
     """
     if report.conflict:
         detail = report.message or "a vault conflict blocked the sync"
@@ -91,11 +91,8 @@ def _render_ingest_report(report: IngestReport) -> str:
 def _render_action(item: Any, *, overdue: bool) -> str:
     """Render one action item as a Markdown bullet: link, path, wikilink, then status.
 
-    Matches the other tools' MCP citation style -- ``[title](obsidian-uri)`` plus the
-    plain vault path and the ``[[wikilink]]`` -- so the action stays usable when a host
-    will not make the custom ``obsidian://`` scheme clickable (SPEC Appendix). The link
-    target is the harness-built ``obsidian_uri`` carried on the ``ActionItem``; this
-    never constructs an ``obsidian://`` URI itself.
+    Uses the :func:`_ref` triple, with the harness-built ``obsidian_uri`` the
+    ``ActionItem`` carries as the link target.
     """
     bits: list[str] = [f"status: {item.status}"]
     if item.priority:
@@ -108,12 +105,12 @@ def _render_action(item: Any, *, overdue: bool) -> str:
 
 
 def _render_raw_page(frontmatter: dict[str, Any], body: str) -> str:
-    """Render a page's frontmatter + body back into raw markdown for display.
+    """Render a page's frontmatter and body back into raw markdown for display.
 
-    A minimal ``key: value`` YAML-ish frontmatter block (enough for a host to show what
-    the page contains) followed by the verbatim body. This is for human display only --
-    the structured ``data`` (the parsed ``frontmatter`` dict and ``body``) is what
-    round-trips into a write, never this rendered string.
+    A minimal ``key: value`` YAML-ish frontmatter block, enough for a host to show what
+    the page contains, followed by the verbatim body. This is for human display only,
+    because the structured ``data``, the parsed ``frontmatter`` dict and ``body``, is
+    what round-trips into a write, never this rendered string.
     """
     lines = ["---"]
     for key, value in frontmatter.items():
