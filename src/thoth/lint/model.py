@@ -1,8 +1,8 @@
 """Data model for the lint scan: severities, findings, the report, and errors.
 
 These are pure value types shared by every check module: the :class:`Severity`
-ordering, the frozen :class:`Finding` record, the aggregated :class:`LintReport`,
-the :class:`LintError` failure type, and the internal parsed-page record.
+ordering, the frozen :class:`Finding` record, the aggregated :class:`LintReport`, the
+:class:`LintError` failure type and the internal parsed-page record.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ __all__ = [
 class Severity(IntEnum):
     """Lint finding severity; lower value sorts first in the grouped report.
 
-    Order (SPEC check 13): broken links/embeds > orphans > source drift > contested >
-    stale/overdue > style.
+    Order (SPEC check 13): a broken link or embed, then an orphan, then source drift,
+    then contested, then stale or overdue, then style.
     """
 
     BROKEN = 0
@@ -35,7 +35,7 @@ class Severity(IntEnum):
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """One lint issue: its check number/name, severity, the page, and a message."""
+    """One lint issue: its check number and name, severity, the page and a message."""
 
     check: int
     """The 1-based SPEC check number that produced this finding."""
@@ -52,7 +52,7 @@ class Finding:
 def _finding(
     check: int, name: str, severity: Severity, path: str, message: str
 ) -> Finding:
-    """Build one :class:`Finding` (positional shorthand used by every check)."""
+    """Build one :class:`Finding`, the positional shorthand every check uses."""
     return Finding(
         check=check, name=name, severity=severity, path=path, message=message
     )
@@ -79,8 +79,8 @@ class LintReport:
         """Group findings by severity, ascending (most severe first).
 
         Returns:
-            A list of ``(severity, findings)`` pairs in :class:`Severity` order; only
-            severities that actually occur are included.
+            A list of ``(severity, findings)`` pairs in :class:`Severity` order, holding
+            only the severities that actually occur.
         """
         groups: dict[Severity, list[Finding]] = {}
         for finding in self.findings:
@@ -90,9 +90,9 @@ class LintReport:
     def render(self) -> str:
         """Render the report grouped by severity as plain text.
 
-        Each group is a header line ``<SEVERITY> (<count>)`` followed by one indented
-        ``check N <name>: <path> -- <message>`` line per finding (most severe group
-        first). A clean report renders a single ``lint: clean`` line.
+        Each group is a header line ``<SEVERITY> (<count>)``, followed by one indented
+        ``check N <name>: <path> -- <message>`` line per finding, most severe group
+        first. A clean report renders a single ``lint: clean`` line.
 
         Returns:
             The grouped plain-text report.
@@ -112,12 +112,12 @@ class LintReport:
 
 
 class LintError(Exception):
-    """Raised when the scan cannot run (e.g. a missing vault root or SCHEMA.md)."""
+    """Raised when the scan cannot run, as with a missing vault root or SCHEMA.md."""
 
 
 @dataclass(frozen=True, slots=True)
 class _Page:
-    """A parsed page used internally by the linter (path, slug, frontmatter, body)."""
+    """A parsed page the linter uses internally: path, slug, frontmatter and body."""
 
     path: str
     slug: str
