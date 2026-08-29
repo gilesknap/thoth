@@ -121,9 +121,9 @@ class QueryEngine:
         Each page scores on how many distinct query tokens it matches, so a
         natural-language query surfaces the page hitting the most words first even when
         it lives in a folder scanned last (issue #96). Tokens match on word boundaries
-        (``<token>``), case-insensitively, so ``bed`` no longer matches ``embedded``
-        and ``do`` no longer matches ``window``. That substring noise used to flood the
-        results.
+        (``\\b<token>\\b``), case-insensitively, so ``bed`` no longer matches
+        ``embedded`` and ``do`` no longer matches ``window``. That substring noise used
+        to flood the results.
 
         A token hitting the filename or frontmatter, meaning the title or ``summary:``
         gloss (#72, ADR 0008), weighs more than one hitting only the body. The key is a

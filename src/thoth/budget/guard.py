@@ -106,9 +106,13 @@ class BudgetGuard:
         """Accounts one call against today's budget, raising when the cap is hit.
 
         The check runs before the increment, so the call that would exceed the cap is
-        blocked and not counted, and the day admits exactly the limit. Reaching the cap
-        fires the one-per-day alert best-effort and raises. Every attempt counts, so a
-        retried flapping dependency cannot burn past the cap.
+        blocked and not counted. Reaching the cap fires the one-per-day alert
+        best-effort and raises. Every attempt counts, so a retried flapping dependency
+        cannot burn past the cap.
+
+        The read and the increment are separate store calls, so two guards racing on the
+        last unit can both pass the check. The day therefore admits the limit and not a
+        great deal more, which suits a single-writer daemon.
 
         Args:
             kind: The counter to charge.

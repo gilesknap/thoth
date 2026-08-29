@@ -26,9 +26,10 @@ from ._model import (
 class Reindexer:
     """Incremental and full-rebuild reindexer over the canonical vault.
 
-    Built from the frozen config, a real vault supplying the root walk and body-hash
-    key, and a Hindsight wrapper. Every index operation goes through that injected
-    wrapper, so tests substitute a fake.
+    Built from the frozen :class:`~thoth.config.Config`, a real
+    :class:`~thoth.vault.Vault` supplying the root walk and body-hash key, and a
+    :class:`~thoth.hindsight.Hindsight` wrapper. Every index operation goes through that
+    injected wrapper, so tests substitute a fake.
     """
 
     def __init__(
@@ -77,9 +78,10 @@ class Reindexer:
         """Loads the body-hash manifest, treating a missing or corrupt file as empty.
 
         Returns:
-            The path to digest and timestamp mapping. Any missing file or shape error
-            yields empty, because the index is disposable and a damaged manifest
-            should force a re-walk rather than crash.
+            The path to digest and timestamp mapping. A missing file, unreadable JSON
+            or non-object top level yields empty, and a malformed entry inside a valid
+            object is skipped while its neighbours survive. The index is disposable, so
+            a damaged manifest forces a re-walk rather than crashing.
         """
         path = self.manifest_file
         if not path.is_file():

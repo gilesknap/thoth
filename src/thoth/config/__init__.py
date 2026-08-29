@@ -139,7 +139,8 @@ def load_config(
     """Builds a config from the environment.
 
     The real environment wins, then values from the ``.env`` file, then the documented
-    defaults. The environment is never mutated.
+    defaults. The environment is never mutated. ``THOTH_HOME`` is the one exception,
+    read from the real environment alone, since it decides which ``.env`` to load.
 
     Args:
         env: Environment mapping, defaulting to the real one.
@@ -294,7 +295,7 @@ def _tz_opt(value: str | None) -> ZoneInfo:
         value: The raw value, already None when unset.
 
     Returns:
-        The resolved zone, the owner's locale when unset.
+        The resolved zone, or :data:`DEFAULT_TIMEZONE` when unset.
 
     Raises:
         ConfigError: when the name is unknown to the timezone database, so a typo

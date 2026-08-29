@@ -109,9 +109,10 @@ def walk_captures(
 def _iter_files(root: Path) -> Iterator[tuple[Path, str]]:
     """Yields the absolute and relative path of each file under a root.
 
-    A single file yields itself. A directory is walked recursively in sorted order,
-    pruning the machinery directories and spine files so a vault re-import never touches
-    its own dashboards or log. The relative path uses POSIX separators, so the globs
+    A single file yields itself unless it is a spine file. A directory is walked
+    recursively in sorted order, pruning the machinery directories and the spine files
+    ``index.md``, ``SCHEMA.md`` and ``log.md``, so a vault re-import never touches its
+    own dashboards or log. The relative path uses POSIX separators, so the globs
     match on a stable normalised key.
     """
     if root.is_file():

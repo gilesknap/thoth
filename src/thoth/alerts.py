@@ -272,14 +272,14 @@ def _cron_alerting(where: str, config: Config) -> Iterator[None]:
 
 
 def _iso(when: datetime) -> str:
-    """Formats a time as a compact ``YYYY-MM-DD HH:MM`` string."""
+    """Formats a time as ``YYYY-MM-DD HH:MM``, with the zone when one is set."""
     if when.tzinfo is None:
         return when.strftime("%Y-%m-%d %H:%M")
     return when.strftime("%Y-%m-%d %H:%M %Z").strip()
 
 
 def _tail(text: str, limit: int) -> str:
-    """Returns at most the last ``limit`` characters, keeping the error line."""
+    """Returns the last ``limit`` characters, marking a truncation with ``...``."""
     if len(text) <= limit:
         return text
     return "..." + text[-limit:]

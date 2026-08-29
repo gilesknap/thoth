@@ -60,7 +60,8 @@ class AuthError(Exception):
 def extract_bearer_token(authorization_header: str | None) -> str | None:
     """Pulls the token out of an ``Authorization: Bearer`` header value.
 
-    The scheme match is case-insensitive per RFC 7235, and the rest is byte-exact.
+    The scheme match is case-insensitive per RFC 7235, and the token comes back with
+    its surrounding whitespace stripped.
 
     Args:
         authorization_header: The raw header value, or None.

@@ -51,9 +51,10 @@ class Ingestor(
         hold is committed, and a deferred report is returned for a later sweep.
 
         On success the superseded hold is removed and the remaining passes run. The
-        validation gate is preserved: a rejected plan still raises and only a transport
-        failure defers. A rebase conflict at commit is surfaced on the report, with
-        content filed locally and nothing force-pushed.
+        validation gate is preserved: a rejected plan still raises, and what defers is
+        an unavailable LLM, meaning a transport failure or a spent daily budget. A
+        rebase conflict at commit is surfaced on the report, with content filed locally
+        and nothing force-pushed.
 
         Args:
             capture: The inbound item to ingest.
@@ -162,9 +163,9 @@ class Ingestor(
                     extracted_body=extracted_body,
                 )
         except LLMUnavailableError as exc:
-            # The pass deferred, so capture_raw never consumed the analyse binary.
-            # Clean up its temp file here rather than leak it, since the inbound item is
-            # already durable in inbox/
+            # Curate can defer after capture_raw already ran, so remove whichever staged
+            # file is still there rather than leak it. The inbound item is durable in
+            # inbox/ either way
             _cleanup_fetched(analysed.fetched)
             # Operator-readable line (issue #52). A deferral is a partial success,
             # since the raw item is durable, so say so rather than leave the degraded

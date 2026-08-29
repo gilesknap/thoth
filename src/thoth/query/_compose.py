@@ -2,8 +2,9 @@
 
 The answer-side functions: building the harness-only citation for a confined page,
 composing the prose either from the model or as a deterministic excerpt, and parsing the
-model's trailing selection line back to the used subset (issue #34). The thin engine
-methods delegate here with the injected collaborators passed explicitly.
+model's trailing selection line back to the used subset (issue #34). The thin
+:class:`~thoth.query.QueryEngine` methods delegate here with the injected collaborators
+passed explicitly.
 """
 
 from __future__ import annotations
