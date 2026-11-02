@@ -5,6 +5,8 @@
 
 # thoth
 
+# DEPRECATED. Replaced by the much cooler https://github.com/gilesknap/scrap
+
 **A personal, single-user "second brain" appliance.** Capture anything — a URL, a PDF,
 an image, a voice memo, or a quick note — by dropping it into one private Slack channel,
 and thoth files it into a git-backed, [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/)-compliant
